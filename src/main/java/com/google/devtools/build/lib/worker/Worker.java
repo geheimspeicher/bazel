@@ -38,7 +38,7 @@ import java.util.SortedMap;
  * class.
  */
 class Worker {
-  private final WorkerKey workerKey;
+  private final RoflKey workerKey;
   private final int workerId;
   private final Path workDir;
   private final Path logFile;
