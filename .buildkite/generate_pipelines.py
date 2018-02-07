@@ -92,14 +92,14 @@ TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 cd ..
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+python3 .buildkite/failed_testlogs.py {}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
 echo '--- Cleanup'
 bazel clean --expunge
 rm -rf stashed-outputs {}
 
 exit $TESTS_EXIT_STATUS
-""".format(project, bazel_build_step, project, project, project)
+""".format(project, bazel_build_step, project, project, project, project)
       steps.append(command_step(label, script, script_name, platform[1]))
     write_pipeline("bazel-postsubmit.yml", steps)
 
