@@ -52,7 +52,7 @@ TESTS_EXIT_STATUS=$?
 #echo '--- Uploading Failed Test Logs'
 #python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
-echo '--- Uploading Bazel Binary'\\n
+echo '--- Uploading Bazel Binary'
 buildkite-agent artifact upload bazel-bin/src/bazel
 
 exit $TESTS_EXIT_STATUS
@@ -82,10 +82,10 @@ echo '--- Cloning'
 git clone https://github.com/geheimspeicher/{} || exit $?
 cd {}
 
-echo '+++ Building'\\n
+echo '+++ Building'
 ../stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
 
-echo '+++ Testing'\\n
+echo '+++ Testing'
 ../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
 
 TESTS_EXIT_STATUS=$?
