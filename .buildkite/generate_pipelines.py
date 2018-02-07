@@ -91,6 +91,7 @@ echo '+++ Testing'
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
+cd ..
 python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
 echo '--- Cleanup'
