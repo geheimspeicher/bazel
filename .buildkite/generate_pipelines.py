@@ -44,13 +44,13 @@ rm -rf bep.json
 echo '+++ Building'
 bazel build --color=yes //src:bazel || exit $?
 
-echo '+++ Testing'
-bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
+#echo '+++ Testing'
+#bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
 
 TESTS_EXIT_STATUS=$?
 
-echo '--- Uploading Failed Test Logs'
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+#echo '--- Uploading Failed Test Logs'
+#python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
 echo '--- Uploading Bazel Binary'\\n
 buildkite-agent artifact upload bazel-bin/src/bazel
