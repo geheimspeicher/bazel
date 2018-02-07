@@ -18,13 +18,13 @@ bazel build --color=yes //src:bazel || exit $?
 
 echo '+++ Testing'
 bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
-      
+
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 
 python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-      
+
 exit $TESTS_EXIT_STATUS"""
     steps.append(command_step(label, script, script_name, platform[1]))
   write_pipeline("bazel-presubmit.yml", steps)
@@ -46,7 +46,7 @@ bazel build --color=yes //src:bazel || exit $?
 
 echo '+++ Testing'
 bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
-      
+
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
@@ -58,7 +58,7 @@ buildkite-agent artifact upload bazel-bin/src/bazel
 exit $TESTS_EXIT_STATUS
 """
     steps.append(command_step(label, script, script_name, platform[1]))
-  
+
   steps.append(wait_step())
 
   for project in DOWNSTREAM_PROJECTS:
