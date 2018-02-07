@@ -1,6 +1,6 @@
 steps:
  - label: "Ubuntu 14.04"
-   command: "set -uo pipefail\n
+   command: "set -xuo pipefail\n
       echo '--- Cleanup'\n
       bazel clean --expunge\n
       rm -rf bep.json\n
