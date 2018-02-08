@@ -20,16 +20,6 @@ steps:
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_docker (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_docker (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
  - label: "rules_nodejs (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
    agents:
@@ -50,23 +40,13 @@ steps:
    agents:
      - "os=ubuntu1604"
 
- - label: "buildtools (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
+ - label: "rules_docker (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "buildtools (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_k8s (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_k8s-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_k8s (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_k8s-ubuntu1604.sh"
+ - label: "rules_docker (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
@@ -80,6 +60,36 @@ steps:
    agents:
      - "os=ubuntu1604"
 
+ - label: "BUILD_file_generator (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "BUILD_file_generator (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_groovy (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_groovy-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_groovy (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_groovy-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "buildtools (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "buildtools (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
  - label: "rules_typescript (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-rules_typescript-ubuntu1404.sh"
    agents:
@@ -90,13 +100,13 @@ steps:
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_go (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_go-ubuntu1404.sh"
+ - label: "rules_k8s (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_k8s-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_go (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
+ - label: "rules_k8s (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_k8s-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
@@ -107,5 +117,25 @@ steps:
 
  - label: "rules_scala (Ubuntu 16.04)"
    command: ".buildkite/postsubmit-rules_scala-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_rust (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_rust (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_go (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_go-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_go (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
