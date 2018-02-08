@@ -8,3 +8,8 @@ steps:
    command: ".buildkite/presubmit.sh"
    agents:
      - "os=ubuntu1604"
+
+ - label: "macOS"
+   command: ".buildkite/presubmit.sh"
+   agents:
+     - "os=macos"

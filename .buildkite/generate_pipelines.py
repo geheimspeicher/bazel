@@ -1,4 +1,4 @@
-PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604")]
+PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604"), ("macOS", "macos")]
 DOWNSTREAM_PROJECTS = {
   "bazel-watcher" : {'build': '...', 'test': '...'},
   "BUILD_file_generator" : {'build': '...', 'test': '...'},
