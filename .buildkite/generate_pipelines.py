@@ -112,7 +112,7 @@ exit $TESTS_EXIT_STATUS
 """.format(project, bazel_build_step_name, DOWNSTREAM_PROJECTS[project]["build"], DOWNSTREAM_PROJECTS[project]["test"])
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
     pipeline_name = "bazel-postsubmit-" + platform[1];
-    write_pipeline(pipeline_name + ".yml", steps)
+    write_pipeline("pipeline." + pipeline_name + ".yml", steps)
     trigger_steps.append(trigger_step(pipeline_name))
   write_pipeline("bazel-postsubmit.yml", trigger_steps)
 
