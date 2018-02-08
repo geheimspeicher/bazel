@@ -1,6 +1,7 @@
 PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604")]
 DOWNSTREAM_PROJECTS = {
   "bazel-watcher" : {'build': '...', 'test': '...'},
+  "buildtools" : {'build': '', 'test': '//:tests'},
   "rules_docker" : {'build': '...', 'test': '...'},
   "rules_go" : {'build': '...', 'test': '...'},
   "rules_k8s" : {'build': '//test/...', 'test': '//test/...'},
