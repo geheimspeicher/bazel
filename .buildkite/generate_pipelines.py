@@ -25,6 +25,7 @@ set -xuo pipefail
 echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json
+rm -rf .failed-test-logs
 
 echo '+++ Building'
 bazel build --color=yes //src:bazel || exit $?
@@ -55,6 +56,7 @@ set -xe
 
 echo '--- Cleanup'
 bazel clean --expunge
+rm -rf .failed-test-logs
 rm -rf bep.json
 
 echo '+++ Building'
@@ -76,6 +78,7 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
+rm -rf .failed-test-logs
 rm -rf bep.json
 
 echo '+++ Testing'
@@ -102,6 +105,7 @@ set -xuo pipefail
 echo '--- Cleanup'
 bazel clean --expunge
 rm -rf stashed-outputs {0}
+rm -rf .failed-test-logs
 
 echo '--- Downloading Bazel Binary'
 mkdir stashed-outputs
@@ -126,6 +130,7 @@ python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buil
 
 echo '--- Cleanup'
 bazel clean --expunge
+rm -rf .failed-test-logs
 rm -rf stashed-outputs {0}
 
 exit $TESTS_EXIT_STATUS
