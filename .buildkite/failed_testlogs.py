@@ -1,6 +1,8 @@
 import json
 import sys
+import os
 from urllib.parse import urlparse
+from shutil import copyfile
 
 def main(bep_path):
   raw_data = ""
@@ -17,8 +19,17 @@ def main(bep_path):
         outputs = test_result["testActionOutput"]
         for output in outputs:
           if output["name"] == "test.log":
-            print(urlparse(output["uri"]).path)
+            new_path = label_to_path(json_dict["id"]["testResult"]["label"])
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            copyfile(urlparse(output["uri"]).path, new_path)
+            print(new_path)
     pos += size + 1
+
+def label_to_path(label):
+  # remove leading //
+  path = label[2:]
+  path = path.replace(":", "/")
+  return ".failed-test-logs/" + path
 
 if __name__ == '__main__':
   main(sys.argv[1])
