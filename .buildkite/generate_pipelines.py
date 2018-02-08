@@ -40,11 +40,34 @@ exit $TESTS_EXIT_STATUS"""
   write_pipeline("bazel-presubmit.yml", steps)
 
 def bazel_postsubmit_pipeline(platforms):
-  trigger_steps = []
+  steps = []
+
+  # Bazel Build
+
   for platform in platforms:
-    steps = []
-    build_step_name = label("Bazel", platform[0])
-    script_name = "postsubmit.sh"
+    step_name = label("Build Bazel", platform[0])
+    script_name = "postsubmit-build.sh"
+    script = """#!/bin/bash
+set -xe
+
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json
+
+echo '+++ Building'
+bazel build --color=yes //src:bazel
+
+echo '--- Uploading Bazel Binary'
+buildkite-agent artifact upload bazel-bin/src/bazel"""
+    steps.append(command_step(step_name, script, script_name, platform[1]))
+
+  steps.append(wait_step())
+
+  # Bazel Test
+
+  for platform in platforms:
+    step_name = label("Test Bazel", platform[0])
+    script_name = "postsubmit-test.sh"
     script = """#!/bin/bash
 set -xuo pipefail
 
@@ -52,28 +75,22 @@ echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json
 
-echo '+++ Building'
-bazel build --color=yes //src:bazel || exit $?
-
-#echo '+++ Testing'
-#bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
+echo '+++ Testing'
+bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
 
 TESTS_EXIT_STATUS=$?
 
-#echo '--- Uploading Failed Test Logs'
-#python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+echo '--- Uploading Failed Test Logs'
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
-echo '--- Uploading Bazel Binary'
-buildkite-agent artifact upload bazel-bin/src/bazel
+exit $TESTS_EXIT_STATUS"""
+    steps.append(command_step(step_name, script, script_name, platform[1]))
 
-exit $TESTS_EXIT_STATUS
-"""
-    steps.append(command_step(build_step_name, script, script_name, platform[1]))
+  # Downstream Build and Test
 
-    steps.append(wait_step())
-
-    for project in DOWNSTREAM_PROJECTS.keys():
-      bazel_build_step_name = label("Bazel", platform[0])
+  for project in DOWNSTREAM_PROJECTS.keys():
+    for platform in platforms:
+      bazel_build_step_name = label("Build Bazel", platform[0])
       build_step_name = label(project, platform[0])
       script_name = "postsubmit-" + project + "-" + platform[1] + ".sh"
       script = """#!/bin/bash
@@ -111,10 +128,7 @@ rm -rf stashed-outputs {0}
 exit $TESTS_EXIT_STATUS
 """.format(project, bazel_build_step_name, DOWNSTREAM_PROJECTS[project]["build"], DOWNSTREAM_PROJECTS[project]["test"])
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
-    pipeline_name = "bazel-postsubmit-" + platform[1];
-    write_pipeline("pipeline." + pipeline_name + ".yml", steps)
-    trigger_steps.append(trigger_step(pipeline_name))
-  write_pipeline("bazel-postsubmit.yml", trigger_steps)
+    write_pipeline("bazel-postsubmit.yml", steps)
 
 def wait_step():
   return " - wait"
@@ -127,10 +141,6 @@ def command_step(label, script, script_name, platform):
    command: \"{}\"
    agents:
      - \"os={}\"""".format(label, ".buildkite/" + script_name, platform)
-
-def trigger_step(pipeline_name):
-  return """
- - trigger: {}""".format(pipeline_name)
 
 def write_pipeline(name, steps):
   with open(name, 'w') as f:

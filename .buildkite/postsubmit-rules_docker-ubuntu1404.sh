@@ -7,7 +7,7 @@ rm -rf stashed-outputs rules_docker
 
 echo '--- Downloading Bazel Binary'
 mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Bazel (Ubuntu 14.04)'
+buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Build Bazel (Ubuntu 14.04)'
 chmod +x stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
