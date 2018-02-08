@@ -1,8 +1,9 @@
 PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604")]
 DOWNSTREAM_PROJECTS = {
   "rules_go" : {'build': '...', 'test': '...'},
-  "rules_python" : {'build': '...', 'test': '...'},
+  "rules_k8s" : {'build': '//test/...', 'test': '//test/...'},
   "rules_nodejs" : {'build': '...', 'test': '...'},
+  "rules_python" : {'build': '...', 'test': '...'},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'}
 }
 
