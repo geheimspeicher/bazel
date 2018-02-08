@@ -1,0 +1,51 @@
+steps:
+ - label: "Bazel (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit.sh"
+   agents:
+     - "os=ubuntu1604"
+ - wait
+
+ - label: "bazel-watcher (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_nodejs (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_go (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_docker (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_typescript (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_typescript-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_k8s (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_k8s-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_python (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "buildtools (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_scala (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_scala-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
