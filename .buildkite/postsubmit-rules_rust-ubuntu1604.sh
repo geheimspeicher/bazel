@@ -15,7 +15,7 @@ git clone https://github.com/geheimspeicher/rules_rust || exit $?
 cd rules_rust
 
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes build //... @examples//... || exit $?
+../stashed-outputs/bazel-bin/src/bazel build --color=yes //... @examples//... || exit $?
 
 echo '+++ Testing'
 ../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //... @examples//...

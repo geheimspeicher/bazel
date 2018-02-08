@@ -9,7 +9,7 @@ DOWNSTREAM_PROJECTS = {
   "rules_k8s" : {'build': '//test/...', 'test': '//test/...'},
   "rules_nodejs" : {'build': '...', 'test': '...'},
   "rules_python" : {'build': '...', 'test': '...'},
-  "rules_rust" : {'build': 'build //... @examples//...', 'test': '//... @examples//...'},
+  "rules_rust" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
   "rules_typescript" : {'build': '...', 'test': '...'}
 }
