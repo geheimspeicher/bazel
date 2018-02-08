@@ -1,51 +1,51 @@
 steps:
- - label: "Bazel Ubuntu 14.04"
+ - label: "Bazel (Ubuntu 14.04)"
    command: ".buildkite/postsubmit.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "Bazel Ubuntu 16.04"
+ - label: "Bazel (Ubuntu 16.04)"
    command: ".buildkite/postsubmit.sh"
    agents:
      - "os=ubuntu1604"
  - wait
 
- - label: "rules_go Ubuntu 14.04"
+ - label: "rules_go (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-rules_go-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_go Ubuntu 16.04"
+ - label: "rules_go (Ubuntu 16.04)"
    command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_python Ubuntu 14.04"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_python Ubuntu 16.04"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_nodejs Ubuntu 14.04"
+ - label: "rules_nodejs (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_nodejs Ubuntu 16.04"
+ - label: "rules_nodejs (Ubuntu 16.04)"
    command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_scala Ubuntu 14.04"
+ - label: "rules_python (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_python (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_scala (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-rules_scala-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_scala Ubuntu 16.04"
+ - label: "rules_scala (Ubuntu 16.04)"
    command: ".buildkite/postsubmit-rules_scala-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"

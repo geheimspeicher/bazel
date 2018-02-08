@@ -7,7 +7,7 @@ rm -rf stashed-outputs rules_scala
 
 echo '--- Downloading Bazel Binary'
 mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Bazel Ubuntu 16.04'
+buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Bazel (Ubuntu 16.04)'
 chmod +x stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
@@ -15,10 +15,10 @@ git clone https://github.com/geheimspeicher/rules_scala || exit $?
 cd rules_scala
 
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
+../stashed-outputs/bazel-bin/src/bazel build --color=yes //test/... || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
+../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //test/...
 
 TESTS_EXIT_STATUS=$?
 
