@@ -1,5 +1,5 @@
 PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604")]
-DOWNSTREAM_PROJECTS = ["rules_go", "rules_python"]
+DOWNSTREAM_PROJECTS = ["rules_go", "rules_python", "rules_nodejs", "rules_scala"]
 
 def bazel_presubmit_pipeline(platforms):
   steps = []
