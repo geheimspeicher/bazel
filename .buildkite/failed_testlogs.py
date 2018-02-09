@@ -29,7 +29,7 @@ def label_to_path(label):
   # remove leading //
   path = label[2:]
   path = path.replace(":", "/")
-  return ".failed-test-logs/" + path
+  return ".failed-test-logs/" + path + ".log"
 
 if __name__ == '__main__':
   main(sys.argv[1])

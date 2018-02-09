@@ -12,6 +12,8 @@ DOWNSTREAM_PROJECTS = {
   "rules_rust" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
   "rules_typescript" : {'run': '@yarn//:yarn'}
+  "skydoc" : {},
+  "subpar" : {},
 }
 
 def bazel_presubmit_pipeline(platforms):
