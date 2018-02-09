@@ -3,7 +3,7 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf bep.json .failed-test-logs .stashed-outputs rules_docker
+rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
 echo '--- Downloading Bazel Binary'
 mkdir .stashed-outputs
@@ -11,12 +11,12 @@ buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '
 chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
-git clone https://github.com/geheimspeicher/rules_docker || exit $?
-cd rules_docker
+git clone https://github.com/geheimspeicher/rules_docker .downstream-projects/rules_docker || exit $?
+cd .downstream-projects/rules_docker
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf bep.json .failed-test-logs .stashed-outputs 
+rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
 echo '+++ Building'
 ../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
@@ -27,11 +27,11 @@ echo '+++ Testing'
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
-cd ..
-python3 .buildkite/failed_testlogs.py rules_docker/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+cd ../..
+python3 .buildkite/failed_testlogs.py .downstream-projects/rules_docker/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf bep.json .failed-test-logs .stashed-outputs rules_docker
+rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
 exit $TESTS_EXIT_STATUS

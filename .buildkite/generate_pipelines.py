@@ -84,7 +84,7 @@ set -xuo pipefail
       script = """#!/bin/bash
 set -xuo pipefail
 """
-      script = script + cleanup_commands(project_name)
+      script = script + cleanup_commands()
       script = script + download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name, project.get("git_url", DEFAULT_GIT_URL))
       script = script + cleanup_commands()
       if "run" in project:
@@ -95,7 +95,7 @@ set -xuo pipefail
       test_targets = project.get("test", "...")
       if test_targets != None:
         script = script + downstream_bazel_test(project_name, test_targets)
-      script = script + cleanup_commands(project_name)
+      script = script + cleanup_commands()
       if test_targets != None:
         script = script + exit_test_status()
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
@@ -171,8 +171,8 @@ buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '
 chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
-git clone {2}{0} || exit $?
-cd {0}
+git clone {2}{0} .downstream-projects/{0} || exit $?
+cd .downstream-projects/{0}
 """.format(project_name, bazel_build_step_name, git_url)
 
 def downstream_bazel_run(run_target):
@@ -194,16 +194,16 @@ echo '+++ Testing'
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
-cd ..
-python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+cd ../..
+python3 .buildkite/failed_testlogs.py .downstream-projects/{0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 """.format(project_name, test_target)
 
-def cleanup_commands(folder = ""):
+def cleanup_commands():
   return """
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf bep.json .failed-test-logs .stashed-outputs {}
-""".format(folder)
+rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
+"""
 
 def fix_android_workspace():
   return """
