@@ -3,17 +3,22 @@ DOWNSTREAM_PROJECTS = {
   "bazel-watcher" : {},
   "BUILD_file_generator" : {},
   "buildtools" : {'build': '', 'test': '//:tests'},
+  "rules_appengine" : {},
+  "rules_closure" : {},
   "rules_docker" : {},
   "rules_go" : {},
   "rules_groovy" : {'test': None},
+  "rules_jsonnet" : {'build': '//... @examples//...', 'test': '//... @examples/...'},
   "rules_k8s" : {},
   "rules_nodejs" : {'run': '@yarn//:yarn'},
+  "rules_perl" : {},
   "rules_python" : {},
   "rules_rust" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
+  "rules_sass" : {},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
-  "rules_typescript" : {'run': '@yarn//:yarn'}
+  "rules_typescript" : {'run': '@yarn//:yarn'},
   "skydoc" : {},
-  "subpar" : {},
+  "examples" : {'build': '//:all', 'test': None}
 }
 
 def bazel_presubmit_pipeline(platforms):
