@@ -30,33 +30,18 @@ steps:
    agents:
      - "os=macos"
 
- - label: "BUILD_file_generator (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1404.sh"
+ - label: "buildtools (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "BUILD_file_generator (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1604.sh"
+ - label: "buildtools (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "BUILD_file_generator (macOS)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_rust (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_rust-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_rust (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_rust-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_rust (macOS)"
-   command: ".buildkite/postsubmit-rules_rust-macos.sh"
+ - label: "buildtools (macOS)"
+   command: ".buildkite/postsubmit-buildtools-macos.sh"
    agents:
      - "os=macos"
 
@@ -75,18 +60,108 @@ steps:
    agents:
      - "os=macos"
 
- - label: "rules_go (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_go-ubuntu1404.sh"
+ - label: "rules_groovy (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_groovy-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_go (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
+ - label: "rules_groovy (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_groovy-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_go (macOS)"
-   command: ".buildkite/postsubmit-rules_go-macos.sh"
+ - label: "rules_groovy (macOS)"
+   command: ".buildkite/postsubmit-rules_groovy-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "BUILD_file_generator (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "BUILD_file_generator (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "BUILD_file_generator (macOS)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_nodejs (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_nodejs (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_nodejs (macOS)"
+   command: ".buildkite/postsubmit-rules_nodejs-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_python (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_python (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_python (macOS)"
+   command: ".buildkite/postsubmit-rules_python-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "bazel-watcher (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "bazel-watcher (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "bazel-watcher (macOS)"
+   command: ".buildkite/postsubmit-bazel-watcher-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_rust (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_rust (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_rust (macOS)"
+   command: ".buildkite/postsubmit-rules_rust-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_docker (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_docker (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_docker (macOS)"
+   command: ".buildkite/postsubmit-rules_docker-macos.sh"
    agents:
      - "os=macos"
 
@@ -120,92 +195,17 @@ steps:
    agents:
      - "os=macos"
 
- - label: "rules_groovy (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_groovy-ubuntu1404.sh"
+ - label: "rules_go (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_go-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_groovy (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_groovy-ubuntu1604.sh"
+ - label: "rules_go (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_go-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_groovy (macOS)"
-   command: ".buildkite/postsubmit-rules_groovy-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_python (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_python (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_python (macOS)"
-   command: ".buildkite/postsubmit-rules_python-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "buildtools (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "buildtools (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "buildtools (macOS)"
-   command: ".buildkite/postsubmit-buildtools-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "bazel-watcher (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "bazel-watcher (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "bazel-watcher (macOS)"
-   command: ".buildkite/postsubmit-bazel-watcher-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_nodejs (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_nodejs (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_nodejs (macOS)"
-   command: ".buildkite/postsubmit-rules_nodejs-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_docker (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_docker (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_docker (macOS)"
-   command: ".buildkite/postsubmit-rules_docker-macos.sh"
+ - label: "rules_go (macOS)"
+   command: ".buildkite/postsubmit-rules_go-macos.sh"
    agents:
      - "os=macos"

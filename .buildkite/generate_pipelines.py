@@ -14,16 +14,8 @@ DOWNSTREAM_PROJECTS = {
   "rules_typescript" : {'run': '@yarn//:yarn'}
 }
 
-def bazel_presubmit_pipeline(platforms):
-  steps = []
-  for platform in platforms:
-    label = platform[0]
-    script_name = "presubmit.sh"
-    script = """#!/bin/bash
-set -xuo pipefail"""
-    script = script + cleanup_commands()
-    script = script + fix_android_workspace()
-    script = script + """
+def build_test_bazel_presubmit():
+  return """
 echo '+++ Building'
 bazel build --color=yes //src:bazel || exit $?
 
@@ -34,11 +26,46 @@ TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done"""
-    script = script + cleanup_commands()
-    script = script + """
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+"""
+
+def exit_test_status():
+  return """
 exit $TESTS_EXIT_STATUS
 """
+
+def build_upload_bazel_postsubmit():
+  return """
+echo '+++ Building'
+bazel build --color=yes //src:bazel
+
+echo '--- Uploading Bazel Binary'
+buildkite-agent artifact upload bazel-bin/src/bazel ${BUILDKITE_ARTIFACT_UPLOAD_DESTINATION}
+"""
+
+def test_bazel_postsubmit():
+  return """
+echo '+++ Testing'
+bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
+
+TESTS_EXIT_STATUS=$?
+
+echo '--- Uploading Failed Test Logs'
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+"""
+
+def bazel_presubmit_pipeline(platforms):
+  steps = []
+  for platform in platforms:
+    label = platform[0]
+    script_name = "presubmit.sh"
+    script = """#!/bin/bash
+set -xuo pipefail"""
+    script = script + cleanup_commands()
+    script = script + fix_android_workspace()
+    script = script + build_test_bazel_presubmit()
+    script = script + cleanup_commands()
+    script = script + exit_test_status()
     steps.append(command_step(label, script, script_name, platform[1]))
   write_pipeline("presubmit.yml", steps)
 
@@ -55,12 +82,7 @@ set -xeuo pipefail
 """
     script = script + cleanup_commands()
     script = script + fix_android_workspace()
-    script = script + """
-echo '+++ Building'
-bazel build --color=yes //src:bazel
-
-echo '--- Uploading Bazel Binary'
-buildkite-agent artifact upload bazel-bin/src/bazel"""
+    script = script + build_upload_bazel_postsubmit()
     steps.append(command_step(step_name, script, script_name, platform[1]))
 
   steps.append(wait_step())
@@ -75,19 +97,9 @@ set -xuo pipefail
 """
     script = script + cleanup_commands()
     script = script + fix_android_workspace()
-    script = script + """
-echo '+++ Testing'
-bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
-
-TESTS_EXIT_STATUS=$?
-
-echo '--- Uploading Failed Test Logs'
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-"""
+    script = script + test_bazel_postsubmit()
     script = script + cleanup_commands()
-    script = script + """
-exit $TESTS_EXIT_STATUS
-"""
+    script = script + exit_test_status()
     steps.append(command_step(step_name, script, script_name, platform[1]))
 
   # Downstream Build and Test

@@ -12,4 +12,4 @@ echo '+++ Building'
 bazel build --color=yes //src:bazel
 
 echo '--- Uploading Bazel Binary'
-buildkite-agent artifact upload bazel-bin/src/bazel
+buildkite-agent artifact upload bazel-bin/src/bazel ${BUILDKITE_ARTIFACT_UPLOAD_DESTINATION}
