@@ -370,11 +370,6 @@ steps:
    agents:
      - "os=ubuntu1604"
 
- - label: "subpar (macOS)"
-   command: ".buildkite/postsubmit-subpar-macos.sh"
-   agents:
-     - "os=macos"
-
  - label: "examples (Ubuntu 14.04)"
    command: ".buildkite/postsubmit-examples-ubuntu1404.sh"
    agents:

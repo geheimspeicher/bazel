@@ -12,7 +12,7 @@ DOWNSTREAM_PROJECTS = {
   "rules_go" : {},
   "rules_groovy" : {'test': None},
   "rules_gwt" : {'test': None},
-  "rules_jsonnet" : {'build': '//... @examples//...', 'test': '//... @examples/...'},
+  "rules_jsonnet" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
   "rules_k8s" : {},
   "rules_nodejs" : {'run': '@yarn//:yarn'},
   "rules_perl" : {},
@@ -22,7 +22,7 @@ DOWNSTREAM_PROJECTS = {
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
   "rules_typescript" : {'run': '@yarn//:yarn'},
   "skydoc" : {},
-  "subpar" : {'git_url': 'https://github.com/google/'},
+  "subpar" : {'git_url': 'https://github.com/google/', 'macos': None},
   "examples" : {'build': '//:all', 'test': None}
 }
 DEFAULT_GIT_URL = "https://github.com/geheimspeicher/"
@@ -79,6 +79,8 @@ set -xuo pipefail
 
   for project_name, project in DOWNSTREAM_PROJECTS.items():
     for platform in platforms:
+      if platform[1] in project and project[platform[1]] is None:
+        continue
       bazel_build_step_name = label("Build Bazel", platform[0])
       build_step_name = label(project_name, platform[0])
       script_name = "postsubmit-" + project_name + "-" + platform[1] + ".sh"
