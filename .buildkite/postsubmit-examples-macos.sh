@@ -19,7 +19,7 @@ bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
 echo '+++ Building'
-../.stashed-outputs/bazel-bin/src/bazel build --color=yes //:all || exit $?
+../../.stashed-outputs/bazel-bin/src/bazel build --color=yes //:all || exit $?
 
 echo '--- Cleanup'
 bazel clean --expunge

@@ -18,13 +18,13 @@ echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
-../.stashed-outputs/bazel-bin/src/bazel run --color=yes @yarn//:yarn || exit $?
+../../.stashed-outputs/bazel-bin/src/bazel run --color=yes @yarn//:yarn || exit $?
 
 echo '+++ Building'
-../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
+../../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
 
 echo '+++ Testing'
-../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
+../../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
 
 TESTS_EXIT_STATUS=$?
 

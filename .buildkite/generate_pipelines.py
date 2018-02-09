@@ -178,19 +178,19 @@ cd .downstream-projects/{0}
 
 def downstream_bazel_run(run_target):
   return """
-../.stashed-outputs/bazel-bin/src/bazel run --color=yes {0} || exit $?
+../../.stashed-outputs/bazel-bin/src/bazel run --color=yes {0} || exit $?
 """.format(run_target)
 
 def downstream_bazel_build(build_target):
   return """
 echo '+++ Building'
-../.stashed-outputs/bazel-bin/src/bazel build --color=yes {0} || exit $?
+../../.stashed-outputs/bazel-bin/src/bazel build --color=yes {0} || exit $?
 """.format(build_target)
 
 def downstream_bazel_test(project_name, test_target):
   return """
 echo '+++ Testing'
-../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {1}
+../../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {1}
 
 TESTS_EXIT_STATUS=$?
 

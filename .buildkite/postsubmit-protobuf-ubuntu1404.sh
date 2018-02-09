@@ -19,7 +19,7 @@ bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs .downstream-projects
 
 echo '+++ Testing'
-../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //:all
+../../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //:all
 
 TESTS_EXIT_STATUS=$?
 
