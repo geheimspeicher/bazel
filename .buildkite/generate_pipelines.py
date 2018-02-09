@@ -5,13 +5,13 @@ DOWNSTREAM_PROJECTS = {
   "buildtools" : {'build': '', 'test': '//:tests'},
   "rules_docker" : {},
   "rules_go" : {},
-  "rules_groovy" : {},
-  "rules_k8s" : {'build': '//test/...', 'test': '//test/...'},
+  "rules_groovy" : {'test': None},
+  "rules_k8s" : {},
   "rules_nodejs" : {'run': '@yarn//:yarn'},
   "rules_python" : {},
   "rules_rust" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
-  "rules_typescript" : {}
+  "rules_typescript" : {'run': '@yarn//:yarn'}
 }
 
 def bazel_presubmit_pipeline(platforms):
@@ -118,19 +118,23 @@ cd {0}
 """.format(project["run"])
       script = script + """
 echo '+++ Building'
-../.stashed-outputs/bazel-bin/src/bazel build --color=yes {1} || exit $?
-
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes {0} || exit $?
+""".format(project.get("build", "..."))
+      test_targets = project.get("test", "...")
+      if test_targets != None:
+        script = script + """
 echo '+++ Testing'
-../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {2}
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {1}
 
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 cd ..
 python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-""".format(project_name, project.get("build", "..."), project.get("test", "..."))
+""".format(project_name, test_targets)
       script = script + cleanup_commands(project_name)
-      script = script + """
+      if test_targets != None:
+        script = script + """
 exit $TESTS_EXIT_STATUS
 """
       steps.append(command_step(build_step_name, script, script_name, platform[1]))

@@ -18,6 +18,8 @@ echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs 
 
+../.stashed-outputs/bazel-bin/src/bazel run --color=yes @yarn//:yarn || exit $?
+
 echo '+++ Building'
 ../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
 
