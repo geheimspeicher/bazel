@@ -3,22 +3,26 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_scala
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_scala
 
 echo '--- Downloading Bazel Binary'
-mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Build Bazel (macOS)'
-chmod +x stashed-outputs/bazel-bin/src/bazel
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step 'Build Bazel (macOS)'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/rules_scala || exit $?
 cd rules_scala
 
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json .failed-test-logs .stashed-outputs 
+
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes //test/... || exit $?
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes //test/... || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //test/...
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //test/...
 
 TESTS_EXIT_STATUS=$?
 
@@ -28,6 +32,6 @@ python3 .buildkite/failed_testlogs.py rules_scala/bep.json | while read logfile;
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_scala
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_scala
 
 exit $TESTS_EXIT_STATUS

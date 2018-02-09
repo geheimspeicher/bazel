@@ -3,22 +3,26 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_rust
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_rust
 
 echo '--- Downloading Bazel Binary'
-mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Build Bazel (macOS)'
-chmod +x stashed-outputs/bazel-bin/src/bazel
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step 'Build Bazel (macOS)'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/rules_rust || exit $?
 cd rules_rust
 
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json .failed-test-logs .stashed-outputs 
+
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes //... @examples//... || exit $?
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes //... @examples//... || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //... @examples//...
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //... @examples//...
 
 TESTS_EXIT_STATUS=$?
 
@@ -28,6 +32,6 @@ python3 .buildkite/failed_testlogs.py rules_rust/bep.json | while read logfile; 
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_rust
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_rust
 
 exit $TESTS_EXIT_STATUS

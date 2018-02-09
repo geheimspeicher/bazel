@@ -14,19 +14,17 @@ DOWNSTREAM_PROJECTS = {
   "rules_typescript" : {'build': '...', 'test': '...'}
 }
 
+
+
 def bazel_presubmit_pipeline(platforms):
   steps = []
   for platform in platforms:
     label = platform[0]
     script_name = "presubmit.sh"
     script = """#!/bin/bash
-set -xuo pipefail
-
-echo '--- Cleanup'
-bazel clean --expunge
-rm -rf bep.json
-rm -rf .failed-test-logs
-
+set -xuo pipefail"""
+    script = script + cleanup_commands() 
+    script = script + """
 echo '+++ Building'
 bazel build --color=yes //src:bazel || exit $?
 
@@ -37,11 +35,13 @@ TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-
-exit $TESTS_EXIT_STATUS"""
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done"""
+    script = script + cleanup_commands()
+    script = script + """
+exit $TESTS_EXIT_STATUS
+"""
     steps.append(command_step(label, script, script_name, platform[1]))
-  write_pipeline("bazel-presubmit.yml", steps)
+  write_pipeline("presubmit.yml", steps)
 
 def bazel_postsubmit_pipeline(platforms):
   steps = []
@@ -52,13 +52,10 @@ def bazel_postsubmit_pipeline(platforms):
     step_name = label("Build Bazel", platform[0])
     script_name = "postsubmit-build.sh"
     script = """#!/bin/bash
-set -xe
-
-echo '--- Cleanup'
-bazel clean --expunge
-rm -rf .failed-test-logs
-rm -rf bep.json
-
+set -xeuo pipefail
+"""
+    script = script + cleanup_commands()
+    script = script + """
 echo '+++ Building'
 bazel build --color=yes //src:bazel
 
@@ -75,12 +72,9 @@ buildkite-agent artifact upload bazel-bin/src/bazel"""
     script_name = "postsubmit-test.sh"
     script = """#!/bin/bash
 set -xuo pipefail
-
-echo '--- Cleanup'
-bazel clean --expunge
-rm -rf .failed-test-logs
-rm -rf bep.json
-
+"""
+    script = script + cleanup_commands()
+    script = script + """
 echo '+++ Testing'
 bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
 
@@ -88,8 +82,11 @@ TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-
-exit $TESTS_EXIT_STATUS"""
+"""
+    script = script + cleanup_commands()
+    script = script + """
+exit $TESTS_EXIT_STATUS
+"""
     steps.append(command_step(step_name, script, script_name, platform[1]))
 
   # Downstream Build and Test
@@ -101,42 +98,38 @@ exit $TESTS_EXIT_STATUS"""
       script_name = "postsubmit-" + project + "-" + platform[1] + ".sh"
       script = """#!/bin/bash
 set -xuo pipefail
-
-echo '--- Cleanup'
-bazel clean --expunge
-rm -rf stashed-outputs {0}
-rm -rf .failed-test-logs
-
+"""
+      script = script + cleanup_commands(project)
+      script = script + """
 echo '--- Downloading Bazel Binary'
-mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step '{1}'
-chmod +x stashed-outputs/bazel-bin/src/bazel
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '{1}'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/{0} || exit $?
 cd {0}
-
+""".format(project, bazel_build_step_name)
+      script = script + cleanup_commands()
+      script = script + """
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes {2} || exit $?
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes {1} || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {3}
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {2}
 
 TESTS_EXIT_STATUS=$?
 
 echo '--- Uploading Failed Test Logs'
 cd ..
 python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-
-echo '--- Cleanup'
-bazel clean --expunge
-rm -rf .failed-test-logs
-rm -rf stashed-outputs {0}
-
+""".format(project, DOWNSTREAM_PROJECTS[project]["build"], DOWNSTREAM_PROJECTS[project]["test"])
+      script = script + cleanup_commands(project)
+      script = script + """
 exit $TESTS_EXIT_STATUS
-""".format(project, bazel_build_step_name, DOWNSTREAM_PROJECTS[project]["build"], DOWNSTREAM_PROJECTS[project]["test"])
+"""
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
-    write_pipeline("bazel-postsubmit.yml", steps)
+    write_pipeline("postsubmit.yml", steps)
 
 def wait_step():
   return " - wait"
@@ -159,6 +152,13 @@ def write_pipeline(name, steps):
 
 def label(project, platform):
   return "{0} ({1})".format(project, platform)
+
+def cleanup_commands(folder = ""):
+  return """
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json .failed-test-logs .stashed-outputs {}
+""".format(folder)
 
 if __name__ == '__main__':
   bazel_presubmit_pipeline(PLATFORMS)

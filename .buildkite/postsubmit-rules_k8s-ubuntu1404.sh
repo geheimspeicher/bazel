@@ -3,22 +3,26 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_k8s
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_k8s
 
 echo '--- Downloading Bazel Binary'
-mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Build Bazel (Ubuntu 14.04)'
-chmod +x stashed-outputs/bazel-bin/src/bazel
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step 'Build Bazel (Ubuntu 14.04)'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/rules_k8s || exit $?
 cd rules_k8s
 
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json .failed-test-logs .stashed-outputs 
+
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes //test/... || exit $?
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes //test/... || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //test/...
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json //test/...
 
 TESTS_EXIT_STATUS=$?
 
@@ -28,6 +32,6 @@ python3 .buildkite/failed_testlogs.py rules_k8s/bep.json | while read logfile; d
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs rules_k8s
+rm -rf bep.json .failed-test-logs .stashed-outputs rules_k8s
 
 exit $TESTS_EXIT_STATUS

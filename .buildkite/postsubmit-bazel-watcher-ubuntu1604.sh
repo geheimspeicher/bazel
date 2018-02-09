@@ -3,22 +3,26 @@ set -xuo pipefail
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs bazel-watcher
+rm -rf bep.json .failed-test-logs .stashed-outputs bazel-watcher
 
 echo '--- Downloading Bazel Binary'
-mkdir stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel stashed-outputs/ --step 'Build Bazel (Ubuntu 16.04)'
-chmod +x stashed-outputs/bazel-bin/src/bazel
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step 'Build Bazel (Ubuntu 16.04)'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/bazel-watcher || exit $?
 cd bazel-watcher
 
+echo '--- Cleanup'
+bazel clean --expunge
+rm -rf bep.json .failed-test-logs .stashed-outputs 
+
 echo '+++ Building'
-../stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
 
 echo '+++ Testing'
-../stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
 
 TESTS_EXIT_STATUS=$?
 
@@ -28,6 +32,6 @@ python3 .buildkite/failed_testlogs.py bazel-watcher/bep.json | while read logfil
 
 echo '--- Cleanup'
 bazel clean --expunge
-rm -rf stashed-outputs bazel-watcher
+rm -rf bep.json .failed-test-logs .stashed-outputs bazel-watcher
 
 exit $TESTS_EXIT_STATUS
