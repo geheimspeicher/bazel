@@ -11,6 +11,7 @@ DOWNSTREAM_PROJECTS = {
   "rules_docker" : {},
   "rules_go" : {},
   "rules_groovy" : {'test': None},
+  "rules_gwt" : {'test': None},
   "rules_jsonnet" : {'build': '//... @examples//...', 'test': '//... @examples/...'},
   "rules_k8s" : {},
   "rules_nodejs" : {'run': '@yarn//:yarn'},
