@@ -23,7 +23,8 @@ def bazel_presubmit_pipeline(platforms):
     script_name = "presubmit.sh"
     script = """#!/bin/bash
 set -xuo pipefail"""
-    script = script + cleanup_commands() 
+    script = script + cleanup_commands()
+    script = script + fix_android_workspace()
     script = script + """
 echo '+++ Building'
 bazel build --color=yes //src:bazel || exit $?
@@ -55,6 +56,7 @@ def bazel_postsubmit_pipeline(platforms):
 set -xeuo pipefail
 """
     script = script + cleanup_commands()
+    script = script + fix_android_workspace()
     script = script + """
 echo '+++ Building'
 bazel build --color=yes //src:bazel
@@ -74,6 +76,7 @@ buildkite-agent artifact upload bazel-bin/src/bazel"""
 set -xuo pipefail
 """
     script = script + cleanup_commands()
+    script = script + fix_android_workspace()
     script = script + """
 echo '+++ Testing'
 bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
@@ -159,6 +162,15 @@ echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs {}
 """.format(folder)
+
+def fix_android_workspace():
+  return """
+sed -i.bak \
+-e 's/^# android_sdk_repository/android_sdk_repository/' \
+-e 's/^# android_ndk_repository/android_ndk_repository/' \
+WORKSPACE
+rm -f WORKSPACE.bak
+"""
 
 if __name__ == '__main__':
   bazel_presubmit_pipeline(PLATFORMS)

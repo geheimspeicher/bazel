@@ -5,6 +5,9 @@ echo '--- Cleanup'
 bazel clean --expunge
 rm -rf bep.json .failed-test-logs .stashed-outputs 
 
+sed -i.bak -e 's/^# android_sdk_repository/android_sdk_repository/' -e 's/^# android_ndk_repository/android_ndk_repository/' WORKSPACE
+rm -f WORKSPACE.bak
+
 echo '+++ Testing'
 bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
 
