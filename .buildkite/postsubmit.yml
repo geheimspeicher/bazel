@@ -30,138 +30,18 @@ steps:
    agents:
      - "os=macos"
 
- - label: "BUILD_file_generator (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1404.sh"
+ - label: "subpar (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-subpar-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "BUILD_file_generator (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1604.sh"
+ - label: "subpar (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-subpar-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "BUILD_file_generator (macOS)"
-   command: ".buildkite/postsubmit-BUILD_file_generator-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_rust (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_rust-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_rust (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_rust-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_rust (macOS)"
-   command: ".buildkite/postsubmit-rules_rust-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "skydoc (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-skydoc-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "skydoc (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-skydoc-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "skydoc (macOS)"
-   command: ".buildkite/postsubmit-skydoc-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "bazel-watcher (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "bazel-watcher (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "bazel-watcher (macOS)"
-   command: ".buildkite/postsubmit-bazel-watcher-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "buildtools (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "buildtools (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "buildtools (macOS)"
-   command: ".buildkite/postsubmit-buildtools-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_nodejs (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_nodejs (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_nodejs (macOS)"
-   command: ".buildkite/postsubmit-rules_nodejs-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_perl (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_perl-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_perl (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_perl-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_perl (macOS)"
-   command: ".buildkite/postsubmit-rules_perl-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_typescript (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_typescript-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_typescript (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_typescript-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_typescript (macOS)"
-   command: ".buildkite/postsubmit-rules_typescript-macos.sh"
-   agents:
-     - "os=macos"
-
- - label: "rules_scala (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_scala-ubuntu1404.sh"
-   agents:
-     - "os=ubuntu1404"
-
- - label: "rules_scala (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_scala-ubuntu1604.sh"
-   agents:
-     - "os=ubuntu1604"
-
- - label: "rules_scala (macOS)"
-   command: ".buildkite/postsubmit-rules_scala-macos.sh"
+ - label: "subpar (macOS)"
+   command: ".buildkite/postsubmit-subpar-macos.sh"
    agents:
      - "os=macos"
 
@@ -180,78 +60,108 @@ steps:
    agents:
      - "os=macos"
 
- - label: "rules_closure (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_closure-ubuntu1404.sh"
+ - label: "bazel-watcher (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_closure (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_closure-ubuntu1604.sh"
+ - label: "bazel-watcher (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-bazel-watcher-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_closure (macOS)"
-   command: ".buildkite/postsubmit-rules_closure-macos.sh"
+ - label: "bazel-watcher (macOS)"
+   command: ".buildkite/postsubmit-bazel-watcher-macos.sh"
    agents:
      - "os=macos"
 
- - label: "rules_docker (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
+ - label: "rules_appengine (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_appengine-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_docker (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
+ - label: "rules_appengine (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_appengine-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_docker (macOS)"
-   command: ".buildkite/postsubmit-rules_docker-macos.sh"
+ - label: "rules_appengine (macOS)"
+   command: ".buildkite/postsubmit-rules_appengine-macos.sh"
    agents:
      - "os=macos"
 
- - label: "rules_jsonnet (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_jsonnet-ubuntu1404.sh"
+ - label: "rules_perl (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_perl-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_jsonnet (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_jsonnet-ubuntu1604.sh"
+ - label: "rules_perl (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_perl-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_jsonnet (macOS)"
-   command: ".buildkite/postsubmit-rules_jsonnet-macos.sh"
+ - label: "rules_perl (macOS)"
+   command: ".buildkite/postsubmit-rules_perl-macos.sh"
    agents:
      - "os=macos"
 
- - label: "rules_python (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
+ - label: "BUILD_file_generator (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_python (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
+ - label: "BUILD_file_generator (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_python (macOS)"
-   command: ".buildkite/postsubmit-rules_python-macos.sh"
+ - label: "BUILD_file_generator (macOS)"
+   command: ".buildkite/postsubmit-BUILD_file_generator-macos.sh"
    agents:
      - "os=macos"
 
- - label: "examples (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-examples-ubuntu1404.sh"
+ - label: "rules_scala (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_scala-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "examples (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-examples-ubuntu1604.sh"
+ - label: "rules_scala (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_scala-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "examples (macOS)"
-   command: ".buildkite/postsubmit-examples-macos.sh"
+ - label: "rules_scala (macOS)"
+   command: ".buildkite/postsubmit-rules_scala-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_typescript (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_typescript-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_typescript (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_typescript-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_typescript (macOS)"
+   command: ".buildkite/postsubmit-rules_typescript-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "skydoc (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-skydoc-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "skydoc (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-skydoc-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "skydoc (macOS)"
+   command: ".buildkite/postsubmit-skydoc-macos.sh"
    agents:
      - "os=macos"
 
@@ -285,18 +195,153 @@ steps:
    agents:
      - "os=macos"
 
- - label: "rules_appengine (Ubuntu 14.04)"
-   command: ".buildkite/postsubmit-rules_appengine-ubuntu1404.sh"
+ - label: "rules_rust (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1404.sh"
    agents:
      - "os=ubuntu1404"
 
- - label: "rules_appengine (Ubuntu 16.04)"
-   command: ".buildkite/postsubmit-rules_appengine-ubuntu1604.sh"
+ - label: "rules_rust (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_rust-ubuntu1604.sh"
    agents:
      - "os=ubuntu1604"
 
- - label: "rules_appengine (macOS)"
-   command: ".buildkite/postsubmit-rules_appengine-macos.sh"
+ - label: "rules_rust (macOS)"
+   command: ".buildkite/postsubmit-rules_rust-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_jsonnet (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_jsonnet-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_jsonnet (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_jsonnet-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_jsonnet (macOS)"
+   command: ".buildkite/postsubmit-rules_jsonnet-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_python (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_python (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_python-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_python (macOS)"
+   command: ".buildkite/postsubmit-rules_python-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_closure (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_closure-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_closure (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_closure-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_closure (macOS)"
+   command: ".buildkite/postsubmit-rules_closure-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "re2 (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-re2-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "re2 (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-re2-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "re2 (macOS)"
+   command: ".buildkite/postsubmit-re2-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_docker (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_docker (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_docker-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_docker (macOS)"
+   command: ".buildkite/postsubmit-rules_docker-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "protobuf (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-protobuf-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "protobuf (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-protobuf-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "protobuf (macOS)"
+   command: ".buildkite/postsubmit-protobuf-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "buildtools (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "buildtools (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-buildtools-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "buildtools (macOS)"
+   command: ".buildkite/postsubmit-buildtools-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "rules_nodejs (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "rules_nodejs (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-rules_nodejs-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "rules_nodejs (macOS)"
+   command: ".buildkite/postsubmit-rules_nodejs-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "migration-tooling (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-migration-tooling-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "migration-tooling (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-migration-tooling-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "migration-tooling (macOS)"
+   command: ".buildkite/postsubmit-migration-tooling-macos.sh"
    agents:
      - "os=macos"
 
@@ -312,5 +357,20 @@ steps:
 
  - label: "rules_groovy (macOS)"
    command: ".buildkite/postsubmit-rules_groovy-macos.sh"
+   agents:
+     - "os=macos"
+
+ - label: "examples (Ubuntu 14.04)"
+   command: ".buildkite/postsubmit-examples-ubuntu1404.sh"
+   agents:
+     - "os=ubuntu1404"
+
+ - label: "examples (Ubuntu 16.04)"
+   command: ".buildkite/postsubmit-examples-ubuntu1604.sh"
+   agents:
+     - "os=ubuntu1604"
+
+ - label: "examples (macOS)"
+   command: ".buildkite/postsubmit-examples-macos.sh"
    agents:
      - "os=macos"

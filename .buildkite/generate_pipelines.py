@@ -3,6 +3,9 @@ DOWNSTREAM_PROJECTS = {
   "bazel-watcher" : {},
   "BUILD_file_generator" : {},
   "buildtools" : {'build': '', 'test': '//:tests'},
+  "migration-tooling" : {},
+  "re2" : {'git_url': 'https://github.com/google/'},
+  "protobuf" : {'build': None, 'test': '//:all', 'git_url': 'https://github.com/google/'},
   "rules_appengine" : {},
   "rules_closure" : {},
   "rules_docker" : {},
@@ -18,8 +21,10 @@ DOWNSTREAM_PROJECTS = {
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
   "rules_typescript" : {'run': '@yarn//:yarn'},
   "skydoc" : {},
+  "subpar" : {'git_url': 'https://github.com/google/'},
   "examples" : {'build': '//:all', 'test': None}
 }
+DEFAULT_GIT_URL = "https://github.com/geheimspeicher/"
 
 def bazel_presubmit_pipeline(platforms):
   steps = []
@@ -80,11 +85,13 @@ set -xuo pipefail
 set -xuo pipefail
 """
       script = script + cleanup_commands(project_name)
-      script = script + download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name)
+      script = script + download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name, project.get("git_url", DEFAULT_GIT_URL))
       script = script + cleanup_commands()
       if "run" in project:
         script = script + downstream_bazel_run(project["run"])
-      script = script + downstream_bazel_build(project.get("build", "..."))
+      build_targets = project.get("build", "...")
+      if build_targets != None:
+        script = script + downstream_bazel_build(build_targets)
       test_targets = project.get("test", "...")
       if test_targets != None:
         script = script + downstream_bazel_test(project_name, test_targets)
@@ -156,7 +163,7 @@ echo '--- Uploading Failed Test Logs'
 python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
 """
 
-def download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name):
+def download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name, git_url):
   return """
 echo '--- Downloading Bazel Binary'
 mkdir .stashed-outputs
@@ -164,9 +171,9 @@ buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '
 chmod +x .stashed-outputs/bazel-bin/src/bazel
 
 echo '--- Cloning'
-git clone https://github.com/geheimspeicher/{0} || exit $?
+git clone {2}{0} || exit $?
 cd {0}
-""".format(project_name, bazel_build_step_name)
+""".format(project_name, bazel_build_step_name, git_url)
 
 def downstream_bazel_run(run_target):
   return """
