@@ -8,7 +8,7 @@ DOWNSTREAM_PROJECTS = {
   "protobuf" : {'build': None, 'test': '//:all', 'git_url': 'https://github.com/google/'},
   "rules_appengine" : {},
   "rules_closure" : {},
-  "rules_docker" : {},
+  "rules_docker" : {'macos': {'test': '-- //... -//tests/docker/...'}},
   "rules_go" : {},
   "rules_groovy" : {'test': None},
   "rules_gwt" : {'test': None},
@@ -89,11 +89,11 @@ set -xuo pipefail
       script = script + download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name, project.get("git_url", DEFAULT_GIT_URL))
       script = script + cleanup_commands()
       if "run" in project:
-        script = script + downstream_bazel_run(project["run"])
-      build_targets = project.get("build", "...")
+        script = script + downstream_bazel_run(get_target("run", project, platform[1]))
+      build_targets = get_target("build", project, platform[1])
       if build_targets != None:
         script = script + downstream_bazel_build(build_targets)
-      test_targets = project.get("test", "...")
+      test_targets = get_target("test", project, platform[1])
       if test_targets != None:
         script = script + downstream_bazel_test(project_name, test_targets)
       script = script + cleanup_commands()
@@ -101,6 +101,11 @@ set -xuo pipefail
         script = script + exit_test_status()
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
     write_pipeline("postsubmit.yml", steps)
+
+def get_target(command, project, platform):
+  if platform in project and command in project[platform]:
+    return project[platform][command]
+  return project.get(command, '...')
 
 def wait_step():
   return " - wait"

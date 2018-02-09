@@ -22,7 +22,7 @@ echo '+++ Building'
 ../../.stashed-outputs/bazel-bin/src/bazel build --color=yes ... || exit $?
 
 echo '+++ Testing'
-../../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json ...
+../../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json -- //... -//tests/docker/...
 
 TESTS_EXIT_STATUS=$?
 
