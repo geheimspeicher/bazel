@@ -1,20 +1,18 @@
 PLATFORMS = [("Ubuntu 14.04", "ubuntu1404"), ("Ubuntu 16.04", "ubuntu1604"), ("macOS", "macos")]
 DOWNSTREAM_PROJECTS = {
-  "bazel-watcher" : {'build': '...', 'test': '...'},
-  "BUILD_file_generator" : {'build': '...', 'test': '...'},
+  "bazel-watcher" : {},
+  "BUILD_file_generator" : {},
   "buildtools" : {'build': '', 'test': '//:tests'},
-  "rules_docker" : {'build': '...', 'test': '...'},
-  "rules_go" : {'build': '...', 'test': '...'},
-  "rules_groovy" : {'build': '...', 'test': '...'},
+  "rules_docker" : {},
+  "rules_go" : {},
+  "rules_groovy" : {},
   "rules_k8s" : {'build': '//test/...', 'test': '//test/...'},
-  "rules_nodejs" : {'build': '...', 'test': '...'},
-  "rules_python" : {'build': '...', 'test': '...'},
+  "rules_nodejs" : {'run': '@yarn//:yarn'},
+  "rules_python" : {},
   "rules_rust" : {'build': '//... @examples//...', 'test': '//... @examples//...'},
   "rules_scala" : {'build': '//test/...', 'test': '//test/...'},
-  "rules_typescript" : {'build': '...', 'test': '...'}
+  "rules_typescript" : {}
 }
-
-
 
 def bazel_presubmit_pipeline(platforms):
   steps = []
@@ -94,15 +92,15 @@ exit $TESTS_EXIT_STATUS
 
   # Downstream Build and Test
 
-  for project in DOWNSTREAM_PROJECTS.keys():
+  for project_name, project in DOWNSTREAM_PROJECTS.items():
     for platform in platforms:
       bazel_build_step_name = label("Build Bazel", platform[0])
-      build_step_name = label(project, platform[0])
-      script_name = "postsubmit-" + project + "-" + platform[1] + ".sh"
+      build_step_name = label(project_name, platform[0])
+      script_name = "postsubmit-" + project_name + "-" + platform[1] + ".sh"
       script = """#!/bin/bash
 set -xuo pipefail
 """
-      script = script + cleanup_commands(project)
+      script = script + cleanup_commands(project_name)
       script = script + """
 echo '--- Downloading Bazel Binary'
 mkdir .stashed-outputs
@@ -112,8 +110,12 @@ chmod +x .stashed-outputs/bazel-bin/src/bazel
 echo '--- Cloning'
 git clone https://github.com/geheimspeicher/{0} || exit $?
 cd {0}
-""".format(project, bazel_build_step_name)
+""".format(project_name, bazel_build_step_name)
       script = script + cleanup_commands()
+      if "run" in project:
+        script = script + """
+../.stashed-outputs/bazel-bin/src/bazel run --color=yes {0} || exit $?
+""".format(project["run"])
       script = script + """
 echo '+++ Building'
 ../.stashed-outputs/bazel-bin/src/bazel build --color=yes {1} || exit $?
@@ -126,8 +128,8 @@ TESTS_EXIT_STATUS=$?
 echo '--- Uploading Failed Test Logs'
 cd ..
 python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-""".format(project, DOWNSTREAM_PROJECTS[project]["build"], DOWNSTREAM_PROJECTS[project]["test"])
-      script = script + cleanup_commands(project)
+""".format(project_name, project.get("build", "..."), project.get("test", "..."))
+      script = script + cleanup_commands(project_name)
       script = script + """
 exit $TESTS_EXIT_STATUS
 """
