@@ -14,46 +14,6 @@ DOWNSTREAM_PROJECTS = {
   "rules_typescript" : {'run': '@yarn//:yarn'}
 }
 
-def build_test_bazel_presubmit():
-  return """
-echo '+++ Building'
-bazel build --color=yes //src:bazel || exit $?
-
-echo '+++ Testing'
-bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
-
-TESTS_EXIT_STATUS=$?
-
-echo '--- Uploading Failed Test Logs'
-
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-"""
-
-def exit_test_status():
-  return """
-exit $TESTS_EXIT_STATUS
-"""
-
-def build_upload_bazel_postsubmit():
-  return """
-echo '+++ Building'
-bazel build --color=yes //src:bazel
-
-echo '--- Uploading Bazel Binary'
-buildkite-agent artifact upload bazel-bin/src/bazel
-"""
-
-def test_bazel_postsubmit():
-  return """
-echo '+++ Testing'
-bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
-
-TESTS_EXIT_STATUS=$?
-
-echo '--- Uploading Failed Test Logs'
-python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-"""
-
 def bazel_presubmit_pipeline(platforms):
   steps = []
   for platform in platforms:
@@ -113,42 +73,17 @@ set -xuo pipefail
 set -xuo pipefail
 """
       script = script + cleanup_commands(project_name)
-      script = script + """
-echo '--- Downloading Bazel Binary'
-mkdir .stashed-outputs
-buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '{1}'
-chmod +x .stashed-outputs/bazel-bin/src/bazel
-
-echo '--- Cloning'
-git clone https://github.com/geheimspeicher/{0} || exit $?
-cd {0}
-""".format(project_name, bazel_build_step_name)
+      script = script + download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name)
       script = script + cleanup_commands()
       if "run" in project:
-        script = script + """
-../.stashed-outputs/bazel-bin/src/bazel run --color=yes {0} || exit $?
-""".format(project["run"])
-      script = script + """
-echo '+++ Building'
-../.stashed-outputs/bazel-bin/src/bazel build --color=yes {0} || exit $?
-""".format(project.get("build", "..."))
+        script = script + downstream_bazel_run(project["run"])
+      script = script + downstream_bazel_build(project.get("build", "..."))
       test_targets = project.get("test", "...")
       if test_targets != None:
-        script = script + """
-echo '+++ Testing'
-../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {1}
-
-TESTS_EXIT_STATUS=$?
-
-echo '--- Uploading Failed Test Logs'
-cd ..
-python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
-""".format(project_name, test_targets)
+        script = script + downstream_bazel_test(project_name, test_targets)
       script = script + cleanup_commands(project_name)
       if test_targets != None:
-        script = script + """
-exit $TESTS_EXIT_STATUS
-"""
+        script = script + exit_test_status()
       steps.append(command_step(build_step_name, script, script_name, platform[1]))
     write_pipeline("postsubmit.yml", steps)
 
@@ -173,6 +108,81 @@ def write_pipeline(name, steps):
 
 def label(project, platform):
   return "{0} ({1})".format(project, platform)
+
+def build_test_bazel_presubmit():
+  return """
+echo '+++ Building'
+bazel build --color=yes //src:bazel || exit $?
+
+echo '+++ Testing'
+bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
+
+TESTS_EXIT_STATUS=$?
+
+echo '--- Uploading Failed Test Logs'
+
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+"""
+
+def exit_test_status():
+  return """
+exit $TESTS_EXIT_STATUS
+"""
+
+def build_upload_bazel_postsubmit():
+  return """
+echo '+++ Building'
+bazel build --color=yes //src:bazel
+
+echo '--- Uploading Bazel Binary'
+buildkite-agent artifact upload bazel-bin/src/bazel
+"""
+
+def test_bazel_postsubmit():
+  return """
+echo '+++ Testing'
+bazel test --color=yes --build_event_json_file=bep.json //scripts/... //src/test/... //third_party/ijar/... //tools/android/...
+
+TESTS_EXIT_STATUS=$?
+
+echo '--- Uploading Failed Test Logs'
+python3 .buildkite/failed_testlogs.py bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+"""
+
+def download_stashed_bazel_and_clone_downstream(project_name, bazel_build_step_name):
+  return """
+echo '--- Downloading Bazel Binary'
+mkdir .stashed-outputs
+buildkite-agent artifact download bazel-bin/src/bazel .stashed-outputs/ --step '{1}'
+chmod +x .stashed-outputs/bazel-bin/src/bazel
+
+echo '--- Cloning'
+git clone https://github.com/geheimspeicher/{0} || exit $?
+cd {0}
+""".format(project_name, bazel_build_step_name)
+
+def downstream_bazel_run(run_target):
+  return """
+../.stashed-outputs/bazel-bin/src/bazel run --color=yes {0} || exit $?
+""".format(run_target)
+
+def downstream_bazel_build(build_target):
+  return """
+echo '+++ Building'
+../.stashed-outputs/bazel-bin/src/bazel build --color=yes {0} || exit $?
+""".format(build_target)
+
+def downstream_bazel_test(project_name, test_target):
+  return """
+echo '+++ Testing'
+../.stashed-outputs/bazel-bin/src/bazel test --color=yes --build_event_json_file=bep.json {1}
+
+TESTS_EXIT_STATUS=$?
+
+echo '--- Uploading Failed Test Logs'
+cd ..
+python3 .buildkite/failed_testlogs.py {0}/bep.json | while read logfile; do buildkite-agent artifact upload $logfile; done
+""".format(project_name, test_target)
 
 def cleanup_commands(folder = ""):
   return """
