@@ -2,7 +2,7 @@
 
 *{Fast, Correct} - Choose two*
 
-Build and test software of any size, quickly and reliably.
+Build and test software of any size, quickly and reliably. test
 
 * **Speed up your builds and tests**:
   Bazel only rebuilds what is necessary.
