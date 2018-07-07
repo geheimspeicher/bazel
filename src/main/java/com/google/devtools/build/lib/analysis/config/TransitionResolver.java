@@ -14,10 +14,9 @@
 
 package com.google.devtools.build.lib.analysis.config;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
-import com.google.devtools.build.lib.analysis.config.transitions.ComposingSplitTransition;
+import com.google.devtools.build.lib.analysis.config.transitions.ComposingTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NullTransition;
@@ -30,6 +29,7 @@ import com.google.devtools.build.lib.packages.PackageGroup;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.Target;
+import javax.annotation.Nullable;
 
 /**
  * Tool for evaluating which {@link ConfigurationTransition}(s) should be applied to given targets.
@@ -51,6 +51,9 @@ public final class TransitionResolver {
    * @param fromRule the parent rule
    * @param attribute the attribute creating the dependency (e.g. "srcs")
    * @param toTarget the child target (which may or may not be a rule)
+   * @param attributeMap the attributes of the rule
+   * @param trimmingTransitionFactory the transition factory used to trim rules (note: this is a
+   *     temporary feature; see the corresponding methods in ConfiguredRuleClassProvider)
    *
    * @return the child's configuration, expressed as a diff from the parent's configuration. This
    *     is either a {@link PatchTransition} or {@link SplitTransition}.
@@ -60,7 +63,8 @@ public final class TransitionResolver {
       final Rule fromRule,
       final Attribute attribute,
       final Target toTarget,
-      ConfiguredAttributeMapper attributeMap) {
+      ConfiguredAttributeMapper attributeMap,
+      @Nullable RuleTransitionFactory trimmingTransitionFactory) {
 
     // I. Input files and package groups have no configurations. We don't want to duplicate them.
     if (usesNullConfiguration(toTarget)) {
@@ -91,20 +95,9 @@ public final class TransitionResolver {
     }
 
     // The current transition to apply. When multiple transitions are requested, this is a
-    // ComposingSplitTransition, which encapsulates them into a single object so calling code
+    // ComposingTransition, which encapsulates them into a single object so calling code
     // doesn't need special logic for combinations.
     ConfigurationTransition currentTransition = NoTransition.INSTANCE;
-
-    // Apply the parent rule's outgoing transition if it has one.
-    RuleTransitionFactory transitionFactory =
-        fromRule.getRuleClassObject().getOutgoingTransitionFactory();
-    if (transitionFactory != null) {
-      ConfigurationTransition transition =
-          transitionFactory.buildTransitionFor(toTarget.getAssociatedRule());
-      if (transition != null) {
-        currentTransition = composeTransitions(currentTransition, transition);
-      }
-    }
 
     // TODO(gregce): make the below transitions composable (i.e. take away the "else" clauses).
     // The "else" is a legacy restriction from static configurations.
@@ -117,9 +110,13 @@ public final class TransitionResolver {
           attribute.getConfigurationTransition());
     }
 
-    // IV. Applies any rule transitions associated with the dep target, composes their transitions
-    // with a passed-in existing transition, and returns the composed result.
-    return applyRuleTransition(currentTransition, toTarget);
+    // IV. Applies any rule transitions associated with the dep target and composes their
+    // transitions with a passed-in existing transition.
+    currentTransition = applyRuleTransition(currentTransition, toTarget);
+
+    // V. Applies a transition to trim the result and returns it. (note: this is a temporary
+    // feature; see the corresponding methods in ConfiguredRuleClassProvider)
+    return applyTransitionFromFactory(currentTransition, toTarget, trimmingTransitionFactory);
   }
 
   /**
@@ -127,21 +124,19 @@ public final class TransitionResolver {
    * enables support for rule-triggered top-level configuration hooks.
    */
   public static ConfigurationTransition evaluateTopLevelTransition(
-      TargetAndConfiguration targetAndConfig) {
+      TargetAndConfiguration targetAndConfig,
+      @Nullable RuleTransitionFactory trimmingTransitionFactory) {
     Target target = targetAndConfig.getTarget();
     BuildConfiguration fromConfig = targetAndConfig.getConfiguration();
 
-    // Top-level transitions (chosen by configuration fragments):
-    ConfigurationTransition topLevelTransition = fromConfig.topLevelConfigurationHook(target);
-    if (topLevelTransition == null) {
-      topLevelTransition = NoTransition.INSTANCE;
-    }
-
     // Rule class transitions (chosen by rule class definitions):
     if (target.getAssociatedRule() == null) {
-      return topLevelTransition;
+      return NoTransition.INSTANCE;
     }
-    return applyRuleTransition(topLevelTransition, target);
+    ConfigurationTransition ruleTransition = applyRuleTransition(NoTransition.INSTANCE, target);
+    ConfigurationTransition trimmingTransition =
+        applyTransitionFromFactory(ruleTransition, target, trimmingTransitionFactory);
+    return trimmingTransition;
   }
 
   /**
@@ -155,19 +150,20 @@ public final class TransitionResolver {
   /**
    * Composes two transitions together efficiently.
    */
-  @VisibleForTesting
   public static ConfigurationTransition composeTransitions(ConfigurationTransition transition1,
       ConfigurationTransition transition2) {
+    Preconditions.checkNotNull(transition1);
+    Preconditions.checkNotNull(transition2);
     if (isFinal(transition1) || transition2 == NoTransition.INSTANCE) {
       return transition1;
     } else if (isFinal(transition2) || transition1 == NoTransition.INSTANCE) {
       // When the second transition is a HOST transition, there's no need to compose. But this also
       // improves performance: host transitions are common, and ConfiguredTargetFunction has special
       // optimized logic to handle them. If they were buried in the last segment of a
-      // ComposingSplitTransition, those optimizations wouldn't trigger.
+      // ComposingTransition, those optimizations wouldn't trigger.
       return transition2;
     } else {
-      return new ComposingSplitTransition(transition1, transition2);
+      return new ComposingTransition(transition1, transition2);
     }
   }
 
@@ -189,33 +185,36 @@ public final class TransitionResolver {
         "cannot apply splits after null transitions (null transitions are expected to be final)");
     Preconditions.checkState(currentTransition != HostTransition.INSTANCE,
         "cannot apply splits after host transitions (host transitions are expected to be final)");
-    return currentTransition == NoTransition.INSTANCE
-        ? split
-        : new ComposingSplitTransition(currentTransition, split);
+    return composeTransitions(currentTransition, split);
   }
 
   /**
    * @param currentTransition a pre-existing transition to be composed with
-   * @param toTarget rule to examine for transitions
+   * @param toTarget target whose associated rule's incoming transition should be applied
    */
   private static ConfigurationTransition applyRuleTransition(
       ConfigurationTransition currentTransition, Target toTarget) {
-    if (isFinal(currentTransition)) {
-      return currentTransition;
-    }
     Rule associatedRule = toTarget.getAssociatedRule();
     RuleTransitionFactory transitionFactory =
         associatedRule.getRuleClassObject().getTransitionFactory();
+    return applyTransitionFromFactory(currentTransition, toTarget, transitionFactory);
+  }
+
+  /**
+   * @param currentTransition a pre-existing transition to be composed with
+   * @param toTarget target whose associated rule's incoming transition should be applied
+   * @param transitionFactory a rule transition factory to apply, or null to do nothing
+   */
+  private static ConfigurationTransition applyTransitionFromFactory(
+      ConfigurationTransition currentTransition,
+      Target toTarget,
+      @Nullable RuleTransitionFactory transitionFactory) {
+    if (isFinal(currentTransition)) {
+      return currentTransition;
+    }
     if (transitionFactory != null) {
-      PatchTransition ruleClassTransition =
-          (PatchTransition) transitionFactory.buildTransitionFor(associatedRule);
-      if (ruleClassTransition != null) {
-        if (currentTransition == NoTransition.INSTANCE) {
-          return ruleClassTransition;
-        } else {
-          return new ComposingSplitTransition(currentTransition, ruleClassTransition);
-        }
-      }
+      return composeTransitions(
+          currentTransition, transitionFactory.buildTransitionFor(toTarget.getAssociatedRule()));
     }
     return currentTransition;
   }

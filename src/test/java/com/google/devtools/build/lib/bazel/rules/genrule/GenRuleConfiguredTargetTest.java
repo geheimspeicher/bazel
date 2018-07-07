@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.ShellConfiguration;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.FileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
@@ -188,8 +189,8 @@ public class GenRuleConfiguredTargetTest extends BuildViewTestCase {
     assertThat(shellAction.getOutputs()).containsExactly(messageArtifact);
 
     String expected = "echo \"Hello, world.\" >" + messageArtifact.getExecPathString();
-    assertThat(shellAction.getArguments().get(0))
-        .isEqualTo(targetConfig.getShellExecutable().getPathString());
+    assertThat(shellAction.getArguments().get(0)).isEqualTo(
+        targetConfig.getFragment(ShellConfiguration.class).getShellExecutable().getPathString());
     assertThat(shellAction.getArguments().get(1)).isEqualTo("-c");
     assertCommandEquals(expected, shellAction.getArguments().get(2));
   }
@@ -410,7 +411,7 @@ public class GenRuleConfiguredTargetTest extends BuildViewTestCase {
         "        output_to_bindir=0)");
 
     assertThat(getFileConfiguredTarget("//x:bin.out").getArtifact())
-        .isEqualTo(getBinArtifact("bin.out", "//x:bin"));
+        .isEqualTo(getBinArtifact("bin.out", getConfiguredTarget("//x:bin")));
     assertThat(getFileConfiguredTarget("//x:genfiles.out").getArtifact())
         .isEqualTo(getGenfilesArtifact("genfiles.out", "//x:genfiles"));
   }
@@ -428,14 +429,16 @@ public class GenRuleConfiguredTargetTest extends BuildViewTestCase {
         "        cmd=':',",
         "        output_to_bindir=0)");
 
+    ConfiguredTarget binCt = getConfiguredTarget("//x:bin");
+    ConfiguredTarget genCt = getConfiguredTarget("//x:genfiles");
     assertThat(getFileConfiguredTarget("//x:bin_a.out").getArtifact())
-        .isEqualTo(getBinArtifact("bin_a.out", "//x:bin"));
+        .isEqualTo(getBinArtifact("bin_a.out", binCt));
     assertThat(getFileConfiguredTarget("//x:bin_b.out").getArtifact())
-        .isEqualTo(getBinArtifact("bin_b.out", "//x:bin"));
+        .isEqualTo(getBinArtifact("bin_b.out", binCt));
     assertThat(getFileConfiguredTarget("//x:genfiles_a.out").getArtifact())
-        .isEqualTo(getGenfilesArtifact("genfiles_a.out", "//x:genfiles"));
+        .isEqualTo(getGenfilesArtifact("genfiles_a.out", genCt));
     assertThat(getFileConfiguredTarget("//x:genfiles_b.out").getArtifact())
-        .isEqualTo(getGenfilesArtifact("genfiles_b.out", "//x:genfiles"));
+        .isEqualTo(getGenfilesArtifact("genfiles_b.out", genCt));
   }
 
   @Test
@@ -461,10 +464,12 @@ public class GenRuleConfiguredTargetTest extends BuildViewTestCase {
         "        srcs=[':src'], tools=[':tool'], outs=['out'],",
         "        cmd='$(location :tool)')");
 
+    ConfiguredTarget parentTarget = getConfiguredTarget("//config");
+
     Iterable<ConfiguredTarget> prereqs =
         Iterables.filter(
             Iterables.filter(
-                getDirectPrerequisites(getConfiguredTarget("//config")),
+                getDirectPrerequisites(parentTarget),
                 CC_CONFIGURED_TARGET_FILTER),
             JAVA_CONFIGURED_TARGET_FILTER);
 
@@ -480,16 +485,16 @@ public class GenRuleConfiguredTargetTest extends BuildViewTestCase {
       }
       switch (name) {
         case "src":
-          assertConfigurationsEqual(getTargetConfiguration(), prereq.getConfiguration());
+          assertConfigurationsEqual(getConfiguration(parentTarget), getConfiguration(prereq));
           foundSrc = true;
           break;
         case "tool":
-          assertThat(getHostConfiguration().equalsOrIsSupersetOf(prereq.getConfiguration()))
+          assertThat(getHostConfiguration().equalsOrIsSupersetOf(getConfiguration(prereq)))
               .isTrue();
           foundTool = true;
           break;
         case GENRULE_SETUP_PATH:
-          assertThat(prereq.getConfiguration()).isNull();
+          assertThat(getConfiguration(prereq)).isNull();
           foundSetup = true;
           break;
         default:

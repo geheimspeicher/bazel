@@ -14,14 +14,11 @@
 
 package com.google.devtools.build.lib.rules.objc;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleDylibBinaryApi;
 
 /**
  * Provider containing the executable binary output that was built using an apple_binary target with
@@ -35,13 +32,7 @@ import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
  * </ul>
  */
 @Immutable
-@SkylarkModule(
-    name = "AppleDylibBinary",
-    category = SkylarkModuleCategory.PROVIDER,
-    doc = "A provider containing the executable binary output that was built using an apple_binary "
-        + "target with the 'dylib' type."
-)
-public final class AppleDylibBinaryInfo extends NativeInfo {
+public final class AppleDylibBinaryInfo extends NativeInfo implements AppleDylibBinaryApi {
 
   /** Skylark name for the AppleDylibBinaryInfo. */
   public static final String SKYLARK_NAME = "AppleDylibBinary";
@@ -55,7 +46,7 @@ public final class AppleDylibBinaryInfo extends NativeInfo {
 
   public AppleDylibBinaryInfo(Artifact dylibBinary,
       ObjcProvider depsObjcProvider) {
-    super(SKYLARK_CONSTRUCTOR, ImmutableMap.<String, Object>of());
+    super(SKYLARK_CONSTRUCTOR);
     this.dylibBinary = dylibBinary;
     this.depsObjcProvider = depsObjcProvider;
   }
@@ -63,10 +54,7 @@ public final class AppleDylibBinaryInfo extends NativeInfo {
   /**
    * Returns the multi-architecture dylib binary that apple_binary created.
    */
-  @SkylarkCallable(name = "binary",
-      structField = true,
-      doc = "The dylib file output by apple_binary."
-  )
+  @Override
   public Artifact getAppleDylibBinary() {
     return dylibBinary;
   }
@@ -75,12 +63,7 @@ public final class AppleDylibBinaryInfo extends NativeInfo {
    * Returns the {@link ObjcProvider} which contains information about the transitive dependencies
    * linked into the dylib.
    */
-  @SkylarkCallable(name = "objc",
-      structField = true,
-      doc = "A provider which contains information about the transitive dependencies linked into "
-          + "the dylib, (intended so that binaries depending on this dylib may avoid relinking "
-          + "symbols included in the dylib."
-  )
+  @Override
   public ObjcProvider getDepsObjcProvider() {
     return depsObjcProvider;
   }

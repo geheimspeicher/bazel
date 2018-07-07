@@ -16,11 +16,13 @@ package com.google.devtools.build.lib.rules.python;
 
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 
 /**
- * A configuration transition that sets the Python version by setting
- * {@link PythonOptions#forcePython}.
+ * A configuration transition that sets the Python version by setting {@link
+ * PythonOptions#forcePython}.
  */
+@AutoCodec
 public class PythonVersionTransition implements PatchTransition {
   private final PythonVersion defaultVersion;
 
@@ -33,7 +35,7 @@ public class PythonVersionTransition implements PatchTransition {
   }
 
   @Override
-   public BuildOptions apply(BuildOptions options) {
+   public BuildOptions patch(BuildOptions options) {
     PythonOptions pyOptions = options.get(PythonOptions.class);
     // The current Python version is either explicitly set by --force_python or a
     // build-wide default.

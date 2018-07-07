@@ -18,6 +18,8 @@ import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -75,7 +77,11 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
   public void setupDelegator() throws Exception {
     Path root = scratch.dir("/outputbase");
     BlazeDirectories directories =
-        new BlazeDirectories(new ServerDirectories(root, root), root, TestConstants.PRODUCT_NAME);
+        new BlazeDirectories(
+            new ServerDirectories(root, root, root),
+            root,
+            /* defaultSystemJavabase= */ null,
+            TestConstants.PRODUCT_NAME);
     delegatorFunction =
         new RepositoryDelegatorFunction(
             ImmutableMap.of(), null, new AtomicBoolean(true), ImmutableMap::of, directories);
@@ -85,7 +91,7 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                 root,
                 ImmutableList.of(Root.fromPath(root)),
                 BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY));
-    ExternalFilesHelper externalFilesHelper = new ExternalFilesHelper(
+    ExternalFilesHelper externalFilesHelper = ExternalFilesHelper.createForTesting(
         pkgLocator,
         ExternalFileAction.DEPEND_ON_EXTERNAL_PKG_FOR_EXTERNAL_REPO_PATHS,
         directories);
@@ -94,10 +100,10 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         new InMemoryMemoizingEvaluator(
             ImmutableMap.<SkyFunctionName, SkyFunction>builder()
                 .put(
-                    SkyFunctions.FILE_STATE,
+                    FileStateValue.FILE_STATE,
                     new FileStateFunction(
                         new AtomicReference<TimestampGranularityMonitor>(), externalFilesHelper))
-                .put(SkyFunctions.FILE, new FileFunction(pkgLocator))
+                .put(FileValue.FILE, new FileFunction(pkgLocator))
                 .put(SkyFunctions.REPOSITORY_DIRECTORY, delegatorFunction)
                 .put(
                     SkyFunctions.PACKAGE,
@@ -116,9 +122,8 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
                     new WorkspaceFileFunction(
                         TestRuleClassProvider.getRuleClassProvider(),
                         TestConstants.PACKAGE_FACTORY_BUILDER_FACTORY_FOR_TESTING
-                            .builder()
-                            .build(
-                                TestRuleClassProvider.getRuleClassProvider(), root.getFileSystem()),
+                            .builder(directories)
+                            .build(TestRuleClassProvider.getRuleClassProvider()),
                         directories))
                 .put(SkyFunctions.LOCAL_REPOSITORY_LOOKUP, new LocalRepositoryLookupFunction())
                 .put(SkyFunctions.EXTERNAL_PACKAGE, new ExternalPackageFunction())
@@ -132,6 +137,8 @@ public class RepositoryDelegatorTest extends FoundationTestCase {
         ImmutableMap.<RepositoryName, PathFragment>builder()
             .put(RepositoryName.createFromValidStrippedName("foo"), overrideDirectory.asFragment())
             .build());
+    RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_FETCHING.set(
+        differencer, RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY);
     PrecomputedValue.PATH_PACKAGE_LOCATOR.set(differencer, pkgLocator.get());
     PrecomputedValue.SKYLARK_SEMANTICS.set(differencer, SkylarkSemantics.DEFAULT_SEMANTICS);
   }

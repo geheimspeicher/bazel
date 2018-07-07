@@ -19,12 +19,13 @@ import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.LocationExpander.LocationFunction;
 import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
 import com.google.devtools.build.lib.analysis.stringtemplate.TemplateContext;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import java.util.Collection;
 import java.util.Map;
-import java.util.function.Function;
 import javax.annotation.Nullable;
 
 /**
@@ -46,15 +47,18 @@ import javax.annotation.Nullable;
  */
 final class LocationTemplateContext implements TemplateContext {
   private final TemplateContext delegate;
-  private final ImmutableMap<String, Function<String, String>> functions;
+  private final ImmutableMap<String, LocationFunction> functions;
+  private final ImmutableMap<RepositoryName, RepositoryName> repositoryMapping;
 
   private LocationTemplateContext(
       TemplateContext delegate,
       Label root,
       Supplier<Map<Label, Collection<Artifact>>> locationMap,
-      boolean execPaths) {
+      boolean execPaths,
+      ImmutableMap<RepositoryName, RepositoryName> repositoryMapping) {
     this.delegate = delegate;
     this.functions = LocationExpander.allLocationFunctions(root, locationMap, execPaths);
+    this.repositoryMapping = repositoryMapping;
   }
 
   public LocationTemplateContext(
@@ -69,7 +73,8 @@ final class LocationTemplateContext implements TemplateContext {
         // Use a memoizing supplier to avoid eagerly building the location map.
         Suppliers.memoize(
             () -> LocationExpander.buildLocationMap(ruleContext, labelMap, allowData)),
-        execPaths);
+        execPaths,
+        ruleContext.getRule().getPackage().getRepositoryMapping());
   }
 
   @Override
@@ -80,9 +85,9 @@ final class LocationTemplateContext implements TemplateContext {
   @Override
   public String lookupFunction(String name, String param) throws ExpansionException {
     try {
-      Function<String, String> f = functions.get(name);
+      LocationFunction f = functions.get(name);
       if (f != null) {
-        return f.apply(param);
+        return f.apply(param, repositoryMapping);
       }
     } catch (IllegalStateException e) {
       throw new ExpansionException(e.getMessage(), e);

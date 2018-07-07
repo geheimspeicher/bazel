@@ -26,6 +26,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
+import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams;
 import com.google.devtools.build.lib.actions.FilesetTraversalParams.PackageBoundaryMode;
@@ -90,19 +92,22 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
     AtomicReference<ImmutableSet<PackageIdentifier>> deletedPackages =
         new AtomicReference<>(ImmutableSet.<PackageIdentifier>of());
     ExternalFilesHelper externalFilesHelper =
-        new ExternalFilesHelper(
+        ExternalFilesHelper.createForTesting(
             pkgLocator,
             ExternalFileAction.DEPEND_ON_EXTERNAL_PKG_FOR_EXTERNAL_REPO_PATHS,
             new BlazeDirectories(
-                new ServerDirectories(outputBase, outputBase),
+                new ServerDirectories(outputBase, outputBase, outputBase),
                 rootDirectory,
+                /* defaultSystemJavabase= */ null,
                 TestConstants.PRODUCT_NAME));
 
     Map<SkyFunctionName, SkyFunction> skyFunctions = new HashMap<>();
 
-    skyFunctions.put(SkyFunctions.FILE_STATE, new FileStateFunction(
-        new AtomicReference<TimestampGranularityMonitor>(), externalFilesHelper));
-    skyFunctions.put(SkyFunctions.FILE, new FileFunction(pkgLocator));
+    skyFunctions.put(
+        FileStateValue.FILE_STATE,
+        new FileStateFunction(
+            new AtomicReference<TimestampGranularityMonitor>(), externalFilesHelper));
+    skyFunctions.put(FileValue.FILE, new FileFunction(pkgLocator));
     skyFunctions.put(SkyFunctions.DIRECTORY_LISTING, new DirectoryListingFunction());
     skyFunctions.put(
         SkyFunctions.DIRECTORY_LISTING_STATE,
@@ -210,7 +215,7 @@ public final class FilesetEntryFunctionTest extends FoundationTestCase {
   }
 
   private static Label label(String label) throws Exception {
-    return Label.parseAbsolute(label);
+    return Label.parseAbsolute(label, ImmutableMap.of());
   }
 
   @Test

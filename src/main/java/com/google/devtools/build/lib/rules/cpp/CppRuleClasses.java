@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
+import static com.google.devtools.build.lib.packages.Attribute.attr;
+import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
 import static com.google.devtools.build.lib.rules.cpp.CppFileTypes.ALWAYS_LINK_LIBRARY;
 import static com.google.devtools.build.lib.rules.cpp.CppFileTypes.ALWAYS_LINK_PIC_LIBRARY;
@@ -31,13 +33,17 @@ import static com.google.devtools.build.lib.rules.cpp.CppFileTypes.SHARED_LIBRAR
 import static com.google.devtools.build.lib.rules.cpp.CppFileTypes.VERSIONED_SHARED_LIBRARY;
 
 import com.google.devtools.build.lib.analysis.LanguageDependentFragment.LibraryLanguage;
+import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
+import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
+import com.google.devtools.build.lib.packages.Attribute.LateBoundDefault.Resolver;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
-import com.google.devtools.build.lib.packages.RuleTransitionFactory;
-import com.google.devtools.build.lib.rules.cpp.transitions.EnableLipoTransition;
+import com.google.devtools.build.lib.packages.RuleClass;
+import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.OsUtils;
 
@@ -45,26 +51,6 @@ import com.google.devtools.build.lib.util.OsUtils;
  * Rule class definitions for C++ rules.
  */
 public class CppRuleClasses {
-  /**
-   * Implementation for the :lipo_context_collector attribute.
-   *
-   * <p>This attribute connects a target to the LIPO context target configured with the lipo input
-   * collector configuration.
-   */
-  public static final LabelLateBoundDefault<?> LIPO_CONTEXT_COLLECTOR =
-      LabelLateBoundDefault.fromTargetConfiguration(
-          CppConfiguration.class,
-          null,
-          // TODO(b/69548520): Remove call to isLipoOptimization
-          (rule, attributes, cppConfig) ->
-              cppConfig.isLipoOptimization() ? cppConfig.getLipoContextLabel() : null);
-
-  /**
-   * Rule transition factory that enables LIPO on the LIPO context binary (i.e. applies a DATA ->
-   * TARGET transition).
-   */
-  public static final RuleTransitionFactory LIPO_ON_DEMAND =
-      (rule) -> new EnableLipoTransition(rule.getLabel());
 
   /**
    * Label of a pseudo-filegroup that contains all crosstool and libcfiles for all configurations,
@@ -79,6 +65,18 @@ public class CppRuleClasses {
   public static LabelLateBoundDefault<CppConfiguration> ccToolchainAttribute(
       RuleDefinitionEnvironment env) {
     return LabelLateBoundDefault.fromTargetConfiguration(
+        CppConfiguration.class,
+        env.getToolsLabel(CROSSTOOL_LABEL),
+        CC_TOOLCHAIN_CONFIGURATION_RESOLVER);
+  }
+
+  @AutoCodec
+  static final Resolver<CppConfiguration, Label> CC_TOOLCHAIN_CONFIGURATION_RESOLVER =
+      (rule, attributes, configuration) -> configuration.getCcToolchainRuleLabel();
+
+  public static LabelLateBoundDefault<CppConfiguration> ccHostToolchainAttribute(
+      RuleDefinitionEnvironment env) {
+    return LabelLateBoundDefault.fromHostConfiguration(
         CppConfiguration.class,
         env.getToolsLabel(CROSSTOOL_LABEL),
         (rules, attributes, cppConfig) -> cppConfig.getCcToolchainRuleLabel());
@@ -130,11 +128,6 @@ public class CppRuleClasses {
   public static final String PARSE_HEADERS = "parse_headers";
 
   /**
-   * A string constant for the preprocess_headers feature.
-   */
-  public static final String PREPROCESS_HEADERS = "preprocess_headers";
-
-  /**
    * A string constant for the module_maps feature; this is a precondition to the layering_check and
    * header_modules features.
    */
@@ -145,13 +138,6 @@ public class CppRuleClasses {
    * randomization of symbol names that are in the anonymous namespace but have external linkage.
    */
   public static final String RANDOM_SEED = "random_seed";
-
-  /**
-   * A string constant for the compile_action_flags_in_flag_set feature. This feature is just a
-   * transitional feature which helps telling whether -c and -o options are already in flag_set of
-   * action_config in CROSSTOOL file. Once the transition is done, it should be removed.
-   */
-  public static final String COMPILE_ACTION_FLAGS_IN_FLAG_SET = "compile_action_flags_in_flag_set";
 
   /**
    * A string constant for the dependency_file feature. This feature generates the .d file.
@@ -185,7 +171,7 @@ public class CppRuleClasses {
 
   /** A string constant for the header_modules_compile feature. */
   public static final String HEADER_MODULE_COMPILE = "header_module_compile";
-  
+
   /** A string constant for the header_module_codegen feature. */
   public static final String HEADER_MODULE_CODEGEN = "header_module_codegen";
 
@@ -266,6 +252,12 @@ public class CppRuleClasses {
    */
   public static final String INCLUDE_PATHS = "include_paths";
 
+  /** A string constant for the feature signalling static linking mode. */
+  public static final String STATIC_LINKING_MODE = "static_linking_mode";
+
+  /** A string constant for the feature signalling dynamic linking mode. */
+  public static final String DYNAMIC_LINKING_MODE = "dynamic_linking_mode";
+
   /**
    * A string constant for the ThinLTO feature.
    */
@@ -274,12 +266,17 @@ public class CppRuleClasses {
   /*
    * A string constant for allowing implicit ThinLTO enablement for AFDO.
    */
-  public static final java.lang.String AUTOFDO_IMPLICIT_THINLTO = "autofdo_implicit_thinlto";
+  public static final String AUTOFDO_IMPLICIT_THINLTO = "autofdo_implicit_thinlto";
 
   /*
    * A string constant for enabling ThinLTO for AFDO implicitly.
    */
-  public static final java.lang.String ENABLE_AFDO_THINLTO = "enable_afdo_thinlto";
+  public static final String ENABLE_AFDO_THINLTO = "enable_afdo_thinlto";
+
+  /*
+   * A string constant for enabling ThinLTO for FDO implicitly.
+   */
+  public static final String ENABLE_FDO_THINLTO = "enable_fdo_thinlto";
 
   /**
    * A string constant for allowing use of shared LTO backend actions for linkstatic tests building
@@ -287,6 +284,13 @@ public class CppRuleClasses {
    */
   public static final String THIN_LTO_LINKSTATIC_TESTS_USE_SHARED_NONLTO_BACKENDS =
       "thin_lto_linkstatic_tests_use_shared_nonlto_backends";
+
+  /**
+   * A string constant for allowing use of shared LTO backend actions for all linkstatic links
+   * building with ThinLTO.
+   */
+  public static final String THIN_LTO_ALL_LINKSTATIC_USE_SHARED_NONLTO_BACKENDS =
+      "thin_lto_all_linkstatic_use_shared_nonlto_backends";
 
   /**
    * A string constant for the PDB file generation feature, should only be used for toolchains
@@ -323,6 +327,9 @@ public class CppRuleClasses {
   /** A string constant for a feature to dynamically link MSVCRT with debug info on Windows. */
   public static final String DYNAMIC_LINK_MSVCRT_DEBUG = "dynamic_link_msvcrt_debug";
 
+  /** A string constant for a feature to statically link the C++ runtimes. */
+  public static final String STATIC_LINK_CPP_RUNTIMES = "static_link_cpp_runtimes";
+
   /**
    * A string constant for a feature that indicates we are using a toolchain building for Windows.
    */
@@ -349,14 +356,17 @@ public class CppRuleClasses {
   public static final String FDO_OPTIMIZE = "fdo_optimize";
 
   /**
+   * A string constant for the cache prefetch hints feature.
+   */
+  public static final String FDO_PREFETCH_HINTS = "fdo_prefetch_hints";
+
+  /**
    * A string constant for the autofdo feature.
    */
   public static final String AUTOFDO = "autofdo";
 
-  /**
-   * A string constant for the lipo feature.
-   */
-  public static final String LIPO = "lipo";
+  /** A string constant for the xbinaryfdo feature. */
+  public static final String XBINARYFDO = "xbinaryfdo";
 
   /**
    * A string constant for the coverage feature.
@@ -371,4 +381,25 @@ public class CppRuleClasses {
 
   /** A string constant for the match-clif action. */
   public static final String MATCH_CLIF = "match_clif";
+
+  /** Ancestor for all rules that do include scanning. */
+  public static final class CcIncludeScanningRule implements RuleDefinition {
+    @Override
+    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
+      return builder
+          .add(
+              attr("$grep_includes", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .value(env.getToolsLabel("//tools/cpp:grep-includes")))
+          .build();
+    }
+
+    @Override
+    public Metadata getMetadata() {
+      return RuleDefinition.Metadata.builder()
+          .name("$cc_include_scanning_rule")
+          .type(RuleClassType.ABSTRACT)
+          .build();
+    }
+  }
 }

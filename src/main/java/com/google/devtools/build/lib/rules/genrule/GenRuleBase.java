@@ -20,7 +20,9 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.CommandLines;
 import com.google.devtools.build.lib.actions.CompositeRunfilesSupplier;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.AliasProvider;
 import com.google.devtools.build.lib.analysis.CommandHelper;
 import com.google.devtools.build.lib.analysis.ConfigurationMakeVariableContext;
@@ -32,7 +34,7 @@ import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
-import com.google.devtools.build.lib.analysis.TemplateVariableInfo;
+import com.google.devtools.build.lib.analysis.ShToolchain;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
@@ -102,7 +104,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
    * Updates the {@link RuleConfiguredTargetBuilder} that is used for this rule.
    *
    * <p>GenRule implementations can override this method to enhance and update the builder without
-   * needing to entirely override the {@link #create} method.
+   * needing to entirely override the {@link com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory#create} method.
    */
   protected RuleConfiguredTargetBuilder updateBuilder(
       RuleConfiguredTargetBuilder builder,
@@ -113,7 +115,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
 
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
-      throws RuleErrorException, InterruptedException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     NestedSet<Artifact> filesToBuild =
         NestedSetBuilder.wrap(Order.STABLE_ORDER, ruleContext.getOutputArtifacts());
     NestedSetBuilder<Artifact> resolvedSrcsBuilder = NestedSetBuilder.stableOrder();
@@ -193,8 +195,17 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     FilesToRunProvider genruleSetup =
         ruleContext.getPrerequisite("$genrule_setup", Mode.HOST, FilesToRunProvider.class);
     inputs.addTransitive(genruleSetup.getFilesToRun());
-    List<String> argv = commandHelper.buildCommandLine(command, inputs, ".genrule_script.sh",
-          ImmutableMap.copyOf(executionInfo));
+    PathFragment shExecutable = ShToolchain.getPathOrError(ruleContext);
+    if (ruleContext.hasErrors()) {
+      return null;
+    }
+    List<String> argv =
+        commandHelper.buildCommandLine(
+            shExecutable,
+            command,
+            inputs,
+            ".genrule_script.sh",
+            ImmutableMap.copyOf(executionInfo));
 
     // TODO(bazel-team): Make the make variable expander pass back a list of these.
     if (requiresCrosstool(baseCommand)) {
@@ -220,7 +231,7 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
             ImmutableList.copyOf(commandHelper.getResolvedTools()),
             inputs.build(),
             filesToBuild,
-            argv,
+            CommandLines.of(argv),
             ruleContext.getConfiguration().getActionEnvironment(),
             ImmutableMap.copyOf(executionInfo),
             new CompositeRunfilesSupplier(commandHelper.getToolsRunfilesSuppliers()),
@@ -271,37 +282,23 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     private final RuleContext ruleContext;
     private final NestedSet<Artifact> resolvedSrcs;
     private final NestedSet<Artifact> filesToBuild;
-    private final Iterable<TemplateVariableInfo> toolchains;
 
     public CommandResolverContext(
         RuleContext ruleContext,
         NestedSet<Artifact> resolvedSrcs,
         NestedSet<Artifact> filesToBuild) {
       super(
-          ruleContext.getMakeVariables(ImmutableList.of(":cc_toolchain")),
+          ruleContext,
           ruleContext.getRule().getPackage(),
           ruleContext.getConfiguration(),
           ImmutableList.of(new CcFlagsSupplier(ruleContext)));
       this.ruleContext = ruleContext;
       this.resolvedSrcs = resolvedSrcs;
       this.filesToBuild = filesToBuild;
-      this.toolchains = ruleContext.getPrerequisites(
-          "toolchains", Mode.TARGET, TemplateVariableInfo.PROVIDER);
     }
 
     public RuleContext getRuleContext() {
       return ruleContext;
-    }
-
-    private String resolveVariableFromToolchains(String variableName) {
-      for (TemplateVariableInfo info : toolchains) {
-        String result = info.getVariables().get(variableName);
-        if (result != null) {
-          return result;
-        }
-      }
-
-      return null;
     }
 
     @Override
@@ -348,15 +345,6 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
           PathFragment relPath =
               ruleContext.getRule().getLabel().getPackageIdentifier().getSourceRoot();
           return dir.getRelative(relPath).getPathString();
-        }
-      }
-
-      // Make variables provided by the :cc_toolchain attributes should not be overridden by
-      // those provided by the toolchains attribute.
-      if (!CROSSTOOL_MAKE_VARIABLES.contains(variableName)) {
-        String valueFromToolchains = resolveVariableFromToolchains(variableName);
-        if (valueFromToolchains != null) {
-          return valueFromToolchains;
         }
       }
 

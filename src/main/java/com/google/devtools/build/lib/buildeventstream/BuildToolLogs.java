@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.buildeventstream;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.buildeventstream.BuildEvent.LocalFile.LocalFileType;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.ByteString;
@@ -37,11 +38,20 @@ public class BuildToolLogs implements BuildEventWithOrderConstraint {
 
   @Override
   public Collection<BuildEventId> getChildrenEvents() {
-    return ImmutableList.<BuildEventId>of();
+    return ImmutableList.of();
   }
 
   @Override
-  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventConverters converters) {
+  public Collection<LocalFile> referencedLocalFiles() {
+    ImmutableList.Builder<LocalFile> localFiles = ImmutableList.builder();
+    for (Pair<String, Path> logFile : logFiles) {
+      localFiles.add(new LocalFile(logFile.getSecond(), LocalFileType.LOG));
+    }
+    return localFiles.build();
+  }
+
+  @Override
+  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventContext converters) {
     BuildEventStreamProtos.BuildToolLogs.Builder toolLogs =
         BuildEventStreamProtos.BuildToolLogs.newBuilder();
     for (Pair<String, ByteString> direct : directValues) {

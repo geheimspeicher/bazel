@@ -25,7 +25,6 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.PrintStream;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -90,25 +89,13 @@ public class FileSystemUtils {
 
     return a;
   }
-  /**
-   * Returns a path fragment from a given from-dir to a given to-path. May be
-   * either a short relative path "foo/bar", an up'n'over relative path
-   * "../../foo/bar" or an absolute path.
-   */
-  public static PathFragment relativePath(Path fromDir, Path to) {
-    if (to.getFileSystem() != fromDir.getFileSystem()) {
-      throw new IllegalArgumentException("fromDir and to must be on the same FileSystem");
-    }
-
-    return relativePath(fromDir.asFragment(), to.asFragment());
-  }
 
   /**
    * Returns a path fragment from a given from-dir to a given to-path.
    */
   public static PathFragment relativePath(PathFragment fromDir, PathFragment to) {
     if (to.equals(fromDir)) {
-      return PathFragment.create(".");  // same dir, just return '.'
+      return PathFragment.EMPTY_FRAGMENT;
     }
     if (to.startsWith(fromDir)) {
       return to.relativeTo(fromDir);  // easy case--it's a descendant
@@ -413,7 +400,10 @@ public class FileSystemUtils {
       throw new IOException("error copying file: "
           + "couldn't delete destination: " + e.getMessage());
     }
-    asByteSource(from).copyTo(asByteSink(to));
+    try (InputStream in = from.getInputStream();
+        OutputStream out = to.getOutputStream()) {
+      ByteStreams.copy(in, out);
+    }
     to.setLastModifiedTime(from.getLastModifiedTime()); // Preserve mtime.
     if (!from.isWritable()) {
       to.setWritable(false); // Make file read-only if original was read-only.
@@ -422,26 +412,38 @@ public class FileSystemUtils {
   }
 
   /**
-   * Moves the file from location "from" to location "to", while overwriting a
-   * potentially existing "to". File's last modified time, executable and
-   * writable bits are also preserved.
+   * Moves the file from location "from" to location "to", while overwriting a potentially existing
+   * "to". If "from" is a regular file, its last modified time, executable and writable bits are
+   * also preserved. Symlinks are also supported but not directories or special files.
    *
-   * <p>If no error occurs, the method returns normally. If a parent directory does
-   * not exist, a FileNotFoundException is thrown. An IOException is thrown when
-   * other erroneous situations occur. (e.g. read errors)
+   * <p>If no error occurs, the method returns normally. If a parent directory does not exist, a
+   * FileNotFoundException is thrown. {@link IOException} is thrown when other erroneous situations
+   * occur. (e.g. read errors)
    */
-  @ThreadSafe  // but not atomic
+  @ThreadSafe // but not atomic
   public static void moveFile(Path from, Path to) throws IOException {
-    long mtime = from.getLastModifiedTime();
-    boolean writable = from.isWritable();
-    boolean executable = from.isExecutable();
-
     // We don't try-catch here for better performance.
     to.delete();
     try {
       from.renameTo(to);
     } catch (IOException e) {
-      asByteSource(from).copyTo(asByteSink(to));
+      // Fallback to a copy.
+      FileStatus stat = from.stat(Symlinks.NOFOLLOW);
+      if (stat.isFile()) {
+        try (InputStream in = from.getInputStream();
+            OutputStream out = to.getOutputStream()) {
+          ByteStreams.copy(in, out);
+        }
+        to.setLastModifiedTime(stat.getLastModifiedTime()); // Preserve mtime.
+        if (!from.isWritable()) {
+          to.setWritable(false); // Make file read-only if original was read-only.
+        }
+        to.setExecutable(from.isExecutable()); // Copy executable bit.
+      } else if (stat.isSymbolicLink()) {
+        to.createSymbolicLink(from.readSymbolicLink());
+      } else {
+        throw new IOException("Don't know how to copy " + from);
+      }
       if (!from.delete()) {
         if (!to.delete()) {
           throw new IOException("Unable to delete " + to);
@@ -449,11 +451,6 @@ public class FileSystemUtils {
         throw new IOException("Unable to delete " + from);
       }
     }
-    to.setLastModifiedTime(mtime); // Preserve mtime.
-    if (!writable) {
-      to.setWritable(false); // Make file read-only if original was read-only.
-    }
-    to.setExecutable(executable); // Copy executable bit.
   }
 
   /**
@@ -701,7 +698,14 @@ public class FileSystemUtils {
    */
   public static void writeContent(Path outputFile, Charset charset, String content)
       throws IOException {
-    asByteSink(outputFile).asCharSink(charset).write(content);
+    try (OutputStream out = outputFile.getOutputStream()) {
+      new ByteSink() {
+        @Override
+        public OutputStream openStream() throws IOException {
+          return out;
+        }
+      }.asCharSink(charset).write(content);
+    }
   }
 
   /**
@@ -732,7 +736,14 @@ public class FileSystemUtils {
   public static void writeLinesAs(Path file, Charset charset, Iterable<String> lines)
       throws IOException {
     createDirectoryAndParents(file.getParentDirectory());
-    asByteSink(file).asCharSink(charset).writeLines(lines);
+    try (OutputStream out = file.getOutputStream()) {
+      new ByteSink() {
+        @Override
+        public OutputStream openStream() throws IOException {
+          return out;
+        }
+      }.asCharSink(charset).writeLines(lines);
+    }
   }
 
   /**
@@ -743,7 +754,14 @@ public class FileSystemUtils {
   public static void appendLinesAs(Path file, Charset charset, Iterable<String> lines)
       throws IOException {
     createDirectoryAndParents(file.getParentDirectory());
-    asByteSink(file, true).asCharSink(charset).writeLines(lines);
+    try (OutputStream out = file.getOutputStream(true)) {
+      new ByteSink() {
+        @Override
+        public OutputStream openStream() throws IOException {
+          return out;
+        }
+      }.asCharSink(charset).writeLines(lines);
+    }
   }
 
   /**
@@ -752,7 +770,15 @@ public class FileSystemUtils {
    * @throws IOException if there was an error
    */
   public static void writeContent(Path outputFile, byte[] content) throws IOException {
-    asByteSink(outputFile).write(content);
+    try (OutputStream out = outputFile.getOutputStream()) {
+      new ByteSink() {
+        @Override
+        public OutputStream openStream() throws IOException {
+          return out;
+        }
+      }.write(content);
+      ;
+    }
   }
 
   /**
@@ -826,7 +852,14 @@ public class FileSystemUtils {
    * @throws IOException if there was an error
    */
   public static Iterable<String> readLines(Path inputFile, Charset charset) throws IOException {
-    return asByteSource(inputFile).asCharSource(charset).readLines();
+    try (InputStream in = inputFile.getInputStream()) {
+      return new ByteSource() {
+        @Override
+        public InputStream openStream() throws IOException {
+          return in;
+        }
+      }.asCharSource(charset).readLines();
+    }
   }
 
   /**
@@ -835,14 +868,28 @@ public class FileSystemUtils {
    * @throws IOException if there was an error
    */
   public static byte[] readContent(Path inputFile) throws IOException {
-    return asByteSource(inputFile).read();
+    try (InputStream in = inputFile.getInputStream()) {
+      return new ByteSource() {
+        @Override
+        public InputStream openStream() throws IOException {
+          return in;
+        }
+      }.read();
+    }
   }
 
   /**
    * Reads the entire file using the given charset and returns the contents as a string
    */
   public static String readContent(Path inputFile, Charset charset) throws IOException {
-    return asByteSource(inputFile).asCharSource(charset).read();
+    try (InputStream in = inputFile.getInputStream()) {
+      return new ByteSource() {
+        @Override
+        public InputStream openStream() throws IOException {
+          return in;
+        }
+      }.asCharSource(charset).read();
+    }
   }
 
   /**
@@ -852,11 +899,18 @@ public class FileSystemUtils {
    */
   public static byte[] readContentWithLimit(Path inputFile, int limit) throws IOException {
     Preconditions.checkArgument(limit >= 0, "limit needs to be >=0, but it is %s", limit);
-    ByteSource byteSource = asByteSource(inputFile);
-    byte[] buffer = new byte[limit];
-    try (InputStream inputStream = byteSource.openBufferedStream()) {
-      int read = ByteStreams.read(inputStream, buffer, 0, limit);
-      return read == limit ? buffer : Arrays.copyOf(buffer, read);
+    try (InputStream in = inputFile.getInputStream()) {
+      byte[] buffer = new byte[limit];
+      try (InputStream inputStream =
+          new ByteSource() {
+            @Override
+            public InputStream openStream() throws IOException {
+              return in;
+            }
+          }.openBufferedStream()) {
+        int read = ByteStreams.read(inputStream, buffer, 0, limit);
+        return read == limit ? buffer : Arrays.copyOf(buffer, read);
+      }
     }
   }
 
@@ -880,30 +934,6 @@ public class FileSystemUtils {
           + "' (expected " + fileSizeInt + ", got " + bytes.length + " bytes)");
     }
     return bytes;
-  }
-
-  /**
-   * Dumps diagnostic information about the specified filesystem to {@code out}.
-   * This is the implementation of the filesystem part of the 'blaze dump'
-   * command. It lives here, rather than in DumpCommand, because it requires
-   * privileged access to members of this package.
-   *
-   * <p>Its results are unspecified and MUST NOT be interpreted programmatically.
-   */
-  public static void dump(FileSystem fs, final PrintStream out) {
-    // Unfortunately there's no "letrec" for anonymous functions so we have to
-    // (a) name the function, (b) put it in a box and (c) use List not array
-    // because of the generic type.  *sigh*.
-    final List<Predicate<Path>> dumpFunction = new ArrayList<>();
-    dumpFunction.add(
-        child -> {
-          Path path = child;
-          out.println("  " + path + " (" + path.toDebugString() + ")");
-          path.applyToChildren(dumpFunction.get(0));
-          return false;
-        });
-
-    fs.getRootDirectory().applyToChildren(dumpFunction.get(0));
   }
 
   /**

@@ -39,6 +39,7 @@ import com.google.devtools.build.lib.rules.android.deployinfo.AndroidDeployInfoO
 import com.google.devtools.build.lib.rules.java.JavaCompileAction;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -114,12 +115,12 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
         .isNotNull();
   }
 
-  protected List<String> resourceArguments(ResourceContainer resource)
+  protected List<String> resourceArguments(ValidatedAndroidData resource)
       throws CommandLineExpansionException {
     return getGeneratingSpawnActionArgs(resource.getApk());
   }
 
-  protected SpawnAction resourceGeneratingAction(ResourceContainer resource) {
+  protected SpawnAction resourceGeneratingAction(ValidatedAndroidData resource) {
     return getGeneratingSpawnAction(resource.getApk());
   }
 
@@ -129,7 +130,17 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
 
   protected static ResourceContainer getResourceContainer(
       ConfiguredTarget target, boolean transitive) {
+    ValidatedAndroidData validated = getValidatedData(target, transitive);
+    assertThat(validated).isInstanceOf(ResourceContainer.class);
+    return (ResourceContainer) validated;
+  }
 
+  protected static ValidatedAndroidData getValidatedData(ConfiguredTarget target) {
+    return getValidatedData(target, /* transitive = */ false);
+  }
+
+  protected static ValidatedAndroidData getValidatedData(
+      ConfiguredTarget target, boolean transitive) {
     Preconditions.checkNotNull(target);
     final AndroidResourcesInfo info = target.get(AndroidResourcesInfo.PROVIDER);
     assertThat(info).named("No android resources exported from the target.").isNotNull();
@@ -137,9 +148,9 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
         transitive ? info.getTransitiveAndroidResources() : info.getDirectAndroidResources());
   }
 
-  protected Artifact getResourceClassJar(final ConfiguredTarget target) {
+  protected Artifact getResourceClassJar(final ConfiguredTargetAndData target) {
     JavaRuleOutputJarsProvider jarProvider =
-        JavaInfo.getProvider(JavaRuleOutputJarsProvider.class, target);
+        JavaInfo.getProvider(JavaRuleOutputJarsProvider.class, target.getConfiguredTarget());
     assertThat(jarProvider).isNotNull();
     return Iterables.find(
             jarProvider.getOutputJars(),
@@ -227,6 +238,11 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
     // the last provider is the provider from the target.
     return Iterables.getLast(target.get(AndroidResourcesInfo.PROVIDER).getDirectAndroidResources())
         .getJavaClassJar();
+  }
+
+  // Returns an artifact that will be generated when a rule has assets that are processed seperately
+  static Artifact getDecoupledAssetArtifact(ConfiguredTarget target) {
+    return target.get(AndroidAssetsInfo.PROVIDER).getValidationResult();
   }
 
   protected static Set<Artifact> getNonToolInputs(Action action) {
@@ -381,5 +397,31 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
             actionsTestUtil()
                 .getActionForArtifactEndingWith(getFilesToBuild(binary), "_proguard.jar"))
         .isNull();
+  }
+
+  /**
+   * Creates a mock SDK with aapt2.
+   *
+   * <p>You'll need to use a configuration pointing to it, such as "--android_sdk=//sdk:sdk", to use
+   * it.
+   */
+  public void mockAndroidSdkWithAapt2() throws Exception {
+    scratch.file(
+        "sdk/BUILD",
+        "android_sdk(",
+        "    name = 'sdk',",
+        "    aapt = 'aapt',",
+        "    aapt2 = 'aapt2',",
+        "    adb = 'adb',",
+        "    aidl = 'aidl',",
+        "    android_jar = 'android.jar',",
+        "    apksigner = 'apksigner',",
+        "    dx = 'dx',",
+        "    framework_aidl = 'framework_aidl',",
+        "    main_dex_classes = 'main_dex_classes',",
+        "    main_dex_list_creator = 'main_dex_list_creator',",
+        "    proguard = 'proguard',",
+        "    shrinked_android_jar = 'shrinked_android_jar',",
+        "    zipalign = 'zipalign')");
   }
 }

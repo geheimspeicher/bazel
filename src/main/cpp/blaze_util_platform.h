@@ -16,10 +16,12 @@
 #define BAZEL_SRC_MAIN_CPP_BLAZE_UTIL_PLATFORM_H_
 
 #include <cinttypes>
+#include <map>
 #include <string>
 #include <vector>
 
 #include "src/main/cpp/util/port.h"
+#include "src/main/cpp/blaze_util.h"
 
 namespace blaze {
 
@@ -59,9 +61,6 @@ std::string GetOutputRoot();
 // On Linux/macOS, this is $HOME. On Windows this is %USERPROFILE%.
 std::string GetHomeDir();
 
-// Returns the location of the global bazelrc file if it exists, otherwise "".
-std::string FindSystemWideBlazerc();
-
 // Warn about dubious filesystem types, such as NFS, case-insensitive (?).
 void WarnFilesystemType(const std::string& output_base);
 
@@ -82,9 +81,10 @@ std::string GetProcessCWD(int pid);
 
 bool IsSharedLibrary(const std::string& filename);
 
-// Return the default path to the JDK used to run Blaze itself
-// (must be an absolute directory).
-std::string GetDefaultHostJavabase();
+// Returns the absolute path to the user's local JDK install, to be used as
+// the default target javabase and as a fall-back host_javabase. This is not
+// the embedded JDK.
+std::string GetSystemJavabase();
 
 // Return the path to the JVM binary relative to a javabase, e.g. "bin/java".
 std::string GetJavaBinaryUnderJavabase();
@@ -101,6 +101,7 @@ class BlazeServerStartup {
   virtual bool IsStillAlive() = 0;
 };
 
+
 // Starts a daemon process with its standard output and standard error
 // redirected (and conditionally appended) to the file "daemon_output". Sets
 // server_startup to an object that can be used to query if the server is
@@ -109,26 +110,11 @@ class BlazeServerStartup {
 // caller.
 int ExecuteDaemon(const std::string& exe,
                   const std::vector<std::string>& args_vector,
+                  const std::map<std::string, EnvVarValue>& env,
                   const std::string& daemon_output,
                   const bool daemon_output_append,
                   const std::string& server_dir,
                   BlazeServerStartup** server_startup);
-
-// Get the version string from the given java executable. The java executable
-// is supposed to output a string in the form '.*version ".*".*'. This method
-// will return the part in between the two quote or the empty string on failure
-// to match the good string.
-std::string GetJvmVersion(const std::string& java_exe);
-
-// Convert a path from Bazel internal form to underlying OS form.
-// On Unixes this is an identity operation.
-// On Windows, Bazel internal form is cygwin path, and underlying OS form
-// is Windows path.
-std::string ConvertPath(const std::string& path);
-
-// Converts `path` to a string that's safe to pass as path in a JVM flag.
-// See https://github.com/bazelbuild/bazel/issues/2576
-std::string PathAsJvmFlag(const std::string& path);
 
 // A character used to separate paths in a list.
 extern const char kListSeparator;
@@ -138,14 +124,8 @@ extern const char kListSeparator;
 // Implemented via junctions on Windows.
 bool SymlinkDirectories(const std::string& target, const std::string& link);
 
-// Compares two absolute paths. Necessary because the same path can have
-// multiple different names under msys2: "C:\foo\bar" or "C:/foo/bar"
-// (Windows-style) and "/c/foo/bar" (msys2 style). Returns if the paths are
-// equal.
-bool CompareAbsolutePaths(const std::string& a, const std::string& b);
-
 struct BlazeLock {
-#if defined(COMPILER_MSVC) || defined(__CYGWIN__)
+#if defined(_WIN32) || defined(__CYGWIN__)
   /* HANDLE */ void* handle;
 #else
   int lockfd;
@@ -189,6 +169,8 @@ std::string GetHashedBaseDir(const std::string& root,
 void CreateSecureOutputRoot(const std::string& path);
 
 std::string GetEnv(const std::string& name);
+
+bool ExistsEnv(const std::string& name);
 
 void SetEnv(const std::string& name, const std::string& value);
 

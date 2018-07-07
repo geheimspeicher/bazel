@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
@@ -37,9 +38,7 @@ import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.SkylarkType;
 import java.util.Map;
 
-/**
- * A factory for aspects that are defined in Skylark.
- */
+/** A factory for aspects that are defined in Skylark. */
 public class SkylarkAspectFactory implements ConfiguredAspectFactory {
 
   private final SkylarkDefinedAspect skylarkAspect;
@@ -50,16 +49,17 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
 
   @Override
   public ConfiguredAspect create(
-      ConfiguredTargetAndTarget ctatBase, RuleContext ruleContext, AspectParameters parameters)
-      throws InterruptedException {
+      ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+      throws InterruptedException, ActionConflictException {
     SkylarkRuleContext skylarkRuleContext = null;
     try (Mutability mutability = Mutability.create("aspect")) {
-      AspectDescriptor aspectDescriptor = new AspectDescriptor(
-          skylarkAspect.getAspectClass(), parameters);
+      AspectDescriptor aspectDescriptor =
+          new AspectDescriptor(skylarkAspect.getAspectClass(), parameters);
       AnalysisEnvironment analysisEnv = ruleContext.getAnalysisEnvironment();
       try {
-        skylarkRuleContext = new SkylarkRuleContext(
-            ruleContext, aspectDescriptor, analysisEnv.getSkylarkSemantics());
+        skylarkRuleContext =
+            new SkylarkRuleContext(
+                ruleContext, aspectDescriptor, analysisEnv.getSkylarkSemantics());
       } catch (EvalException e) {
         ruleContext.ruleError(e.getMessage());
         return null;
@@ -77,7 +77,7 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
             skylarkAspect
                 .getImplementation()
                 .call(
-                    /*args=*/ ImmutableList.of(ctatBase.getConfiguredTarget(), skylarkRuleContext),
+                    /*args=*/ ImmutableList.of(ctadBase.getConfiguredTarget(), skylarkRuleContext),
                     /* kwargs= */ ImmutableMap.of(),
                     /*ast=*/ null,
                     env);
@@ -94,20 +94,20 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
         }
         return createAspect(aspectSkylarkObject, aspectDescriptor, ruleContext);
       } catch (EvalException e) {
-        addAspectToStackTrace(ctatBase.getTarget(), e);
+        addAspectToStackTrace(ctadBase.getTarget(), e);
         ruleContext.ruleError("\n" + e.print());
         return null;
       }
     } finally {
-       if (skylarkRuleContext != null) {
-         skylarkRuleContext.nullify();
-       }
+      if (skylarkRuleContext != null) {
+        skylarkRuleContext.nullify();
+      }
     }
   }
 
   private ConfiguredAspect createAspect(
       Object aspectSkylarkObject, AspectDescriptor aspectDescriptor, RuleContext ruleContext)
-      throws EvalException {
+      throws EvalException, ActionConflictException {
 
     ConfiguredAspect.Builder builder = new ConfiguredAspect.Builder(aspectDescriptor, ruleContext);
 
@@ -137,7 +137,7 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
     }
 
     ConfiguredAspect configuredAspect = builder.build();
-    SkylarkProviderValidationUtil.checkOrphanArtifacts(ruleContext);
+    SkylarkProviderValidationUtil.validateArtifacts(ruleContext);
     return configuredAspect;
   }
 
@@ -160,8 +160,7 @@ public class SkylarkAspectFactory implements ConfiguredAspectFactory {
     }
   }
 
-  private static void addOutputGroups(Object value, Location loc,
-      ConfiguredAspect.Builder builder)
+  private static void addOutputGroups(Object value, Location loc, ConfiguredAspect.Builder builder)
       throws EvalException {
     Map<String, SkylarkValue> outputGroups =
         SkylarkType.castMap(value, String.class, SkylarkValue.class, "output_groups");

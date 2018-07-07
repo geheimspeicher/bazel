@@ -18,6 +18,8 @@ import com.google.common.base.Throwables;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.StringCanonicalizer;
 import com.google.devtools.build.lib.util.StringUtilities;
@@ -30,13 +32,12 @@ import java.io.Serializable;
 import java.util.concurrent.ExecutionException;
 import java.util.regex.Pattern;
 
-/**
- * A human-readable name for the repository.
- */
+/** A human-readable name for the repository. */
+@AutoCodec
 public final class RepositoryName implements Serializable {
   public static final String DEFAULT_REPOSITORY = "";
-  public static final RepositoryName DEFAULT;
-  public static final RepositoryName MAIN;
+  @AutoCodec public static final RepositoryName DEFAULT;
+  @AutoCodec public static final RepositoryName MAIN;
   private static final Pattern VALID_REPO_NAME = Pattern.compile("@[\\w\\-.]*");
 
   /** Helper for serializing {@link RepositoryName}. */
@@ -108,6 +109,7 @@ public final class RepositoryName implements Serializable {
    *
    * @throws LabelSyntaxException if the name is invalid
    */
+  @AutoCodec.Instantiator
   public static RepositoryName create(String name) throws LabelSyntaxException {
     try {
       return repositoryNameCache.get(name);
@@ -259,11 +261,18 @@ public final class RepositoryName implements Serializable {
     if (!(object instanceof RepositoryName)) {
       return false;
     }
+
+    if (OS.getCurrent() == OS.WINDOWS) {
+      return name.toLowerCase().equals(((RepositoryName) object).name.toLowerCase());
+    }
     return name.equals(((RepositoryName) object).name);
   }
 
   @Override
   public int hashCode() {
+    if (OS.getCurrent() == OS.WINDOWS) {
+      return name.toLowerCase().hashCode();
+    }
     return name.hashCode();
   }
 }

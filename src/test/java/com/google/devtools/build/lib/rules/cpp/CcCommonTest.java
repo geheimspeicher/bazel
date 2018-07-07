@@ -21,6 +21,7 @@ import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.baseNam
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.truth.IterableSubject;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
@@ -35,16 +36,15 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider;
 import com.google.devtools.build.lib.bazel.rules.CcRules;
 import com.google.devtools.build.lib.bazel.rules.GenericRules;
+import com.google.devtools.build.lib.bazel.rules.ToolchainRules;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.rules.ToolchainType;
 import com.google.devtools.build.lib.rules.core.CoreRules;
-import com.google.devtools.build.lib.rules.cpp.transitions.LipoDataTransitionRuleSet;
 import com.google.devtools.build.lib.rules.platform.PlatformRules;
 import com.google.devtools.build.lib.rules.repository.CoreWorkspaceRules;
 import com.google.devtools.build.lib.util.FileType;
-import com.google.devtools.build.lib.util.OsUtils;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -118,8 +118,9 @@ public class CcCommonTest extends BuildViewTestCase {
     }
     assertThat(
             emptylib
-                .getProvider(CcExecutionDynamicLibrariesProvider.class)
-                .getExecutionDynamicLibraryArtifacts()
+                .get(CcLinkingInfo.PROVIDER)
+                .getCcDynamicLibrariesForRuntime()
+                .getDynamicLibrariesForRuntimeArtifacts()
                 .isEmpty())
         .isTrue();
   }
@@ -132,7 +133,7 @@ public class CcCommonTest extends BuildViewTestCase {
   public void testEmptyBinary() throws Exception {
     ConfiguredTarget emptybin = getConfiguredTarget("//empty:emptybinary");
     assertThat(baseNamesOf(getFilesToBuild(emptybin)))
-        .isEqualTo("emptybinary" + OsUtils.executableExtension());
+        .isEqualTo("emptybinary");
   }
 
   private List<String> getCopts(String target) throws Exception {
@@ -202,7 +203,7 @@ public class CcCommonTest extends BuildViewTestCase {
   private Iterable<Artifact> getLinkerInputs(ConfiguredTarget target) {
     Artifact executable = getExecutable(target);
     CppLinkAction linkAction = (CppLinkAction) getGeneratingAction(executable);
-    return LinkerInputs.toLibraryArtifacts(linkAction.getLinkCommandLine().getLinkerInputs());
+    return linkAction.getLinkCommandLine().getLinkerInputArtifacts();
   }
 
   @Test
@@ -230,8 +231,9 @@ public class CcCommonTest extends BuildViewTestCase {
             "           linkstatic=1)");
     assertThat(
             statically
-                .getProvider(CcExecutionDynamicLibrariesProvider.class)
-                .getExecutionDynamicLibraryArtifacts()
+                .get(CcLinkingInfo.PROVIDER)
+                .getCcDynamicLibrariesForRuntime()
+                .getDynamicLibrariesForRuntimeArtifacts()
                 .isEmpty())
         .isTrue();
     Artifact staticallyDotA = getOnlyElement(getFilesToBuild(statically));
@@ -249,7 +251,8 @@ public class CcCommonTest extends BuildViewTestCase {
             "cc_library(name = 'defineslib',",
             "           srcs = ['defines.cc'],",
             "           defines = ['FOO', 'BAR'])");
-    assertThat(isolatedDefines.getProvider(CppCompilationContext.class).getDefines())
+    assertThat(
+            isolatedDefines.get(CcCompilationInfo.PROVIDER).getCcCompilationContext().getDefines())
         .containsExactly("FOO", "BAR")
         .inOrder();
   }
@@ -295,42 +298,44 @@ public class CcCommonTest extends BuildViewTestCase {
             "3.pic.ii", "3.pic.s");
   }
 
-  @Test
-  public void testTempsForCc() throws Exception {
-    for (String cpu : new String[] {"k8", "piii"}) {
-      useConfiguration("--cpu=" + cpu, "--save_temps");
-      ConfiguredTarget foo = getConfiguredTarget("//foo:foo");
-      CcToolchainProvider toolchain =
-          CppHelper.getToolchainUsingDefaultCcToolchainAttribute(getRuleContext(foo));
-      List<String> temps =
-          ActionsTestUtil.baseArtifactNames(getOutputGroup(foo, OutputGroupInfo.TEMP_FILES));
-      if (CppHelper.usePicForBinaries(
-          getTargetConfiguration().getFragment(CppConfiguration.class), toolchain)) {
-        assertThat(temps).named(cpu).containsExactly("foo.pic.ii", "foo.pic.s");
-      } else {
-        assertThat(temps).named(cpu).containsExactly("foo.ii", "foo.s");
-      }
-    }
+  /**
+   * Returns the {@link IterableSubject} for the {@link OutputGroupInfo#TEMP_FILES} generated when
+   * {@code testTarget} is built for {@code cpu}.
+   */
+  private IterableSubject assertTempsForTarget(String cpu, String testTarget) throws Exception {
+    useConfiguration("--cpu=" + cpu, "--host_cpu=" + cpu, "--save_temps");
+    ConfiguredTarget target = getConfiguredTarget(testTarget);
+    assertThat(target).isNotNull();
+
+    List<String> temps =
+        ActionsTestUtil.baseArtifactNames(getOutputGroup(target, OutputGroupInfo.TEMP_FILES));
+
+    // Return the IterableSubject for the temp files.
+    return assertThat(temps).named(cpu);
   }
 
   @Test
-  public void testTempsForC() throws Exception {
+  public void testTempsForCc_k8() throws Exception {
+    assertTempsForTarget("k8", "//foo:foo").containsExactly("foo.pic.ii", "foo.pic.s");
+  }
+
+  @Test
+  public void testTempsForCc_piii() throws Exception {
+    // PIII does not use PIC.
+    assertTempsForTarget("piii", "//foo:foo").containsExactly("foo.ii", "foo.s");
+  }
+
+  @Test
+  public void testTempsForC_k8() throws Exception {
     scratch.file("csrc/BUILD", "cc_library(name='csrc', srcs=['foo.c'])");
-    for (String cpu : new String[] {"k8", "piii"}) {
-      useConfiguration("--cpu=" + cpu, "--save_temps");
-      // Now try with a .c source file.
-      ConfiguredTarget csrc = getConfiguredTarget("//csrc:csrc");
-      CcToolchainProvider toolchain =
-          CppHelper.getToolchainUsingDefaultCcToolchainAttribute(getRuleContext(csrc));
-      List<String> temps =
-          ActionsTestUtil.baseArtifactNames(getOutputGroup(csrc, OutputGroupInfo.TEMP_FILES));
-      if (CppHelper.usePicForBinaries(
-          getTargetConfiguration().getFragment(CppConfiguration.class), toolchain)) {
-        assertThat(temps).named(cpu).containsExactly("foo.pic.i", "foo.pic.s");
-      } else {
-        assertThat(temps).named(cpu).containsExactly("foo.i", "foo.s");
-      }
-    }
+    assertTempsForTarget("k8", "//csrc:csrc").containsExactly("foo.pic.i", "foo.pic.s");
+  }
+
+  @Test
+  public void testTempsForC_piii() throws Exception {
+    scratch.file("csrc/BUILD", "cc_library(name='csrc', srcs=['foo.c'])");
+    // PIII does not use PIC.
+    assertTempsForTarget("piii", "//csrc:csrc").containsExactly("foo.i", "foo.s");
   }
 
   @Test
@@ -376,19 +381,19 @@ public class CcCommonTest extends BuildViewTestCase {
         "           srcs = [ 'library.cc' ],",
         "           nocopts = '-fPIC')");
 
-    assertThat(getCppCompileAction("//a:pic").getArgv()).contains("-fPIC");
-    assertThat(getCppCompileAction("//a:libpic.so").getArgv()).contains("-fPIC");
-    assertThat(getCppCompileAction("//a:piclib").getArgv()).contains("-fPIC");
-    assertThat(getCppCompileAction("//a:nopic").getArgv()).doesNotContain("-fPIC");
-    assertThat(getCppCompileAction("//a:libnopic.so").getArgv()).doesNotContain("-fPIC");
-    assertThat(getCppCompileAction("//a:nopiclib").getArgv()).doesNotContain("-fPIC");
+    assertThat(getCppCompileAction("//a:pic").getArguments()).contains("-fPIC");
+    assertThat(getCppCompileAction("//a:libpic.so").getArguments()).contains("-fPIC");
+    assertThat(getCppCompileAction("//a:piclib").getArguments()).contains("-fPIC");
+    assertThat(getCppCompileAction("//a:nopic").getArguments()).doesNotContain("-fPIC");
+    assertThat(getCppCompileAction("//a:libnopic.so").getArguments()).doesNotContain("-fPIC");
+    assertThat(getCppCompileAction("//a:nopiclib").getArguments()).doesNotContain("-fPIC");
   }
 
   @Test
   public void testPicModeAssembly() throws Exception {
     useConfiguration("--cpu=k8");
     scratch.file("a/BUILD", "cc_library(name='preprocess', srcs=['preprocess.S'])");
-    List<String> argv = getCppCompileAction("//a:preprocess").getArgv();
+    List<String> argv = getCppCompileAction("//a:preprocess").getArguments();
     assertThat(argv).contains("-fPIC");
   }
 
@@ -415,7 +420,7 @@ public class CcCommonTest extends BuildViewTestCase {
     ConfiguredTarget foo = getConfiguredTarget("//bang:bang");
 
     String includesRoot = "bang/bang_includes";
-    assertThat(foo.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
+    assertThat(foo.get(CcCompilationInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
         .containsAllOf(
             PathFragment.create(includesRoot),
             targetConfig.getGenfilesFragment().getRelative(includesRoot));
@@ -442,11 +447,16 @@ public class CcCommonTest extends BuildViewTestCase {
     String includesRoot = "bang/bang_includes";
     List<PathFragment> expected =
         new ImmutableList.Builder<PathFragment>()
-            .addAll(noIncludes.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
+            .addAll(
+                noIncludes
+                    .get(CcCompilationInfo.PROVIDER)
+                    .getCcCompilationContext()
+                    .getSystemIncludeDirs())
             .add(PathFragment.create(includesRoot))
             .add(targetConfig.getGenfilesFragment().getRelative(includesRoot))
+            .add(targetConfig.getBinFragment().getRelative(includesRoot))
             .build();
-    assertThat(foo.getProvider(CppCompilationContext.class).getSystemIncludeDirs())
+    assertThat(foo.get(CcCompilationInfo.PROVIDER).getCcCompilationContext().getSystemIncludeDirs())
         .containsExactlyElementsIn(expected);
   }
 
@@ -564,7 +574,7 @@ public class CcCommonTest extends BuildViewTestCase {
         "cc_library(name = 'lib',",
         "           srcs = ['foo.cc'],",
         "           includes = ['./'])");
-    Label label = Label.parseAbsolute("@pkg//bar:lib");
+    Label label = Label.parseAbsolute("@pkg//bar:lib", ImmutableMap.of());
     ConfiguredTarget target = view.getConfiguredTargetForTesting(reporter, label, targetConfig);
     assertThat(view.hasErrors(target)).isFalse();
     assertNoEvents();
@@ -855,11 +865,15 @@ public class CcCommonTest extends BuildViewTestCase {
         "cc_library(name='a', hdrs=['v1/b/c.h'], strip_include_prefix='v1', include_prefix='lib')");
 
     ConfiguredTarget lib = getConfiguredTarget("//third_party/a");
-    CppCompilationContext context = lib.getProvider(CppCompilationContext.class);
-    assertThat(ActionsTestUtil.prettyArtifactNames(context.getDeclaredIncludeSrcs()))
+    CcCompilationContext ccCompilationContext =
+        lib.get(CcCompilationInfo.PROVIDER).getCcCompilationContext();
+    assertThat(ActionsTestUtil.prettyArtifactNames(ccCompilationContext.getDeclaredIncludeSrcs()))
         .containsExactly("third_party/a/_virtual_includes/a/lib/b/c.h");
-    assertThat(context.getIncludeDirs()).containsExactly(
-        getTargetConfiguration().getBinFragment().getRelative("third_party/a/_virtual_includes/a"));
+    assertThat(ccCompilationContext.getIncludeDirs())
+        .containsExactly(
+            getTargetConfiguration()
+                .getBinFragment()
+                .getRelative("third_party/a/_virtual_includes/a"));
   }
 
   @Test
@@ -891,10 +905,14 @@ public class CcCommonTest extends BuildViewTestCase {
         "cc_library(name='relative', hdrs=['v1/b.h'], strip_include_prefix='v1')",
         "cc_library(name='absolute', hdrs=['v1/b.h'], strip_include_prefix='/third_party')");
 
-    CppCompilationContext relative = getConfiguredTarget("//third_party/a:relative")
-        .getProvider(CppCompilationContext.class);
-    CppCompilationContext absolute = getConfiguredTarget("//third_party/a:absolute")
-        .getProvider(CppCompilationContext.class);
+    CcCompilationContext relative =
+        getConfiguredTarget("//third_party/a:relative")
+            .get(CcCompilationInfo.PROVIDER)
+            .getCcCompilationContext();
+    CcCompilationContext absolute =
+        getConfiguredTarget("//third_party/a:absolute")
+            .get(CcCompilationInfo.PROVIDER)
+            .getCcCompilationContext();
 
     assertThat(ActionsTestUtil.prettyArtifactNames(relative.getDeclaredIncludeSrcs()))
         .containsExactly("third_party/a/_virtual_includes/relative/b.h");
@@ -921,9 +939,11 @@ public class CcCommonTest extends BuildViewTestCase {
         "licenses(['notice'])",
         "cc_library(name='a', hdrs=['a.h'], include_prefix='third_party')");
 
-    CppCompilationContext context =
-        getConfiguredTarget("//third_party:a").getProvider(CppCompilationContext.class);
-    assertThat(ActionsTestUtil.prettyArtifactNames(context.getDeclaredIncludeSrcs()))
+    CcCompilationContext ccCompilationContext =
+        getConfiguredTarget("//third_party:a")
+            .get(CcCompilationInfo.PROVIDER)
+            .getCcCompilationContext();
+    assertThat(ActionsTestUtil.prettyArtifactNames(ccCompilationContext.getDeclaredIncludeSrcs()))
         .doesNotContain("third_party/_virtual_includes/a/third_party/a.h");
   }
 
@@ -972,11 +992,11 @@ public class CcCommonTest extends BuildViewTestCase {
         public ConfiguredRuleClassProvider createRuleClassProvider() {
           ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
           builder.setToolsRepository("@bazel_tools");
-          LipoDataTransitionRuleSet.INSTANCE.init(builder);
           BazelRuleClassProvider.BAZEL_SETUP.init(builder);
           CoreRules.INSTANCE.init(builder);
           CoreWorkspaceRules.INSTANCE.init(builder);
           PlatformRules.INSTANCE.init(builder);
+          ToolchainRules.INSTANCE.init(builder);
           GenericRules.INSTANCE.init(builder);
           CcRules.INSTANCE.init(builder);
           return builder.build();

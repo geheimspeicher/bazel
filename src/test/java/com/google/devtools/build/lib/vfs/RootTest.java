@@ -18,9 +18,7 @@ import static com.google.common.truth.Truth.assertThat;
 import com.google.common.collect.Lists;
 import com.google.common.testing.EqualsTester;
 import com.google.devtools.build.lib.clock.BlazeClock;
-import com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodecAdapter;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
-import com.google.devtools.build.lib.skyframe.serialization.testutils.ObjectCodecTester;
+import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
 import com.google.devtools.build.lib.testutil.MoreAsserts;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import java.util.Comparator;
@@ -64,8 +62,18 @@ public class RootTest {
     assertThat(root.relativize(fs.getPath("/foo/bar"))).isEqualTo(PathFragment.create("bar"));
     assertThat(root.relativize(PathFragment.create("/foo/bar")))
         .isEqualTo(PathFragment.create("bar"));
-    MoreAsserts.expectThrows(
+    MoreAsserts.assertThrows(
         IllegalArgumentException.class, () -> root.relativize(PathFragment.create("foo")));
+  }
+
+  @Test
+  public void testFilesystemTransform() throws Exception {
+    FileSystem fs2 = new InMemoryFileSystem(BlazeClock.instance());
+    Root root = Root.fromPath(fs.getPath("/foo"));
+    Root root2 = Root.toFileSystem(root, fs2);
+    assertThat(root2.asPath().getFileSystem()).isSameAs(fs2);
+    assertThat(root2.asPath().asFragment()).isEqualTo(PathFragment.create("/foo"));
+    assertThat(root.isAbsolute()).isFalse();
   }
 
   @Test
@@ -79,11 +87,11 @@ public class RootTest {
     assertThat(root.relativize(fs.getPath("/foo"))).isEqualTo(PathFragment.create("/foo"));
     assertThat(root.relativize(PathFragment.create("/foo"))).isEqualTo(PathFragment.create("/foo"));
 
-    MoreAsserts.expectThrows(
+    MoreAsserts.assertThrows(
         IllegalArgumentException.class, () -> root.getRelative(PathFragment.create("foo")));
-    MoreAsserts.expectThrows(
+    MoreAsserts.assertThrows(
         IllegalArgumentException.class, () -> root.getRelative(PathFragment.create("foo")));
-    MoreAsserts.expectThrows(
+    MoreAsserts.assertThrows(
         IllegalArgumentException.class, () -> root.relativize(PathFragment.create("foo")));
   }
 
@@ -99,10 +107,8 @@ public class RootTest {
 
   @Test
   public void testSerialization() throws Exception {
-    ObjectCodec<Root> codec = new InjectingObjectCodecAdapter<>(Root.CODEC, () -> fs);
-    ObjectCodecTester.newBuilder(codec)
-        .addSubjects(Root.absoluteRoot(fs), Root.fromPath(fs.getPath("/foo")))
-        .skipBadDataTest()
-        .buildAndRunTests();
+    new SerializationTester(Root.absoluteRoot(fs), Root.fromPath(fs.getPath("/foo")))
+        .addDependency(FileSystem.class, fs)
+        .runTests();
   }
 }

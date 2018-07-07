@@ -21,8 +21,9 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CToolchain;
+import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CrosstoolRelease;
 import com.google.protobuf.TextFormat;
 import java.util.List;
 
@@ -32,7 +33,7 @@ import java.util.List;
  **/
 public class LinkBuildVariablesTestCase extends BuildViewTestCase {
 
-  private CppLinkAction getCppLinkAction(ConfiguredTarget target, Link.LinkTargetType type) {
+  protected CppLinkAction getCppLinkAction(ConfiguredTarget target, Link.LinkTargetType type) {
     Artifact linkerOutput = null;
     switch (type) {
       case STATIC_LIBRARY:
@@ -43,8 +44,11 @@ public class LinkBuildVariablesTestCase extends BuildViewTestCase {
       case ALWAYS_LINK_PIC_STATIC_LIBRARY:
         linkerOutput = getBinArtifact("lib" + target.getLabel().getName() + "pic.a", target);
         break;
-      case DYNAMIC_LIBRARY:
+      case NODEPS_DYNAMIC_LIBRARY:
         linkerOutput = getBinArtifact("lib" + target.getLabel().getName() + ".so", target);
+        break;
+      case DYNAMIC_LIBRARY:
+        linkerOutput = getBinArtifact(target.getLabel().getName(), target);
         break;
       case EXECUTABLE:
         linkerOutput = getExecutable(target);
@@ -57,7 +61,8 @@ public class LinkBuildVariablesTestCase extends BuildViewTestCase {
   }
 
   /** Returns active build variables for a link action of given type for given target. */
-  protected Variables getLinkBuildVariables(ConfiguredTarget target, Link.LinkTargetType type) {
+  protected CcToolchainVariables getLinkBuildVariables(
+      ConfiguredTarget target, Link.LinkTargetType type) {
     return getCppLinkAction(target, type).getLinkCommandLine().getBuildVariables();
   }
 
@@ -67,11 +72,15 @@ public class LinkBuildVariablesTestCase extends BuildViewTestCase {
   public static CcToolchainFeatures buildFeatures(String... toolchain) throws Exception {
     CToolchain.Builder toolchainBuilder = CToolchain.newBuilder();
     TextFormat.merge(Joiner.on("").join(toolchain), toolchainBuilder);
-    return new CcToolchainFeatures(toolchainBuilder.buildPartial());
+    return new CcToolchainFeatures(
+        CrosstoolInfo.fromToolchain(
+            CrosstoolRelease.getDefaultInstance(),
+            toolchainBuilder.buildPartial(),
+            /* crosstoolTop= */ PathFragment.EMPTY_FRAGMENT));
   }
 
   /** Returns the value of a given sequence variable in context of the given Variables instance. */
-  protected List<String> getSequenceVariableValue(Variables variables, String variable)
+  protected List<String> getSequenceVariableValue(CcToolchainVariables variables, String variable)
       throws Exception {
     FeatureConfiguration mockFeatureConfiguration =
         buildFeatures(
@@ -90,7 +99,8 @@ public class LinkBuildVariablesTestCase extends BuildViewTestCase {
   }
 
   /** Returns the value of a given string variable in context of the given Variables instance. */
-  protected String getVariableValue(Variables variables, String variable) throws Exception {
+  protected String getVariableValue(CcToolchainVariables variables, String variable)
+      throws Exception {
     FeatureConfiguration mockFeatureConfiguration =
         buildFeatures(
                 "feature {",

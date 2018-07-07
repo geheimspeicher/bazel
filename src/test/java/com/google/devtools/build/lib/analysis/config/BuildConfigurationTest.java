@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Iterables;
@@ -29,8 +30,9 @@ import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
-import com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodecAdapter;
-import com.google.devtools.build.lib.skyframe.serialization.testutils.ObjectCodecTester;
+import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
+import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
+import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.common.options.Options;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -191,12 +193,15 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
   @Test
   public void testTargetEnvironment() throws Exception {
     BuildConfiguration oneEnvConfig = create("--target_environment=//foo");
-    assertThat(oneEnvConfig.getTargetEnvironments()).containsExactly(Label.parseAbsolute("//foo"));
+    assertThat(oneEnvConfig.getTargetEnvironments())
+        .containsExactly(Label.parseAbsolute("//foo", ImmutableMap.of()));
 
     BuildConfiguration twoEnvsConfig =
         create("--target_environment=//foo", "--target_environment=//bar");
     assertThat(twoEnvsConfig.getTargetEnvironments())
-        .containsExactly(Label.parseAbsolute("//foo"), Label.parseAbsolute("//bar"));
+        .containsExactly(
+            Label.parseAbsolute("//foo", ImmutableMap.of()),
+            Label.parseAbsolute("//bar", ImmutableMap.of()));
 
     BuildConfiguration noEnvsConfig = create();
     assertThat(noEnvsConfig.getTargetEnvironments()).isEmpty();
@@ -288,7 +293,8 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
                 ImmutableSortedSet.orderedBy(BuildConfiguration.lexicalFragmentSorter)
                     .add(CppConfiguration.class)
                     .build()),
-            analysisMock.createRuleClassProvider());
+            analysisMock.createRuleClassProvider(),
+            skyframeExecutor.getDefaultBuildOptions());
     BuildConfiguration hostConfig = createHost();
 
     assertThat(config.equalsOrIsSupersetOf(trimmedConfig)).isTrue();
@@ -372,7 +378,7 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
     return new ConfigurationFragmentFactory() {
       @Override
       public Fragment create(ConfigurationEnvironment env, BuildOptions buildOptions)
-          throws InvalidConfigurationException, InterruptedException {
+          throws InterruptedException {
         try {
           env.getTarget(Label.parseAbsoluteUnchecked(label));
         } catch (NoSuchPackageException e) {
@@ -428,33 +434,52 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
         .isEqualTo(host.getBinDirectory(RepositoryName.MAIN));
   }
 
+  private ImmutableList<BuildConfiguration> getTestConfigurations() throws Exception {
+    return ImmutableList.of(
+        create(),
+        create("--cpu=piii"),
+        create("--javacopt=foo"),
+        create("--platform_suffix=-test"),
+        create("--target_environment=//foo", "--target_environment=//bar"),
+        create("--noexperimental_separate_genfiles_directory"),
+        create(
+            "--define",
+            "foo=#foo",
+            "--define",
+            "comma=a,b",
+            "--define",
+            "space=foo bar",
+            "--define",
+            "thing=a \"quoted\" thing",
+            "--define",
+            "qspace=a\\ quoted\\ space",
+            "--define",
+            "#a=pounda"));
+  }
+
   @Test
   public void testCodec() throws Exception {
-    ObjectCodecTester.newBuilder(
-            new InjectingObjectCodecAdapter<>(
-                BuildConfiguration.CODEC, () -> getScratch().getFileSystem()))
-        .addSubjects(
-            create(),
-            create("--cpu=piii"),
-            create("--javacopt=foo"),
-            create("--platform_suffix=-test"),
-            create("--target_environment=//foo", "--target_environment=//bar"),
-            create("--noexperimental_separate_genfiles_directory"),
-            create(
-                "--define",
-                "foo=#foo",
-                "--define",
-                "comma=a,b",
-                "--define",
-                "space=foo bar",
-                "--define",
-                "thing=a \"quoted\" thing",
-                "--define",
-                "qspace=a\\ quoted\\ space",
-                "--define",
-                "#a=pounda"))
-        .verificationFunction(BuildConfigurationTest::verifyDeserialized)
-        .buildAndRunTests();
+    // Unnecessary ImmutableList.copyOf apparently necessary to choose non-varargs constructor.
+    new SerializationTester(ImmutableList.copyOf(getTestConfigurations()))
+        .addDependency(FileSystem.class, getScratch().getFileSystem())
+        .addDependency(
+            BuildConfigurationValue.KeyCodecCache.class,
+            new BuildConfigurationValue.KeyCodecCache())
+        .setVerificationFunction(BuildConfigurationTest::verifyDeserialized)
+        .runTests();
+  }
+
+  @Test
+  public void testKeyCodec() throws Exception {
+    new SerializationTester(
+            getTestConfigurations()
+                .stream()
+                .map(BuildConfigurationValue::key)
+                .collect(ImmutableList.toImmutableList()))
+        .addDependency(
+            BuildConfigurationValue.KeyCodecCache.class,
+            new BuildConfigurationValue.KeyCodecCache())
+        .runTests();
   }
 
   /**
@@ -465,7 +490,6 @@ public class BuildConfigurationTest extends ConfigurationTestCase {
    */
   private static void verifyDeserialized(
       BuildConfiguration subject, BuildConfiguration deserialized) {
-    assertThat(deserialized.isActionsEnabled()).isEqualTo(subject.isActionsEnabled());
     assertThat(deserialized.getOptions()).isEqualTo(subject.getOptions());
   }
 }

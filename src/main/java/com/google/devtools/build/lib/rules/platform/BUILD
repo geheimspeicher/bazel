@@ -18,8 +18,10 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib:core-rules",
         "//src/main/java/com/google/devtools/build/lib:packages",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
+        "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform:utils",
+        "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/platform",
         "//third_party:guava",
     ],
 )

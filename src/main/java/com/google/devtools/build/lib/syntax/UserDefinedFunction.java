@@ -18,26 +18,28 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
+import com.google.devtools.build.lib.syntax.Environment.LexicalFrame;
 
 /**
- * The actual function registered in the environment. This function is defined in the
- * parsed code using {@link FunctionDefStatement}.
+ * The actual function registered in the environment. This function is defined in the parsed code
+ * using {@link FunctionDefStatement}.
  */
 public class UserDefinedFunction extends BaseFunction {
 
   private final ImmutableList<Statement> statements;
 
   // we close over the globals at the time of definition
-  private final Environment.Frame definitionGlobals;
+  private final Environment.GlobalFrame definitionGlobals;
 
   public UserDefinedFunction(
       String name,
-      Location loc,
+      Location location,
       FunctionSignature.WithValues<Object, SkylarkType> signature,
       ImmutableList<Statement> statements,
-      Environment.Frame definitionGlobals) {
-    super(name, signature, loc);
+      Environment.GlobalFrame definitionGlobals) {
+    super(name, signature, location);
     this.statements = statements;
     this.definitionGlobals = definitionGlobals;
   }
@@ -46,7 +48,7 @@ public class UserDefinedFunction extends BaseFunction {
     return statements;
   }
 
-  public Environment.Frame getDefinitionGlobals() {
+  public Environment.GlobalFrame getDefinitionGlobals() {
     return definitionGlobals;
   }
 
@@ -62,10 +64,11 @@ public class UserDefinedFunction extends BaseFunction {
               getName(), env.getCurrentFunction().getName()));
     }
 
-    Profiler.instance().startTask(ProfilerTask.SKYLARK_USER_FN, getName());
-    try {
-      env.enterScope(this, ast, definitionGlobals);
-      ImmutableList<String> names = signature.getSignature().getNames();
+    ImmutableList<String> names = signature.getSignature().getNames();
+    LexicalFrame lexicalFrame =
+        LexicalFrame.createForUserDefinedFunctionCall(env.mutability(), /*numArgs=*/ names.size());
+    try (SilentCloseable c = Profiler.instance().profile(ProfilerTask.SKYLARK_USER_FN, getName())) {
+      env.enterScope(this, lexicalFrame, ast, definitionGlobals);
 
       // Registering the functions's arguments as variables in the local Environment
       int i = 0;
@@ -73,7 +76,7 @@ public class UserDefinedFunction extends BaseFunction {
         env.update(name, arguments[i++]);
       }
 
-      Eval eval = new Eval(env);
+      Eval eval = Eval.fromEnvironment(env);
       try {
         for (Statement stmt : statements) {
           if (stmt instanceof ReturnStatement) {
@@ -93,7 +96,6 @@ public class UserDefinedFunction extends BaseFunction {
       }
       return Runtime.NONE;
     } finally {
-      Profiler.instance().completeTask(ProfilerTask.SKYLARK_USER_FN);
       env.exitScope();
     }
   }

@@ -28,14 +28,15 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.graph.Digraph;
 import com.google.devtools.build.lib.graph.Node;
 import com.google.devtools.build.lib.packages.Attribute;
+import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.OutputFile;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.pkgcache.PackageProvider;
 import com.google.devtools.build.lib.pkgcache.TargetEdgeObserver;
-import com.google.devtools.build.lib.pkgcache.TargetPatternEvaluator;
+import com.google.devtools.build.lib.pkgcache.TargetPatternPreloader;
+import com.google.devtools.build.lib.pkgcache.TargetProvider;
 import com.google.devtools.build.lib.pkgcache.TransitivePackageLoader;
 import com.google.devtools.build.lib.query2.engine.Callback;
 import com.google.devtools.build.lib.query2.engine.DigraphQueryEvalResult;
@@ -43,6 +44,7 @@ import com.google.devtools.build.lib.query2.engine.MinDepthUniquifier;
 import com.google.devtools.build.lib.query2.engine.QueryEvalResult;
 import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
+import com.google.devtools.build.lib.query2.engine.QueryExpressionContext;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.MinDepthUniquifierImpl;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.MutableKeyExtractorBackedMapImpl;
 import com.google.devtools.build.lib.query2.engine.QueryUtil.ThreadSafeMutableKeyExtractorBackedSetImpl;
@@ -50,6 +52,7 @@ import com.google.devtools.build.lib.query2.engine.QueryUtil.UniquifierImpl;
 import com.google.devtools.build.lib.query2.engine.SkyframeRestartQueryException;
 import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCallback;
 import com.google.devtools.build.lib.query2.engine.Uniquifier;
+import com.google.devtools.build.lib.skyframe.SkyframeLabelVisitor;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
@@ -69,9 +72,11 @@ import java.util.Set;
 public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target> {
   private static final int MAX_DEPTH_FULL_SCAN_LIMIT = 20;
   private final Map<String, Set<Target>> resolvedTargetPatterns = new HashMap<>();
-  private final TargetPatternEvaluator targetPatternEvaluator;
+  private final TargetPatternPreloader targetPatternPreloader;
+  private final PathFragment relativeWorkingDirectory;
   private final TransitivePackageLoader transitivePackageLoader;
-  private final PackageProvider packageProvider;
+  private final TargetProvider targetProvider;
+  private final CachingPackageLocator cachingPackageLocator;
   private final Digraph<Target> graph = new Digraph<>();
   private final ErrorPrintingTargetEdgeErrorObserver errorObserver;
   private final LabelVisitor labelVisitor;
@@ -93,8 +98,10 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
    */
   BlazeQueryEnvironment(
       TransitivePackageLoader transitivePackageLoader,
-      PackageProvider packageProvider,
-      TargetPatternEvaluator targetPatternEvaluator,
+      TargetProvider targetProvider,
+      CachingPackageLocator cachingPackageLocator,
+      TargetPatternPreloader targetPatternPreloader,
+      PathFragment relativeWorkingDirectory,
       boolean keepGoing,
       boolean strictScope,
       int loadingPhaseThreads,
@@ -103,12 +110,14 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
       Set<Setting> settings,
       Iterable<QueryFunction> extraFunctions) {
     super(keepGoing, strictScope, labelFilter, eventHandler, settings, extraFunctions);
-    this.targetPatternEvaluator = targetPatternEvaluator;
+    this.targetPatternPreloader = targetPatternPreloader;
+    this.relativeWorkingDirectory = relativeWorkingDirectory;
     this.transitivePackageLoader = transitivePackageLoader;
-    this.packageProvider = packageProvider;
+    this.targetProvider = targetProvider;
+    this.cachingPackageLocator = cachingPackageLocator;
     this.errorObserver = new ErrorPrintingTargetEdgeErrorObserver(this.eventHandler);
     this.loadingPhaseThreads = loadingPhaseThreads;
-    this.labelVisitor = new LabelVisitor(packageProvider, dependencyFilter);
+    this.labelVisitor = new LabelVisitor(targetProvider, dependencyFilter);
   }
 
   @Override
@@ -235,7 +244,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
   }
 
   @Override
-  public Collection<Target> getFwdDeps(Iterable<Target> targets) {
+  public Collection<Target> getFwdDeps(
+      Iterable<Target> targets, QueryExpressionContext<Target> context) {
     ThreadSafeMutableSet<Target> result = createThreadSafeMutableSet();
     for (Target target : targets) {
       result.addAll(getTargetsFromNodes(getNode(target).getSuccessors()));
@@ -244,7 +254,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
   }
 
   @Override
-  public Collection<Target> getReverseDeps(Iterable<Target> targets) {
+  public Collection<Target> getReverseDeps(
+      Iterable<Target> targets, QueryExpressionContext<Target> context) {
     ThreadSafeMutableSet<Target> result = createThreadSafeMutableSet();
     for (Target target : targets) {
       result.addAll(getTargetsFromNodes(getNode(target).getPredecessors()));
@@ -254,7 +265,7 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
 
   @Override
   public ThreadSafeMutableSet<Target> getTransitiveClosure(
-      ThreadSafeMutableSet<Target> targetNodes) {
+      ThreadSafeMutableSet<Target> targetNodes, QueryExpressionContext<Target> context) {
     for (Target node : targetNodes) {
       checkBuilt(node);
     }
@@ -293,7 +304,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
   }
 
   @Override
-  public Iterable<Target> getNodesOnPath(Target from, Target to) {
+  public Iterable<Target> getNodesOnPath(
+      Target from, Target to, QueryExpressionContext<Target> context) {
     ImmutableList.Builder<Target> builder = ImmutableList.builder();
     for (Node<Target> node : graph.getShortestPath(getNode(from), getNode(to))) {
       builder.add(node.getLabel());
@@ -329,7 +341,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
       // Only do the full visitation if "maxDepth" is large enough. Otherwise, the benefits of
       // preloading will be outweighed by the cost of doing more work than necessary.
       Set<Label> labels = targets.stream().map(Target::getLabel).collect(toImmutableSet());
-      transitivePackageLoader.sync(eventHandler, labels, keepGoing, loadingPhaseThreads);
+      ((SkyframeLabelVisitor) transitivePackageLoader)
+          .sync(eventHandler, labels, keepGoing, loadingPhaseThreads, false);
     }
   }
 
@@ -342,7 +355,7 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
   private class GraphBuildingObserver implements TargetEdgeObserver {
 
     @Override
-    public synchronized void edge(Target from, Attribute attribute, Target to) {
+    public void edge(Target from, Attribute attribute, Target to) {
       Preconditions.checkState(attribute == null ||
           dependencyFilter.apply(((Rule) from), attribute),
           "Disallowed edge from LabelVisitor: %s --> %s", from, to);
@@ -350,7 +363,7 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
     }
 
     @Override
-    public synchronized void node(Target node) {
+    public void node(Target node) {
       graph.createNode(node);
     }
 
@@ -366,7 +379,7 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
 
   private Target getTargetOrThrow(Label label)
       throws NoSuchThingException, SkyframeRestartQueryException, InterruptedException {
-    Target target = packageProvider.getTarget(eventHandler, label);
+    Target target = targetProvider.getTarget(eventHandler, label);
     if (target == null) {
       throw new SkyframeRestartQueryException();
     }
@@ -380,8 +393,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
       final QueryExpression caller,
       ThreadSafeMutableSet<Target> nodes,
       boolean buildFiles,
-      boolean subincludes,
-      boolean loads)
+      boolean loads,
+      QueryExpressionContext<Target> context)
       throws QueryException {
     ThreadSafeMutableSet<Target> dependentFiles = createThreadSafeMutableSet();
     Set<PackageIdentifier> seenPackages = new HashSet<>();
@@ -399,28 +412,25 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
         }
 
         List<Label> extensions = new ArrayList<>();
-        if (subincludes) {
-          extensions.addAll(pkg.getSubincludeLabels());
-        }
         if (loads) {
           extensions.addAll(pkg.getSkylarkFileDependencies());
         }
 
-        for (Label subinclude : extensions) {
+        for (Label extension : extensions) {
 
-          Node<Target> subincludeTarget = getSubincludeTarget(subinclude, pkg);
-          addIfUniqueLabel(subincludeTarget, seenLabels, dependentFiles);
+          Node<Target> loadTarget = getLoadTarget(extension, pkg);
+          addIfUniqueLabel(loadTarget, seenLabels, dependentFiles);
 
-          // Also add the BUILD file of the subinclude.
+          // Also add the BUILD file of the extension.
           if (buildFiles) {
-            Path buildFileForSubinclude =
-                packageProvider.getBuildFileForPackage(
-                    subincludeTarget.getLabel().getLabel().getPackageIdentifier());
-            if (buildFileForSubinclude != null) {
+            Path buildFileForLoad =
+                cachingPackageLocator.getBuildFileForPackage(
+                    loadTarget.getLabel().getLabel().getPackageIdentifier());
+            if (buildFileForLoad != null) {
               Label buildFileLabel =
                   Label.createUnvalidated(
-                      subincludeTarget.getLabel().getLabel().getPackageIdentifier(),
-                      buildFileForSubinclude.getBaseName());
+                      loadTarget.getLabel().getLabel().getPackageIdentifier(),
+                      buildFileForLoad.getBaseName());
               addIfUniqueLabel(
                   getNode(new FakeLoadTarget(buildFileLabel, pkg)), seenLabels, dependentFiles);
             }
@@ -439,7 +449,8 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
       // being called from within a SkyFunction.
       resolvedTargetPatterns.putAll(
           Maps.transformValues(
-              targetPatternEvaluator.preloadTargetPatterns(eventHandler, patterns, keepGoing),
+              targetPatternPreloader.preloadTargetPatterns(
+                  eventHandler, relativeWorkingDirectory, patterns, keepGoing),
               ResolvedTargets::getTargets));
     }
   }
@@ -450,7 +461,7 @@ public class BlazeQueryEnvironment extends AbstractBlazeQueryEnvironment<Target>
     }
   }
 
-  private Node<Target> getSubincludeTarget(Label label, Package pkg) {
+  private Node<Target> getLoadTarget(Label label, Package pkg) {
     return getNode(new FakeLoadTarget(label, pkg));
   }
 

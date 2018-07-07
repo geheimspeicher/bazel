@@ -13,15 +13,16 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
-import com.google.common.base.Supplier;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata.MiddlemanType;
 import com.google.devtools.build.lib.actions.ActionExecutionStatusReporter;
 import com.google.devtools.build.lib.actions.ActionLookupData;
-import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.skyframe.ActionExecutionInactivityWatchdog;
+import com.google.devtools.build.lib.skyframe.AspectCompletionValue;
+import com.google.devtools.build.lib.skyframe.AspectValue.AspectKey;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.SkyframeActionExecutor;
 import com.google.devtools.build.lib.skyframe.TargetCompletionValue;
@@ -34,6 +35,8 @@ import java.util.Collections;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
+import javax.annotation.Nullable;
 
 /**
  * Listener for executed actions and built artifacts. We use a listener so that we have an
@@ -46,7 +49,8 @@ public final class ExecutionProgressReceiver
   private static final NumberFormat PROGRESS_MESSAGE_NUMBER_FORMATTER;
 
   // Must be thread-safe!
-  private final Set<ConfiguredTarget> builtTargets;
+  private final Set<ConfiguredTargetKey> builtTargets;
+  private final Set<AspectKey> builtAspects;
   private final Set<ActionLookupData> enqueuedActions = Sets.newConcurrentHashSet();
   private final Set<ActionLookupData> completedActions = Sets.newConcurrentHashSet();
   private final Set<ActionLookupData> ignoredActions = Sets.newConcurrentHashSet();
@@ -65,9 +69,9 @@ public final class ExecutionProgressReceiver
    * permitted while this receiver is active.
    */
   ExecutionProgressReceiver(
-      Set<ConfiguredTarget> builtTargets,
-      int exclusiveTestsCount) {
+      Set<ConfiguredTargetKey> builtTargets, Set<AspectKey> builtAspects, int exclusiveTestsCount) {
     this.builtTargets = Collections.synchronizedSet(builtTargets);
+    this.builtAspects = Collections.synchronizedSet(builtAspects);
     this.exclusiveTestsCount = exclusiveTestsCount;
   }
 
@@ -96,16 +100,21 @@ public final class ExecutionProgressReceiver
   }
 
   @Override
-  public void evaluated(SkyKey skyKey, Supplier<SkyValue> skyValueSupplier, EvaluationState state) {
+  public void evaluated(
+      SkyKey skyKey,
+      @Nullable SkyValue value,
+      Supplier<EvaluationSuccessState> evaluationSuccessState,
+      EvaluationState state) {
     SkyFunctionName type = skyKey.functionName();
     if (type.equals(SkyFunctions.TARGET_COMPLETION)) {
-      TargetCompletionValue value = (TargetCompletionValue) skyValueSupplier.get();
-      if (value == null) {
-        return;
+      if (evaluationSuccessState.get().succeeded()) {
+        builtTargets.add(
+            ((TargetCompletionValue.TargetCompletionKey) skyKey).configuredTargetKey());
       }
-
-      ConfiguredTarget target = value.getConfiguredTarget();
-      builtTargets.add(target);
+    } else if (type.equals(SkyFunctions.ASPECT_COMPLETION)) {
+      if (evaluationSuccessState.get().succeeded()) {
+        builtAspects.add(((AspectCompletionValue.AspectCompletionKey) skyKey).aspectKey());
+      }
     } else if (type.equals(SkyFunctions.ACTION_EXECUTION)) {
       // Remember all completed actions, even those in error, regardless of having been cached or
       // really executed.

@@ -16,12 +16,12 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.packages.Package.Builder;
 import com.google.devtools.build.lib.packages.RuleFactory.BuildLangTypedAttributeValuesMap;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import java.util.Map;
@@ -55,7 +55,7 @@ public class WorkspaceFactoryHelper {
     overwriteRule(pkg, rule);
     for (Map.Entry<String, Label> entry :
         ruleClass.getExternalBindingsFunction().apply(rule).entrySet()) {
-      Label nameLabel = Label.parseAbsolute("//external:" + entry.getKey());
+      Label nameLabel = Label.parseAbsolute("//external:" + entry.getKey(), ImmutableMap.of());
       addBindRule(
           pkg,
           bindRuleClass,
@@ -68,7 +68,7 @@ public class WorkspaceFactoryHelper {
   }
 
   static void addBindRule(
-      Builder pkg,
+      Package.Builder pkg,
       RuleClass bindRuleClass,
       Label virtual,
       Label actual,

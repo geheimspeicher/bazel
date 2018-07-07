@@ -1,3 +1,5 @@
+# Standard constraint_setting and constraint_values to be used in platforms.
+
 package(
     default_visibility = ["//visibility:public"],
 )
@@ -14,7 +16,7 @@ filegroup(
     srcs = glob(["**"]),
 )
 
-# These match values in //src/main/java/com/google/build/lib/util:CPU.java
+# These match values in //src/main/java/com/google/devtools/build/lib/util:CPU.java
 constraint_setting(name = "cpu")
 
 constraint_value(
@@ -38,11 +40,16 @@ constraint_value(
 )
 
 constraint_value(
+    name = "aarch64",
+    constraint_setting = ":cpu",
+)
+
+constraint_value(
     name = "s390x",
     constraint_setting = ":cpu",
 )
 
-# These match values in //src/main/java/com/google/build/lib/util:OS.java
+# These match values in //src/main/java/com/google/devtools/build/lib/util:OS.java
 constraint_setting(name = "os")
 
 constraint_value(
@@ -51,7 +58,17 @@ constraint_value(
 )
 
 constraint_value(
+    name = "ios",
+    constraint_setting = ":os",
+)
+
+constraint_value(
     name = "freebsd",
+    constraint_setting = ":os",
+)
+
+constraint_value(
+    name = "android",
     constraint_setting = ":os",
 )
 
@@ -65,6 +82,21 @@ constraint_value(
     constraint_setting = ":os",
 )
 
+# A constraint that can only be matched by the autoconfigured platforms.
+constraint_setting(
+    name = "autoconfigure_status",
+    visibility = ["//visibility:private"],
+)
+
+constraint_value(
+    name = "autoconfigured",
+    constraint_setting = ":autoconfigure_status",
+    visibility = [
+        "@bazel_tools//:__subpackages__",
+        "@local_config_cc//:__subpackages__",
+    ],
+)
+
 # A default platform with nothing defined.
 platform(name = "default_platform")
 
@@ -72,11 +104,15 @@ platform(name = "default_platform")
 # internal build configurations, and so shouldn't be accessed by other packages.
 platform(
     name = "host_platform",
+    constraint_values = [
+        ":autoconfigured",
+    ],
     cpu_constraints = [
         ":x86_32",
         ":x86_64",
         ":ppc",
         ":arm",
+        ":aarch64",
         ":s390x",
     ],
     host_platform = True,
@@ -90,11 +126,15 @@ platform(
 
 platform(
     name = "target_platform",
+    constraint_values = [
+        ":autoconfigured",
+    ],
     cpu_constraints = [
         ":x86_32",
         ":x86_64",
         ":ppc",
         ":arm",
+        ":aarch64",
         ":s390x",
     ],
     os_constraints = [

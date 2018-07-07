@@ -20,6 +20,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
+import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration.TestOptions;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.BuildResult;
@@ -71,28 +72,7 @@ public class MobileInstallCommand implements BlazeCommand {
   /**
    * An enumeration of all the modes that mobile-install supports.
    */
-  public enum Mode {
-    CLASSIC("classic", null),
-    SKYLARK("skylark", "MIASPECT"),
-    SKYLARK_INCREMENTAL_RES("skylark_incremental_res", "MIRESASPECT");
-
-    private final String mode;
-    private final String aspectName;
-
-    Mode(String mode, String aspectName) {
-      this.mode = mode;
-      this.aspectName = aspectName;
-    }
-
-    public String getAspectName() {
-      return aspectName;
-    }
-
-    @Override
-    public String toString() {
-      return mode;
-    }
-  }
+  public enum Mode { CLASSIC, CLASSIC_INTERNAL_TEST_DO_NOT_USE, SKYLARK }
 
   /**
    * Converter for the --mode option.
@@ -110,7 +90,6 @@ public class MobileInstallCommand implements BlazeCommand {
     @Option(
       name = "split_apks",
       defaultValue = "false",
-      category = "mobile-install",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.AFFECTS_OUTPUTS},
       help =
@@ -122,10 +101,8 @@ public class MobileInstallCommand implements BlazeCommand {
 
     @Option(
       name = "incremental",
-      category = "mobile-install",
       defaultValue = "false",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-
       effectTags = OptionEffectTag.LOADING_AND_ANALYSIS,
       help =
           "Whether to do an incremental install. If true, try to avoid unnecessary additional "
@@ -137,7 +114,6 @@ public class MobileInstallCommand implements BlazeCommand {
 
     @Option(
       name = "mode",
-      category = "mobile-install",
       defaultValue = "classic",
       converter = ModeConverter.class,
       documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
@@ -146,15 +122,12 @@ public class MobileInstallCommand implements BlazeCommand {
       help =
           "Select how to run mobile-install. \"classic\" runs the current version of "
               + "mobile-install. \"skylark\" uses the new skylark version, which has support for "
-              + "android_test. \"skylark_incremental_res\" is the same as \"skylark\" plus "
-              + "incremental resource processing. \"skylark_incremental_res\" requires a device "
-              + "with root access."
+              + "android_test."
     )
     public Mode mode;
 
     @Option(
       name = "mobile_install_aspect",
-      category = "mobile-install",
       defaultValue = "@android_test_support//tools/android/mobile_install:mobile-install.bzl",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.CHANGES_INPUTS},
@@ -172,12 +145,14 @@ public class MobileInstallCommand implements BlazeCommand {
     Options mobileInstallOptions = options.getOptions(Options.class);
     WriteAdbArgsAction.Options adbOptions = options.getOptions(WriteAdbArgsAction.Options.class);
 
-    if (mobileInstallOptions.mode == Mode.CLASSIC) {
-      // Notify internal users that classic mode is deprecated. Use mobile_install_aspect as a proxy
-      // for internal vs external users.
-      if (!mobileInstallOptions.mobileInstallAspect.startsWith("@")) {
-        env.getReporter().handle(Event.warn(
-            "mobile-install --mode=classic is deprecated. This option will go away soon."));
+    if (mobileInstallOptions.mode == Mode.CLASSIC
+        || mobileInstallOptions.mode == Mode.CLASSIC_INTERNAL_TEST_DO_NOT_USE) {
+      // Notify internal users that classic mode is no longer supported.
+      if (mobileInstallOptions.mode == Mode.CLASSIC
+          && !mobileInstallOptions.mobileInstallAspect.startsWith("@")) {
+        env.getReporter().handle(Event.error(
+            "mobile-install --mode=classic is no longer supported"));
+        return BlazeCommandResult.exitCode(ExitCode.COMMAND_LINE_ERROR);
       }
       if (adbOptions.start == StartType.WARM && !mobileInstallOptions.incremental) {
         env.getReporter().handle(Event.warn(
@@ -240,8 +215,11 @@ public class MobileInstallCommand implements BlazeCommand {
 
     List<String> cmdLine = new ArrayList<>();
     // TODO(bazel-team): Get the executable path from the filesToRun provider from the aspect.
+    BuildConfiguration configuration =
+        env.getSkyframeExecutor()
+            .getConfiguration(env.getReporter(), targetToRun.getConfigurationKey());
     cmdLine.add(
-        targetToRun.getConfiguration().getBinFragment().getPathString()
+        configuration.getBinFragment().getPathString()
             + "/"
             + targetToRun.getLabel().toPathFragment().getPathString()
             + "_mi/launcher");
@@ -323,7 +301,7 @@ public class MobileInstallCommand implements BlazeCommand {
   public void editOptions(OptionsParser optionsParser) {
     Options options = optionsParser.getOptions(Options.class);
     try {
-      if (options.mode == Mode.CLASSIC) {
+      if (options.mode == Mode.CLASSIC || options.mode == Mode.CLASSIC_INTERNAL_TEST_DO_NOT_USE) {
         String outputGroup =
             options.splitApks
                 ? "mobile_install_split" + INTERNAL_SUFFIX
@@ -339,7 +317,7 @@ public class MobileInstallCommand implements BlazeCommand {
             PriorityCategory.COMMAND_LINE,
             "Options required by the skylark implementation of mobile-install command",
             ImmutableList.of(
-                "--aspects=" + options.mobileInstallAspect + "%" + options.mode.getAspectName(),
+                "--aspects=" + options.mobileInstallAspect + "%MIASPECT",
                 "--output_groups=android_incremental_deploy_info",
                 "--output_groups=mobile_install" + INTERNAL_SUFFIX,
                 "--output_groups=mobile_install_launcher" + INTERNAL_SUFFIX));

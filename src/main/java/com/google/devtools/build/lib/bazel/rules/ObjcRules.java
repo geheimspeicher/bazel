@@ -16,7 +16,7 @@ package com.google.devtools.build.lib.bazel.rules;
 import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.Builder;
+import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSet;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
@@ -32,7 +32,6 @@ import com.google.devtools.build.lib.rules.objc.AppleBinaryRule;
 import com.google.devtools.build.lib.rules.objc.AppleSkylarkCommon;
 import com.google.devtools.build.lib.rules.objc.AppleStaticLibraryRule;
 import com.google.devtools.build.lib.rules.objc.AppleStubBinaryRule;
-import com.google.devtools.build.lib.rules.objc.IosDeviceRule;
 import com.google.devtools.build.lib.rules.objc.J2ObjcCommandLineOptions;
 import com.google.devtools.build.lib.rules.objc.J2ObjcConfiguration;
 import com.google.devtools.build.lib.rules.objc.ObjcBuildInfoFactory;
@@ -46,6 +45,7 @@ import com.google.devtools.build.lib.rules.objc.ObjcLibraryRule;
 import com.google.devtools.build.lib.rules.objc.ObjcProtoAspect;
 import com.google.devtools.build.lib.rules.objc.ObjcProtoLibraryRule;
 import com.google.devtools.build.lib.rules.objc.ObjcRuleClasses;
+import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleBootstrap;
 
 /**
  * Rules for Objective-C support in Bazel.
@@ -58,7 +58,7 @@ public class ObjcRules implements RuleSet {
   }
 
   @Override
-  public void init(Builder builder) {
+  public void init(ConfiguredRuleClassProvider.Builder builder) {
     String toolsRepository = checkNotNull(builder.getToolsRepository());
 
     // objc_proto_library should go into a separate RuleSet!
@@ -66,8 +66,6 @@ public class ObjcRules implements RuleSet {
     ObjcProtoAspect objcProtoAspect = new ObjcProtoAspect();
 
     builder.addBuildInfoFactory(new ObjcBuildInfoFactory());
-    builder.addSkylarkAccessibleTopLevels(
-        "apple_common", new AppleSkylarkCommon(objcProtoAspect));
 
     builder.addConfig(ObjcCommandLineOptions.class, new ObjcConfigurationLoader());
     builder.addConfig(AppleCommandLineOptions.class, new AppleConfiguration.Loader());
@@ -83,7 +81,6 @@ public class ObjcRules implements RuleSet {
 
     builder.addRuleDefinition(new AppleCcToolchainRule());
     builder.addRuleDefinition(new AppleToolchain.RequiresXcodeConfigRule(toolsRepository));
-    builder.addRuleDefinition(new IosDeviceRule());
     builder.addRuleDefinition(new ObjcBundleRule());
     builder.addRuleDefinition(new ObjcBundleLibraryRule());
     builder.addRuleDefinition(new ObjcFrameworkRule());
@@ -107,6 +104,8 @@ public class ObjcRules implements RuleSet {
     builder.addRuleDefinition(new XcodeConfigRule());
     builder.addRuleDefinition(new XcodeConfigAliasRule());
     builder.addRuleDefinition(new XcodeVersionRule());
+
+    builder.addSkylarkBootstrap(new AppleBootstrap(new AppleSkylarkCommon(objcProtoAspect)));
   }
 
   @Override

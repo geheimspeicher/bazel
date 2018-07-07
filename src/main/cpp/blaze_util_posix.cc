@@ -13,6 +13,8 @@
 // limitations under the License.
 
 #define _WITH_DPRINTF
+#include "src/main/cpp/blaze_util_platform.h"
+
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -36,20 +38,21 @@
 #include <cinttypes>
 
 #include "src/main/cpp/blaze_util.h"
-#include "src/main/cpp/blaze_util_platform.h"
 #include "src/main/cpp/global_variables.h"
 #include "src/main/cpp/startup_options.h"
 #include "src/main/cpp/util/errors.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/file.h"
+#include "src/main/cpp/util/logging.h"
 #include "src/main/cpp/util/md5.h"
 #include "src/main/cpp/util/numbers.h"
+#include "src/main/cpp/util/path.h"
+#include "src/main/cpp/util/path_platform.h"
 
 namespace blaze {
 
-using blaze_util::die;
-using blaze_util::pdie;
 using blaze_exit_code::INTERNAL_ERROR;
+using blaze_util::GetLastErrorString;
 
 using std::string;
 using std::vector;
@@ -139,14 +142,6 @@ string GetProcessIdAsString() {
 
 string GetHomeDir() { return GetEnv("HOME"); }
 
-string FindSystemWideBlazerc() {
-  string path = "/etc/bazel.bazelrc";
-  if (blaze_util::CanReadFile(path)) {
-    return path;
-  }
-  return "";
-}
-
 string GetJavaBinaryUnderJavabase() { return "bin/java"; }
 
 // NB: execve() requires pointers to non-const char arrays but .c_str() returns
@@ -165,26 +160,13 @@ const char** ConvertStringVectorToArgv(const vector<string>& args) {
   return argv;
 }
 
-void ExecuteProgram(const string &exe, const vector<string> &args_vector) {
-  if (VerboseLogging()) {
-    string dbg;
-    for (const auto &s : args_vector) {
-      dbg.append(s);
-      dbg.append(" ");
-    }
-
-    string cwd = blaze_util::GetCwd();
-    fprintf(stderr, "Invoking binary %s in %s:\n  %s\n", exe.c_str(),
-            cwd.c_str(), dbg.c_str());
-  }
+void ExecuteProgram(const string& exe, const vector<string>& args_vector) {
+  BAZEL_LOG(INFO) << "Invoking binary " << exe << " in "
+                  << blaze_util::GetCwd();
 
   const char** argv = ConvertStringVectorToArgv(args_vector);
-  execv(exe.c_str(), const_cast<char **>(argv));
+  execv(exe.c_str(), const_cast<char**>(argv));
 }
-
-std::string ConvertPath(const std::string &path) { return path; }
-
-std::string PathAsJvmFlag(const std::string& path) { return path; }
 
 const char kListSeparator = ':';
 
@@ -197,9 +179,9 @@ bool SymlinkDirectories(const string &target, const string &link) {
 // change cwd, though.
 static void Daemonize(const char* daemon_output,
                       const bool daemon_output_append) {
-  // Don't call die() or exit() in this function; we're already in a
-  // child process so it won't work as expected.  Just don't do
-  // anything that can possibly fail. :)
+  // Don't call BAZEL_DIE or exit() in this function; we're already in a child
+  // process so it won't work as expected.  Just don't do anything that can
+  // possibly fail. :)
 
   signal(SIGHUP, SIG_IGN);
   if (fork() > 0) {
@@ -341,6 +323,7 @@ void WriteSystemSpecificProcessIdentifier(
 // localized here.
 int ExecuteDaemon(const string& exe,
                   const std::vector<string>& args_vector,
+                  const std::map<string, EnvVarValue>& env,
                   const string& daemon_output,
                   const bool daemon_output_append,
                   const string& server_dir,
@@ -348,7 +331,8 @@ int ExecuteDaemon(const string& exe,
   int fds[2];
 
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "socket creation failed");
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "socket creation failed: " << GetLastErrorString();
   }
 
   const char* daemon_output_chars = daemon_output.c_str();
@@ -357,7 +341,8 @@ int ExecuteDaemon(const string& exe,
 
   int child = fork();
   if (child == -1) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "fork() failed");
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "fork() failed: " << GetLastErrorString();
     return -1;
   } else if (child > 0) {
     // Parent process (i.e. the client)
@@ -369,7 +354,8 @@ int ExecuteDaemon(const string& exe,
                         "cannot read server PID from server");
     string pid_file = blaze_util::JoinPath(server_dir, kServerPidFile);
     if (!blaze_util::WriteFile(ToString(server_pid), pid_file)) {
-      pdie(blaze_exit_code::INTERNAL_ERROR, "cannot write PID file");
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "cannot write PID file: " << GetLastErrorString();
       return -1;
     }
 
@@ -385,77 +371,27 @@ int ExecuteDaemon(const string& exe,
     // before ExecuteDaemon() to understand why.
     close(fds[0]);  // ...child keeps the other.
 
-    Daemonize(daemon_output_chars, daemon_output_append);
+    {
+      WithEnvVars env_obj(env);
+      Daemonize(daemon_output_chars, daemon_output_append);
+      pid_t server_pid = getpid();
+      WriteToFdWithRetryEintr(fds[1], &server_pid, sizeof server_pid,
+                              "cannot communicate server PID to client");
+      // We wait until the client writes the PID file so that there is no race
+      // condition; the server expects the PID file to already be there so that
+      // it can read it and know its own PID (see the ctor GrpcServerImpl) and
+      // so that it can kill itself if the PID file is deleted (see
+      // GrpcServerImpl.PidFileWatcherThread)
+      char dummy;
+      ReadFromFdWithRetryEintr(
+          fds[1], &dummy, 1,
+          "cannot get PID file write acknowledgement from client");
 
-    pid_t server_pid = getpid();
-    WriteToFdWithRetryEintr(fds[1], &server_pid, sizeof server_pid,
-                            "cannot communicate server PID to client");
-    // We wait until the client writes the PID file so that there is no race
-    // condition; the server expects the PID file to already be there so that
-    // it can read it and know its own PID (see the ctor GrpcServerImpl) and so
-    // that it can kill itself if the PID file is deleted (see
-    // GrpcServerImpl.PidFileWatcherThread)
-    char dummy;
-    ReadFromFdWithRetryEintr(
-        fds[1], &dummy, 1,
-        "cannot get PID file write acknowledgement from client");
-
-    execv(exe_chars, const_cast<char**>(argv));
-    DieAfterFork("Cannot execute daemon");
-    return -1;
-  }
-}
-
-static string RunProgram(const string& exe,
-                         const std::vector<string>& args_vector) {
-  int fds[2];
-  if (pipe(fds)) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "pipe creation failed");
-  }
-  int recv_socket = fds[0];
-  int send_socket = fds[1];
-
-  const char* exe_chars = exe.c_str();
-  const char** argv = ConvertStringVectorToArgv(args_vector);
-
-  int child = fork();
-  if (child == -1) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "fork() failed");
-  } else if (child > 0) {  // we're the parent
-    close(send_socket);    // parent keeps only the reading side
-    string result;
-    bool success = blaze_util::ReadFrom(recv_socket, &result);
-    close(recv_socket);
-    if (!success) {
-      pdie(blaze_exit_code::INTERNAL_ERROR, "Cannot read subprocess output");
+      execv(exe_chars, const_cast<char**>(argv));
+      DieAfterFork("Cannot execute daemon");
+      return -1;
     }
-    return result;
-  } else {                 // We're the child
-    // NB: There should only be system calls in this branch. See the comment
-    // before ExecuteDaemon() to understand why.
-
-    close(recv_socket);    // child keeps only the writing side
-    // Redirect output to the writing side of the dup.
-    dup2(send_socket, STDOUT_FILENO);
-    dup2(send_socket, STDERR_FILENO);
-    // Execute the binary
-    execv(exe_chars, const_cast<char**>(argv));
-    DieAfterFork("Failed to run program");
   }
-  return string("");  //  We cannot reach here, just placate the compiler.
-}
-
-string GetJvmVersion(const string& java_exe) {
-  vector<string> args;
-  args.push_back("java");
-  args.push_back("-version");
-
-  string version_string = RunProgram(java_exe, args);
-  return ReadJvmVersion(version_string);
-}
-
-bool CompareAbsolutePaths(const string& a, const string& b) {
-  return a == b;
 }
 
 string GetHashedBaseDir(const string& root, const string& hashable) {
@@ -471,37 +407,40 @@ void CreateSecureOutputRoot(const string& path) {
   struct stat fileinfo = {};
 
   if (!blaze_util::MakeDirectories(root, 0755)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "mkdir('%s')", root);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "mkdir('" << root << "'): " << GetLastErrorString();
   }
 
   // The path already exists.
   // Check ownership and mode, and verify that it is a directory.
 
   if (lstat(root, &fileinfo) < 0) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "lstat('%s')", root);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "lstat('" << root << "'): " << GetLastErrorString();
   }
 
   if (fileinfo.st_uid != geteuid()) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "'%s' is not owned by me",
-        root);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "'" << root << "' is not owned by me";
   }
 
   if ((fileinfo.st_mode & 022) != 0) {
     int new_mode = fileinfo.st_mode & (~022);
     if (chmod(root, new_mode) < 0) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "'%s' has mode %o, chmod to %o failed", root,
-          fileinfo.st_mode & 07777, new_mode);
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "'" << root << "' has mode " << (fileinfo.st_mode & 07777)
+          << ", chmod to " << new_mode << " failed";
     }
   }
 
   if (stat(root, &fileinfo) < 0) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "stat('%s')", root);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "stat('" << root << "'): " << GetLastErrorString();
   }
 
   if (!S_ISDIR(fileinfo.st_mode)) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "'%s' is not a directory",
-        root);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "'" << root << "' is not a directory";
   }
 
   ExcludePathFromBackup(root);
@@ -510,6 +449,10 @@ void CreateSecureOutputRoot(const string& path) {
 string GetEnv(const string& name) {
   char* result = getenv(name.c_str());
   return result != NULL ? string(result) : "";
+}
+
+bool ExistsEnv(const string& name) {
+  return getenv(name.c_str()) != NULL;
 }
 
 void SetEnv(const string& name, const string& value) {
@@ -576,8 +519,8 @@ static int setlk(int fd, struct flock *lock) {
   if (fcntl(fd, F_OFD_SETLK, lock) == 0) return 0;
   if (errno != EINVAL) {
     if (errno != EACCES && errno != EAGAIN) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "unexpected result from F_OFD_SETLK");
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "unexpected result from F_OFD_SETLK: " << GetLastErrorString();
     }
     return -1;
   }
@@ -586,8 +529,8 @@ static int setlk(int fd, struct flock *lock) {
 #endif
   if (fcntl(fd, F_SETLK, lock) == 0) return 0;
   if (errno != EACCES && errno != EAGAIN) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "unexpected result from F_SETLK");
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "unexpected result from F_SETLK: " << GetLastErrorString();
   }
   return -1;
 }
@@ -598,15 +541,16 @@ uint64_t AcquireLock(const string& output_base, bool batch_mode, bool block,
   int lockfd = open(lockfile.c_str(), O_CREAT|O_RDWR, 0644);
 
   if (lockfd < 0) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "cannot open lockfile '%s' for writing", lockfile.c_str());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "cannot open lockfile '" << lockfile
+        << "' for writing: " << GetLastErrorString();
   }
 
   // Keep server from inheriting a useless fd if we are not in batch mode
   if (!batch_mode) {
     if (fcntl(lockfd, F_SETFD, FD_CLOEXEC) == -1) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "fcntl(F_SETFD) failed for lockfile");
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "fcntl(F_SETFD) failed for lockfile: " << GetLastErrorString();
     }
   }
 
@@ -635,24 +579,24 @@ uint64_t AcquireLock(const string& output_base, bool batch_mode, bool block,
     string buffer(4096, 0);
     ssize_t r = pread(lockfd, &buffer[0], buffer.size(), 0);
     if (r < 0) {
-      fprintf(stderr, "warning: pread() lock file: %s\n", strerror(errno));
+      BAZEL_LOG(WARNING) << "pread() lock file: " << strerror(errno);
       r = 0;
     }
     buffer.resize(r);
     if (owner != buffer) {
       // Each time we learn a new lock owner, print it out.
       owner = buffer;
-      fprintf(stderr, "Another command holds the client lock: \n%s\n",
-              owner.c_str());
+      BAZEL_LOG(USER) << "Another command holds the client lock: \n" << owner;
       if (block) {
-        fprintf(stderr, "Waiting for it to complete...\n");
+        BAZEL_LOG(USER) << "Waiting for it to complete...";
         fflush(stderr);
       }
     }
 
     if (!block) {
-      die(blaze_exit_code::BAD_ARGV,
-          "Exiting because the lock is held and --noblock_for_lock was given.");
+      BAZEL_DIE(blaze_exit_code::BAD_ARGV)
+          << "Exiting because the lock is held and --noblock_for_lock was "
+             "given.";
     }
 
     TrySleep(500);
@@ -693,10 +637,9 @@ bool KillServerProcess(int pid, const string& output_base) {
   killpg(pid, SIGKILL);
   if (!AwaitServerProcessTermination(pid, output_base,
                                      kPostKillGracePeriodSeconds)) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "Attempted to kill stale server process (pid=%d) using "
-        "SIGKILL, but it did not die in a timely fashion.",
-        pid);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Attempted to kill stale server process (pid=" << pid
+        << ") using SIGKILL, but it did not die in a timely fashion.";
   }
   return true;
 }
@@ -716,8 +659,9 @@ string GetUserName() {
   errno = 0;
   passwd *pwent = getpwuid(getuid());  // NOLINT (single-threaded)
   if (pwent == NULL || pwent->pw_name == NULL) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "$USER is not set, and unable to look up name of current user");
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "$USER is not set, and unable to look up name of current user: "
+        << GetLastErrorString();
   }
   return pwent->pw_name;
 }
@@ -776,8 +720,8 @@ int GetTerminalColumns() {
 static bool UnlimitResource(const int resource) {
   struct rlimit rl;
   if (getrlimit(resource, &rl) == -1) {
-    fprintf(stderr, "Warning: failed to get resource limit %d: %s\n", resource,
-            strerror(errno));
+    BAZEL_LOG(WARNING) << "failed to get resource limit " << resource << ": "
+                       << strerror(errno);
     return false;
   }
 
@@ -802,9 +746,9 @@ static bool UnlimitResource(const int resource) {
   }
 
   if (setrlimit(resource, &rl) == -1) {
-    fprintf(stderr, "Warning: failed to raise resource limit %d to %" PRIdMAX
-            ": %s\n", resource, static_cast<intmax_t>(rl.rlim_cur),
-            strerror(errno));
+    BAZEL_LOG(WARNING) << "failed to raise resource limit " << resource
+                       << " to " << static_cast<intmax_t>(rl.rlim_cur) << ": "
+                       << strerror(errno);
     return false;
   }
 

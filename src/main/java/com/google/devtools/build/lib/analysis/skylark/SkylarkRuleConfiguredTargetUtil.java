@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ActionsProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.DefaultInfo;
@@ -32,9 +33,13 @@ import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.packages.AdvertisedProviderSet;
 import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
+import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
+import com.google.devtools.build.lib.packages.StructProvider;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.BaseFunction;
@@ -69,14 +74,14 @@ public final class SkylarkRuleConfiguredTargetUtil {
   private static final ImmutableSet<String> DEFAULT_PROVIDER_FIELDS =
       ImmutableSet.of("files", "runfiles", "data_runfiles", "default_runfiles", "executable");
 
-  /**
-   * Create a Rule Configured Target from the ruleContext and the ruleImplementation.
-   */
+  /** Create a Rule Configured Target from the ruleContext and the ruleImplementation. */
   public static ConfiguredTarget buildRule(
       RuleContext ruleContext,
+      AdvertisedProviderSet advertisedProviders,
       BaseFunction ruleImplementation,
+      Location location,
       SkylarkSemantics skylarkSemantics)
-      throws InterruptedException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     String expectFailure = ruleContext.attributes().get("expect_failure", Type.STRING);
     SkylarkRuleContext skylarkRuleContext = null;
     try (Mutability mutability = Mutability.create("configured target")) {
@@ -88,6 +93,7 @@ public final class SkylarkRuleConfiguredTargetUtil {
               .setEventHandler(ruleContext.getAnalysisEnvironment().getEventHandler())
               .build(); // NB: loading phase functions are not available: this is analysis already,
       // so we do *not* setLoadingPhase().
+
       Object target =
           ruleImplementation.call(
               /*args=*/ ImmutableList.of(skylarkRuleContext),
@@ -109,7 +115,8 @@ public final class SkylarkRuleConfiguredTargetUtil {
         return null;
       }
       ConfiguredTarget configuredTarget = createTarget(skylarkRuleContext, target);
-      SkylarkProviderValidationUtil.checkOrphanArtifacts(ruleContext);
+      SkylarkProviderValidationUtil.validateArtifacts(ruleContext);
+      checkDeclaredProviders(configuredTarget, advertisedProviders, location);
       return configuredTarget;
     } catch (EvalException e) {
       addRuleToStackTrace(e, ruleContext.getRule(), ruleImplementation);
@@ -124,6 +131,20 @@ public final class SkylarkRuleConfiguredTargetUtil {
     } finally {
       if (skylarkRuleContext != null) {
         skylarkRuleContext.nullify();
+      }
+    }
+  }
+
+  private static void checkDeclaredProviders(
+      ConfiguredTarget configuredTarget, AdvertisedProviderSet advertisedProviders, Location loc)
+      throws EvalException {
+    for (SkylarkProviderIdentifier providerId : advertisedProviders.getSkylarkProviders()) {
+      if (configuredTarget.get(providerId) == null) {
+        throw new EvalException(
+            loc,
+            String.format(
+                "rule advertised the '%s' provider, but this provider was not among those returned",
+                providerId.toString()));
       }
     }
   }
@@ -152,7 +173,7 @@ public final class SkylarkRuleConfiguredTargetUtil {
   }
 
   private static ConfiguredTarget createTarget(SkylarkRuleContext context, Object target)
-      throws EvalException {
+      throws EvalException, RuleErrorException, ActionConflictException {
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(
         context.getRuleContext());
     // Set the default files to build.
@@ -268,7 +289,7 @@ public final class SkylarkRuleConfiguredTargetUtil {
       SkylarkRuleContext context, RuleConfiguredTargetBuilder builder, Object target, Location loc)
       throws EvalException {
 
-    Info oldStyleProviders = NativeProvider.STRUCT.createEmpty(loc);
+    Info oldStyleProviders = StructProvider.STRUCT.createEmpty(loc);
     ArrayList<Info> declaredProviders = new ArrayList<>();
 
     if (target instanceof Info) {
@@ -276,7 +297,7 @@ public final class SkylarkRuleConfiguredTargetUtil {
       Info struct = (Info) target;
       // Use the creation location of this struct as a better reference in error messages
       loc = struct.getCreationLoc();
-      if (struct.getProvider().getKey().equals(NativeProvider.STRUCT.getKey())) {
+      if (struct.getProvider().getKey().equals(StructProvider.STRUCT.getKey())) {
         // Old-style struct, but it may contain declared providers
         oldStyleProviders = struct;
 
@@ -376,32 +397,51 @@ public final class SkylarkRuleConfiguredTargetUtil {
 
     Location loc = provider.getCreationLoc();
 
-    for (String field : provider.getFieldNames()) {
-      if (field.equals("files")) {
-        files = cast("files", provider, SkylarkNestedSet.class, Artifact.class, loc);
-      } else if (field.equals("runfiles")) {
-        statelessRunfiles = cast("runfiles", provider, Runfiles.class, loc);
-      } else if (field.equals("data_runfiles")) {
-        dataRunfiles = cast("data_runfiles", provider, Runfiles.class, loc);
-      } else if (field.equals("default_runfiles")) {
-        defaultRunfiles = cast("default_runfiles", provider, Runfiles.class, loc);
-      } else if (field.equals("executable")) {
-        executable = cast("executable", provider, Artifact.class, loc);
-        if (!executable.getArtifactOwner().equals(context.getRuleContext().getOwner())) {
-          throw new EvalException(
-              loc,
-              String.format(
-                  "'executable' provided by an executable rule '%s' should be created "
-                      + "by the same rule.",
-                  context.getRuleContext().getRule().getRuleClass()));
+    if (provider
+        .getProvider()
+        .getKey()
+        .equals(DefaultInfo.PROVIDER.getKey())) {
+      DefaultInfo defaultInfo = (DefaultInfo) provider;
+
+      files = defaultInfo.getFiles();
+      statelessRunfiles = defaultInfo.getStatelessRunfiles();
+      dataRunfiles = defaultInfo.getDataRunfiles();
+      defaultRunfiles = defaultInfo.getDefaultRunfiles();
+      executable = defaultInfo.getExecutable();
+
+    } else {
+      // Rule implementations aren't reqiured to return default-info fields via a DefaultInfo
+      // provider. They can return them as fields on the returned struct. For example,
+      // 'return struct(executable = foo)' instead of 'return DefaultInfo(executable = foo)'.
+      // TODO(cparsons): Look into deprecating this option.
+      for (String field : provider.getFieldNames()) {
+        if (field.equals("files")) {
+          files = cast("files", provider, SkylarkNestedSet.class, Artifact.class, loc);
+        } else if (field.equals("runfiles")) {
+          statelessRunfiles = cast("runfiles", provider, Runfiles.class, loc);
+        } else if (field.equals("data_runfiles")) {
+          dataRunfiles = cast("data_runfiles", provider, Runfiles.class, loc);
+        } else if (field.equals("default_runfiles")) {
+          defaultRunfiles = cast("default_runfiles", provider, Runfiles.class, loc);
+        } else if (field.equals("executable") && provider.getValue("executable") != null) {
+          executable = cast("executable", provider, Artifact.class, loc);
         }
-      } else if (provider
-          .getProvider()
-          .getKey()
-          .equals(DefaultInfo.PROVIDER.getKey())) {
-        // Custom fields are not allowed for default providers
-        throw new EvalException(loc, "Invalid field for default provider: " + field);
       }
+
+      if ((statelessRunfiles != null) && (dataRunfiles != null || defaultRunfiles != null)) {
+        throw new EvalException(loc, "Cannot specify the provider 'runfiles' "
+            + "together with 'data_runfiles' or 'default_runfiles'");
+      }
+    }
+
+    if (executable != null
+        && !executable.getArtifactOwner().equals(context.getRuleContext().getOwner())) {
+      throw new EvalException(
+          loc,
+          String.format(
+              "'executable' provided by an executable rule '%s' should be created "
+                  + "by the same rule.",
+              context.getRuleContext().getRule().getRuleClass()));
     }
 
     if (executable != null && context.isExecutable() && context.isDefaultExecutableCreated()) {
@@ -464,11 +504,6 @@ public final class SkylarkRuleConfiguredTargetUtil {
     if (files != null) {
       // If we specify files_to_build we don't have the executable in it by default.
       builder.setFilesToBuild(files.getSet(Artifact.class));
-    }
-
-    if ((statelessRunfiles != null) && (dataRunfiles != null || defaultRunfiles != null)) {
-      throw new EvalException(loc, "Cannot specify the provider 'runfiles' "
-          + "together with 'data_runfiles' or 'default_runfiles'");
     }
 
     if (statelessRunfiles == null && dataRunfiles == null && defaultRunfiles == null) {

@@ -25,14 +25,14 @@ import java.io.OutputStream;
 
 /** This class implements the FileSystem interface using direct calls to the UNIX filesystem. */
 @ThreadSafe
-abstract class AbstractFileSystem extends FileSystem {
+public abstract class AbstractFileSystem extends FileSystem {
 
   protected static final String ERR_PERMISSION_DENIED = " (Permission denied)";
   protected static final Profiler profiler = Profiler.instance();
 
   public AbstractFileSystem() {}
 
-  public AbstractFileSystem(HashFunction digestFunction) {
+  public AbstractFileSystem(DigestHashFunction digestFunction) {
     super(digestFunction);
   }
 

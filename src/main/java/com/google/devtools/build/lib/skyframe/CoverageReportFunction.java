@@ -15,12 +15,14 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Preconditions;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
+import com.google.devtools.build.lib.actions.Actions;
+import com.google.devtools.build.lib.actions.Actions.GeneratingActions;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -30,12 +32,9 @@ import com.google.devtools.build.skyframe.SkyValue;
  */
 public class CoverageReportFunction implements SkyFunction {
   private final ActionKeyContext actionKeyContext;
-  private final Supplier<Boolean> removeActionsAfterEvaluation;
 
-  CoverageReportFunction(
-      ActionKeyContext actionKeyContext, Supplier<Boolean> removeActionsAfterEvaluation) {
+  CoverageReportFunction(ActionKeyContext actionKeyContext) {
     this.actionKeyContext = actionKeyContext;
-    this.removeActionsAfterEvaluation = Preconditions.checkNotNull(removeActionsAfterEvaluation);
   }
 
   @Override
@@ -57,7 +56,14 @@ public class CoverageReportFunction implements SkyFunction {
       outputs.addAll(action.getOutputs());
     }
 
-    return new CoverageReportValue(actionKeyContext, actions, removeActionsAfterEvaluation.get());
+    GeneratingActions generatingActions;
+    try {
+      generatingActions =
+          Actions.filterSharedActionsAndThrowActionConflict(actionKeyContext, actions);
+    } catch (ActionConflictException e) {
+      throw new IllegalStateException("Action conflicts not expected in coverage: " + skyKey, e);
+    }
+    return new CoverageReportValue(generatingActions);
   }
 
   @Override

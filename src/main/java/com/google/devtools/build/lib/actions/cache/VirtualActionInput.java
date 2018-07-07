@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.actions.cache;
 
 import com.google.common.base.Preconditions;
 import com.google.devtools.build.lib.actions.ActionInput;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.protobuf.ByteString;
 import java.io.IOException;
@@ -36,6 +37,15 @@ public interface VirtualActionInput extends ActionInput {
    * file is internally represented as a {@link ByteString}.
    */
   ByteString getBytes() throws IOException;
+
+  /**
+   * Returns the metadata for this input if available. Null otherwise.
+   *
+   * @throws IOException
+   */
+  default FileArtifactValue getMetadata() throws IOException {
+    return null;
+  }
 
   /**
    * In some cases, we want empty files in the runfiles tree that have no corresponding artifact. We

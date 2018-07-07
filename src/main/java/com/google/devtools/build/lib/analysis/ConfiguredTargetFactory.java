@@ -24,11 +24,11 @@ import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.FailAction;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
-import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
-import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.configuredtargets.EnvironmentGroupConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.FilesetOutputConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.InputFileConfiguredTarget;
@@ -64,18 +64,16 @@ import com.google.devtools.build.lib.packages.RuleVisibility;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.profiler.memory.CurrentRuleTracker;
-import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
-import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndTarget;
+import com.google.devtools.build.lib.skyframe.AspectFunction.AspectFunctionException;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.SkyFunction;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -89,9 +87,12 @@ public final class ConfiguredTargetFactory {
   // in order to be accessible from the .view.skyframe package.
 
   private final ConfiguredRuleClassProvider ruleClassProvider;
+  private final BuildOptions defaultBuildOptions;
 
-  public ConfiguredTargetFactory(ConfiguredRuleClassProvider ruleClassProvider) {
+  public ConfiguredTargetFactory(
+      ConfiguredRuleClassProvider ruleClassProvider, BuildOptions defaultBuildOptions) {
     this.ruleClassProvider = ruleClassProvider;
+    this.defaultBuildOptions = defaultBuildOptions;
   }
 
   /**
@@ -99,7 +100,7 @@ public final class ConfiguredTargetFactory {
    * to the {@code AnalysisEnvironment}.
    */
   private NestedSet<PackageGroupContents> convertVisibility(
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndTarget> prerequisiteMap,
+      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> prerequisiteMap,
       EventHandler reporter,
       Target target,
       BuildConfiguration packageGroupConfiguration) {
@@ -147,12 +148,12 @@ public final class ConfiguredTargetFactory {
   }
 
   private TransitiveInfoCollection findPrerequisite(
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndTarget> prerequisiteMap,
+      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> prerequisiteMap,
       Label label,
       BuildConfiguration config) {
-    for (ConfiguredTargetAndTarget prerequisite : prerequisiteMap.get(null)) {
+    for (ConfiguredTargetAndData prerequisite : prerequisiteMap.get(null)) {
       if (prerequisite.getTarget().getLabel().equals(label)
-          && (prerequisite.getConfiguredTarget().getConfiguration() == config)) {
+          && (prerequisite.getConfiguration() == config)) {
         return prerequisite.getConfiguredTarget();
       }
     }
@@ -163,20 +164,13 @@ public final class ConfiguredTargetFactory {
    * Returns the output artifact for the given file, or null if Skyframe deps are missing.
    */
   private Artifact getOutputArtifact(AnalysisEnvironment analysisEnvironment, OutputFile outputFile,
-      BuildConfiguration configuration, boolean isFileset, ArtifactFactory artifactFactory)
-      throws InterruptedException {
+      BuildConfiguration configuration, boolean isFileset, ArtifactFactory artifactFactory) {
     Rule rule = outputFile.getAssociatedRule();
     ArtifactRoot root =
         rule.hasBinaryOutput()
             ? configuration.getBinDirectory(rule.getRepository())
             : configuration.getGenfilesDirectory(rule.getRepository());
-    ArtifactOwner owner =
-        ConfiguredTargetKey.of(
-            rule.getLabel(),
-            getArtifactOwnerConfiguration(analysisEnvironment.getSkyframeEnv(), configuration));
-    if (analysisEnvironment.getSkyframeEnv().valuesMissing()) {
-      return null;
-    }
+    ArtifactOwner owner = ConfiguredTargetKey.of(rule.getLabel(), configuration);
     PathFragment rootRelativePath =
         outputFile.getLabel().getPackageIdentifier().getSourceRoot().getRelative(
             outputFile.getLabel().getName());
@@ -186,34 +180,6 @@ public final class ConfiguredTargetFactory {
     // The associated rule should have created the artifact.
     Preconditions.checkNotNull(result, "no artifact for %s", rootRelativePath);
     return result;
-  }
-
-  /**
-   * Returns the configuration's artifact owner (which may be null). Also returns null if the
-   * owning configuration isn't yet available from Skyframe.
-   */
-  public static BuildConfiguration getArtifactOwnerConfiguration(SkyFunction.Environment env,
-      BuildConfiguration fromConfig) throws InterruptedException {
-    if (fromConfig == null) {
-      return null;
-    }
-    PatchTransition ownerTransition = fromConfig.getArtifactOwnerTransition();
-    if (ownerTransition == null) {
-      return fromConfig;
-    }
-    try {
-      BuildConfigurationValue ownerConfig = (BuildConfigurationValue) env.getValueOrThrow(
-          BuildConfigurationValue.key(
-              fromConfig.fragmentClasses(), ownerTransition.apply(fromConfig.getOptions())),
-          InvalidConfigurationException.class);
-      return ownerConfig == null ? null : ownerConfig.getConfiguration();
-    } catch (InvalidConfigurationException e) {
-      // We don't expect to have to handle an invalid configuration because in practice the owning
-      // configuration should already exist. For example, the main user of this feature, the LIPO
-      // context collector, expects the owning configuration to be the top-level target config.
-      throw new IllegalStateException(
-          "this method should only return a pre-existing valid configuration");
-    }
   }
 
   /**
@@ -230,10 +196,10 @@ public final class ConfiguredTargetFactory {
       Target target,
       BuildConfiguration config,
       BuildConfiguration hostConfig,
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndTarget> prerequisiteMap,
+      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> prerequisiteMap,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions,
       @Nullable ToolchainContext toolchainContext)
-      throws InterruptedException {
+      throws InterruptedException, ActionConflictException {
     if (target instanceof Rule) {
       try {
         CurrentRuleTracker.beginConfiguredTarget(((Rule) target).getRuleClassObject());
@@ -280,7 +246,7 @@ public final class ConfiguredTargetFactory {
       Artifact artifact =
           artifactFactory.getSourceArtifact(
               inputFile.getExecPath(),
-              ArtifactRoot.asSourceRoot(inputFile.getPackage().getSourceRoot()),
+              inputFile.getPackage().getSourceRoot(),
               ConfiguredTargetKey.of(target.getLabel(), config));
 
       return new InputFileConfiguredTarget(targetContext, inputFile, artifact);
@@ -288,7 +254,7 @@ public final class ConfiguredTargetFactory {
       PackageGroup packageGroup = (PackageGroup) target;
       return new PackageGroupConfiguredTarget(targetContext, packageGroup);
     } else if (target instanceof EnvironmentGroup) {
-      return new EnvironmentGroupConfiguredTarget(targetContext, (EnvironmentGroup) target);
+      return new EnvironmentGroupConfiguredTarget(targetContext);
     } else {
       throw new AssertionError("Unexpected target class: " + target.getClass().getName());
     }
@@ -304,10 +270,10 @@ public final class ConfiguredTargetFactory {
       Rule rule,
       BuildConfiguration configuration,
       BuildConfiguration hostConfiguration,
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndTarget> prerequisiteMap,
+      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> prerequisiteMap,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions,
       @Nullable ToolchainContext toolchainContext)
-      throws InterruptedException {
+      throws InterruptedException, ActionConflictException {
 
     // Load the requested toolchains into the ToolchainContext.
     if (toolchainContext != null) {
@@ -322,14 +288,14 @@ public final class ConfiguredTargetFactory {
                 ImmutableList.of(),
                 configuration,
                 hostConfiguration,
-                ruleClassProvider.getLipoDataTransition(),
                 ruleClassProvider.getPrerequisiteValidator(),
                 rule.getRuleClassObject().getConfigurationFragmentPolicy())
             .setVisibility(convertVisibility(prerequisiteMap, env.getEventHandler(), rule, null))
             .setPrerequisites(prerequisiteMap)
             .setConfigConditions(configConditions)
-            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .setUniversalFragments(ruleClassProvider.getUniversalFragments())
             .setToolchainContext(toolchainContext)
+            .setConstraintSemantics(ruleClassProvider.getConstraintSemantics())
             .build();
     if (ruleContext.hasErrors()) {
       return null;
@@ -339,36 +305,41 @@ public final class ConfiguredTargetFactory {
 
     MissingFragmentPolicy missingFragmentPolicy =
         configurationFragmentPolicy.getMissingFragmentPolicy();
-    if (missingFragmentPolicy != MissingFragmentPolicy.IGNORE
-        && !configuration.hasAllFragments(
-            configurationFragmentPolicy.getRequiredConfigurationFragments())) {
-      if (missingFragmentPolicy == MissingFragmentPolicy.FAIL_ANALYSIS) {
-        ruleContext.ruleError(missingFragmentError(ruleContext, configurationFragmentPolicy));
-        return null;
-      }
-      // Otherwise missingFragmentPolicy == MissingFragmentPolicy.CREATE_FAIL_ACTIONS:
-      return createFailConfiguredTarget(ruleContext);
-    }
 
-    if (rule.getRuleClassObject().isSkylark()) {
-      // TODO(bazel-team): maybe merge with RuleConfiguredTargetBuilder?
-      return SkylarkRuleConfiguredTargetUtil.buildRule(
-          ruleContext,
-          rule.getRuleClassObject().getConfiguredTargetFunction(),
-          env.getSkylarkSemantics());
-    } else {
-      RuleClass.ConfiguredTargetFactory<ConfiguredTarget, RuleContext> factory =
-          rule.getRuleClassObject().<ConfiguredTarget, RuleContext>getConfiguredTargetFactory();
-      Preconditions.checkNotNull(factory, rule.getRuleClassObject());
-      try {
-        return factory.create(ruleContext);
-      } catch (RuleErrorException ruleErrorException) {
-        // Returning null in this method is an indication an error occurred. Exceptions are not
-        // propagated, as this would show a nasty stack trace to users, and only provide info
-        // on one specific failure with poor messaging. By returning null, the caller can
-        // inspect ruleContext for multiple errors and output thorough messaging on each.
-        return null;
+    try {
+      if (missingFragmentPolicy != MissingFragmentPolicy.IGNORE
+          && !configuration.hasAllFragments(
+              configurationFragmentPolicy.getRequiredConfigurationFragments())) {
+        if (missingFragmentPolicy == MissingFragmentPolicy.FAIL_ANALYSIS) {
+          ruleContext.ruleError(missingFragmentError(ruleContext, configurationFragmentPolicy));
+          return null;
+        }
+        // Otherwise missingFragmentPolicy == MissingFragmentPolicy.CREATE_FAIL_ACTIONS:
+        return createFailConfiguredTarget(ruleContext);
       }
+      if (rule.getRuleClassObject().isSkylark()) {
+        // TODO(bazel-team): maybe merge with RuleConfiguredTargetBuilder?
+        return SkylarkRuleConfiguredTargetUtil.buildRule(
+            ruleContext,
+            rule.getRuleClassObject().getAdvertisedProviders(),
+            rule.getRuleClassObject().getConfiguredTargetFunction(),
+            rule.getLocation(),
+            env.getSkylarkSemantics());
+      } else {
+        RuleClass.ConfiguredTargetFactory<ConfiguredTarget, RuleContext, ActionConflictException>
+            factory =
+                rule.getRuleClassObject()
+                    .<ConfiguredTarget, RuleContext, ActionConflictException>
+                        getConfiguredTargetFactory();
+        Preconditions.checkNotNull(factory, rule.getRuleClassObject());
+        return factory.create(ruleContext);
+      }
+    } catch (RuleErrorException ruleErrorException) {
+      // Returning null in this method is an indication a rule error occurred. Exceptions are not
+      // propagated, as this would show a nasty stack trace to users, and only provide info
+      // on one specific failure with poor messaging. By returning null, the caller can
+      // inspect ruleContext for multiple errors and output thorough messaging on each.
+      return null;
     }
   }
 
@@ -410,16 +381,16 @@ public final class ConfiguredTargetFactory {
    */
   public ConfiguredAspect createAspect(
       AnalysisEnvironment env,
-      ConfiguredTargetAndTarget associatedTarget,
+      ConfiguredTargetAndData associatedTarget,
       ImmutableList<Aspect> aspectPath,
       ConfiguredAspectFactory aspectFactory,
       Aspect aspect,
-      OrderedSetMultimap<Attribute, ConfiguredTargetAndTarget> prerequisiteMap,
+      OrderedSetMultimap<Attribute, ConfiguredTargetAndData> prerequisiteMap,
       ImmutableMap<Label, ConfigMatchingProvider> configConditions,
       @Nullable ToolchainContext toolchainContext,
       BuildConfiguration aspectConfiguration,
       BuildConfiguration hostConfiguration)
-      throws InterruptedException {
+      throws AspectFunctionException, InterruptedException {
 
     // Load the requested toolchains into the ToolchainContext.
     if (toolchainContext != null) {
@@ -433,7 +404,6 @@ public final class ConfiguredTargetFactory {
             aspectPath,
             aspectConfiguration,
             hostConfiguration,
-            ruleClassProvider.getLipoDataTransition(),
             ruleClassProvider.getPrerequisiteValidator(),
             aspect.getDefinition().getConfigurationFragmentPolicy());
 
@@ -447,15 +417,21 @@ public final class ConfiguredTargetFactory {
             .setPrerequisites(prerequisiteMap)
             .setAspectAttributes(aspectAttributes)
             .setConfigConditions(configConditions)
-            .setUniversalFragment(ruleClassProvider.getUniversalFragment())
+            .setUniversalFragments(ruleClassProvider.getUniversalFragments())
             .setToolchainContext(toolchainContext)
+            .setConstraintSemantics(ruleClassProvider.getConstraintSemantics())
             .build();
     if (ruleContext.hasErrors()) {
       return null;
     }
 
-    ConfiguredAspect configuredAspect =
-        aspectFactory.create(associatedTarget, ruleContext, aspect.getParameters());
+    ConfiguredAspect configuredAspect;
+    try {
+      configuredAspect =
+          aspectFactory.create(associatedTarget, ruleContext, aspect.getParameters());
+    } catch (ActionConflictException e) {
+      throw new AspectFunctionException(e);
+    }
     if (configuredAspect != null) {
       validateAdvertisedProviders(
           configuredAspect, aspect.getDefinition().getAdvertisedProviders(),
@@ -477,7 +453,7 @@ public final class ConfiguredTargetFactory {
       for (Aspect underlyingAspect : aspectPath) {
         ImmutableMap<String, Attribute> currentAttributes = underlyingAspect.getDefinition()
             .getAttributes();
-        for (Entry<String, Attribute> kv : currentAttributes.entrySet()) {
+        for (Map.Entry<String, Attribute> kv : currentAttributes.entrySet()) {
           if (!aspectAttributes.containsKey(kv.getKey())) {
             aspectAttributes.put(kv.getKey(), kv.getValue());
           }
@@ -525,7 +501,8 @@ public final class ConfiguredTargetFactory {
    * A pseudo-implementation for configured targets that creates fail actions for all declared
    * outputs, both implicit and explicit.
    */
-  private static ConfiguredTarget createFailConfiguredTarget(RuleContext ruleContext) {
+  private static ConfiguredTarget createFailConfiguredTarget(RuleContext ruleContext)
+      throws RuleErrorException, ActionConflictException {
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(ruleContext);
     if (!ruleContext.getOutputArtifacts().isEmpty()) {
       ruleContext.registerAction(new FailAction(ruleContext.getActionOwner(),

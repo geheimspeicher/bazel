@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.devtools.build.lib.remote.util.Utils.getFromFuture;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.when;
@@ -27,15 +28,19 @@ import com.google.bytestream.ByteStreamProto.WriteRequest;
 import com.google.bytestream.ByteStreamProto.WriteResponse;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.util.concurrent.ListeningScheduledExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
 import com.google.devtools.build.lib.authandtls.GoogleAuthUtils;
 import com.google.devtools.build.lib.clock.JavaClock;
-import com.google.devtools.build.lib.remote.DigestUtil.ActionKey;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
+import com.google.devtools.build.lib.remote.util.DigestUtil.ActionKey;
+import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.util.io.FileOutErr;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.build.lib.vfs.FileSystem.HashFunction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
@@ -69,8 +74,12 @@ import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.util.MutableHandlerRegistry;
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.concurrent.Executors;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -82,7 +91,7 @@ import org.mockito.stubbing.Answer;
 @RunWith(JUnit4.class)
 public class GrpcRemoteCacheTest {
 
-  private static final DigestUtil DIGEST_UTIL = new DigestUtil(HashFunction.SHA256);
+  private static final DigestUtil DIGEST_UTIL = new DigestUtil(DigestHashFunction.SHA256);
 
   private FileSystem fs;
   private Path execRoot;
@@ -91,6 +100,14 @@ public class GrpcRemoteCacheTest {
   private final MutableHandlerRegistry serviceRegistry = new MutableHandlerRegistry();
   private final String fakeServerName = "fake server for " + getClass();
   private Server fakeServer;
+  private Context withEmptyMetadata;
+  private Context prevContext;
+  private static ListeningScheduledExecutorService retryService;
+
+  @BeforeClass
+  public static void beforeEverything() {
+    retryService = MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
+  }
 
   @Before
   public final void setUp() throws Exception {
@@ -102,7 +119,7 @@ public class GrpcRemoteCacheTest {
             .build()
             .start();
     Chunker.setDefaultChunkSizeForTesting(1000); // Enough for everything to be one chunk.
-    fs = new InMemoryFileSystem(new JavaClock(), HashFunction.SHA256);
+    fs = new InMemoryFileSystem(new JavaClock(), DigestHashFunction.SHA256);
     execRoot = fs.getPath("/exec/root");
     FileSystemUtils.createDirectoryAndParents(execRoot);
     fakeFileCache = new FakeActionInputFileCache(execRoot);
@@ -112,15 +129,22 @@ public class GrpcRemoteCacheTest {
     FileSystemUtils.createDirectoryAndParents(stdout.getParentDirectory());
     FileSystemUtils.createDirectoryAndParents(stderr.getParentDirectory());
     outErr = new FileOutErr(stdout, stderr);
-    Context withEmptyMetadata =
+    withEmptyMetadata =
         TracingMetadataUtils.contextWithMetadata(
             "none", "none", DIGEST_UTIL.asActionKey(Digest.getDefaultInstance()));
-    withEmptyMetadata.attach();
+    prevContext = withEmptyMetadata.attach();
   }
 
   @After
   public void tearDown() throws Exception {
+    withEmptyMetadata.detach(prevContext);
     fakeServer.shutdownNow();
+    fakeServer.awaitTermination();
+  }
+
+  @AfterClass
+  public static void afterEverything() {
+    retryService.shutdownNow();
   }
 
   private static class CallCredentialsInterceptor implements ClientInterceptor {
@@ -153,22 +177,29 @@ public class GrpcRemoteCacheTest {
     Scratch scratch = new Scratch();
     scratch.file(authTlsOptions.googleCredentials, new JacksonFactory().toString(json));
 
-    CallCredentials creds =
-        GoogleAuthUtils.newCallCredentials(
-            scratch.resolve(authTlsOptions.googleCredentials).getInputStream(),
-            authTlsOptions.googleAuthScopes);
+    CallCredentials creds = null;
+    try (InputStream in = scratch.resolve(authTlsOptions.googleCredentials).getInputStream()) {
+      GoogleAuthUtils.newCallCredentials(in, authTlsOptions.googleAuthScopes);
+    }
     RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
     RemoteRetrier retrier =
         new RemoteRetrier(
-            remoteOptions, RemoteRetrier.RETRIABLE_GRPC_ERRORS, Retrier.ALLOW_ALL_CALLS);
-    return new GrpcRemoteCache(
+            remoteOptions,
+            RemoteRetrier.RETRIABLE_GRPC_ERRORS,
+            retryService,
+            Retrier.ALLOW_ALL_CALLS);
+    Channel ch =
         ClientInterceptors.intercept(
             InProcessChannelBuilder.forName(fakeServerName).directExecutor().build(),
-            ImmutableList.of(new CallCredentialsInterceptor(creds))),
+            ImmutableList.of(new CallCredentialsInterceptor(creds)));
+    return new GrpcRemoteCache(
+        ch,
         creds,
         remoteOptions,
         retrier,
-        DIGEST_UTIL);
+        DIGEST_UTIL,
+        new ByteStreamUploader(
+            remoteOptions.remoteInstanceName, ch, creds, remoteOptions.remoteTimeout, retrier));
   }
 
   @Test
@@ -176,7 +207,7 @@ public class GrpcRemoteCacheTest {
     GrpcRemoteCache client = newClient();
     Digest emptyDigest = DIGEST_UTIL.compute(new byte[0]);
     // Will not call the mock Bytestream interface at all.
-    assertThat(client.downloadBlob(emptyDigest)).isEmpty();
+    assertThat(getFromFuture(client.downloadBlob(emptyDigest))).isEmpty();
   }
 
   @Test
@@ -193,7 +224,7 @@ public class GrpcRemoteCacheTest {
             responseObserver.onCompleted();
           }
         });
-    assertThat(new String(client.downloadBlob(digest), UTF_8)).isEqualTo("abcdefg");
+    assertThat(new String(getFromFuture(client.downloadBlob(digest)), UTF_8)).isEqualTo("abcdefg");
   }
 
   @Test
@@ -214,7 +245,7 @@ public class GrpcRemoteCacheTest {
             responseObserver.onCompleted();
           }
         });
-    assertThat(new String(client.downloadBlob(digest), UTF_8)).isEqualTo("abcdefg");
+    assertThat(new String(getFromFuture(client.downloadBlob(digest)), UTF_8)).isEqualTo("abcdefg");
   }
 
   @Test

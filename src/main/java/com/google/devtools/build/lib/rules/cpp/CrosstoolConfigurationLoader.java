@@ -18,6 +18,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
+import com.google.common.base.Strings;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.io.BaseEncoding;
@@ -26,13 +27,11 @@ import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationEnvironment;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.NonconfigurableAttributeMapper;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Fingerprint;
@@ -40,7 +39,6 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig;
 import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CrosstoolRelease;
-import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.LipoMode;
 import com.google.protobuf.TextFormat;
 import com.google.protobuf.TextFormat.ParseException;
 import com.google.protobuf.UninitializedMessageException;
@@ -48,6 +46,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.concurrent.ExecutionException;
 import javax.annotation.Nullable;
 
@@ -71,9 +70,6 @@ public class CrosstoolConfigurationLoader {
   /** A class that holds the results of reading a CROSSTOOL file. */
   @AutoCodec
   public static class CrosstoolFile {
-    public static final ObjectCodec<CrosstoolFile> CODEC =
-        new CrosstoolConfigurationLoader_CrosstoolFile_AutoCodec();
-
     private final String location;
     private final CrosstoolConfig.CrosstoolRelease proto;
     private final String md5;
@@ -208,14 +204,11 @@ public class CrosstoolConfigurationLoader {
       throws IOException, InvalidConfigurationException, InterruptedException {
     final Path path;
     try {
-      Package containingPackage = env.getTarget(crosstoolTop.getLocalTargetLabel("BUILD"))
-          .getPackage();
+      Package containingPackage = env.getTarget(crosstoolTop).getPackage();
       if (containingPackage == null) {
         return null;
       }
       path = env.getPath(containingPackage, CROSSTOOL_CONFIGURATION_FILENAME);
-    } catch (LabelSyntaxException e) {
-      throw new InvalidConfigurationException(e);
     } catch (NoSuchThingException e) {
       // Handled later
       return null;
@@ -301,9 +294,7 @@ public class CrosstoolConfigurationLoader {
       throws InvalidConfigurationException {
     CrosstoolConfigurationIdentifier config =
         CrosstoolConfigurationIdentifier.fromOptions(options);
-    CppOptions cppOptions = options.get(CppOptions.class);
-    return selectToolchain(
-        release, config, cppOptions.getLipoMode(), cppOptions.convertLipoToThinLto, cpuTransformer);
+    return selectToolchain(release, config, cpuTransformer);
   }
 
   /**
@@ -320,11 +311,9 @@ public class CrosstoolConfigurationLoader {
   public static CrosstoolConfig.CToolchain selectToolchain(
       CrosstoolConfig.CrosstoolRelease release,
       CrosstoolConfigurationIdentifier config,
-      LipoMode lipoMode,
-      boolean convertLipoToThinLto,
       Function<String, String> cpuTransformer)
       throws InvalidConfigurationException {
-    if ((config.getCompiler() != null) || (config.getLibc() != null)) {
+    if (config.getCompiler() != null) {
       ArrayList<CrosstoolConfig.CToolchain> candidateToolchains = new ArrayList<>();
       for (CrosstoolConfig.CToolchain toolchain : release.getToolchainList()) {
         if (config.isCandidateToolchain(toolchain)) {
@@ -356,11 +345,7 @@ public class CrosstoolConfigurationLoader {
     // We use fake CPU values to allow cross-platform builds for other languages that use the
     // C++ toolchain. Translate to the actual target architecture.
     String desiredCpu = cpuTransformer.apply(config.getCpu());
-    boolean needsLipo = lipoMode != LipoMode.OFF && !convertLipoToThinLto;
     for (CrosstoolConfig.DefaultCpuToolchain selector : release.getDefaultToolchainList()) {
-      if (needsLipo && !selector.getSupportsLipo()) {
-        continue;
-      }
       if (selector.getCpu().equals(desiredCpu)) {
         selectedIdentifier = selector.getToolchainIdentifier();
         break;
@@ -368,9 +353,12 @@ public class CrosstoolConfigurationLoader {
     }
 
     if (selectedIdentifier == null) {
+      HashSet<String> seenCpus = new HashSet<>();
       StringBuilder cpuBuilder = new StringBuilder();
       for (CrosstoolConfig.DefaultCpuToolchain selector : release.getDefaultToolchainList()) {
-        cpuBuilder.append("  ").append(selector.getCpu()).append(",\n");
+        if (seenCpus.add(selector.getCpu())) {
+          cpuBuilder.append("  ").append(selector.getCpu()).append(",\n");
+        }
       }
       throw new InvalidConfigurationException(
           "No default_toolchain found for cpu '"
@@ -379,7 +367,7 @@ public class CrosstoolConfigurationLoader {
               + cpuBuilder
               + "]");
     }
-    checkToolChain(selectedIdentifier, desiredCpu);
+    checkToolchain(selectedIdentifier, desiredCpu);
 
     for (CrosstoolConfig.CToolchain toolchain : release.getToolchainList()) {
       if (toolchain.getToolchainIdentifier().equals(selectedIdentifier)) {
@@ -400,6 +388,8 @@ public class CrosstoolConfigurationLoader {
     message.append("[\n");
     for (CrosstoolConfig.CToolchain toolchain : toolchains) {
       message.append("  ");
+      message.append(toolchain.getToolchainIdentifier());
+      message.append(": ");
       message.append(
           CrosstoolConfigurationIdentifier.fromToolchain(toolchain).describeFlags().trim());
       message.append(",\n");
@@ -408,15 +398,14 @@ public class CrosstoolConfigurationLoader {
   }
 
   /**
-   * Makes sure that {@code selectedIdentifier} is a valid identifier for a toolchain,
-   * i.e. it starts with a letter or an underscore and continues with only dots, dashes,
-   * spaces, letters, digits or underscores (i.e. matches the following regular expression:
-   * "[a-zA-Z_][\.\- \w]*").
+   * Makes sure that {@code selectedIdentifier} is a valid identifier for a toolchain, i.e. it
+   * starts with a letter or an underscore and continues with only dots, dashes, spaces, letters,
+   * digits or underscores (i.e. matches the following regular expression: "[a-zA-Z_][\.\- \w]*").
    *
-   * @throws InvalidConfigurationException if selectedIdentifier does not match the
-   *         aforementioned regular expression.
+   * @throws InvalidConfigurationException if selectedIdentifier does not match the aforementioned
+   *     regular expression.
    */
-  private static void checkToolChain(String selectedIdentifier, String cpu)
+  private static void checkToolchain(String selectedIdentifier, String cpu)
       throws InvalidConfigurationException {
     // If you update this regex, please do so in the javadoc comment too, and also in the
     // crosstool_config.proto file.
@@ -439,5 +428,48 @@ public class CrosstoolConfigurationLoader {
     // Make sure that we have the requested toolchain in the result. Throw an exception if not.
     selectToolchain(file.getProto(), options, cpuTransformer);
     return file.getProto();
+  }
+
+  /**
+   * Selects a crosstool toolchain based on the toolchain identifier.
+   *
+   * @throws InvalidConfigurationException if no matching toolchain can be found, if multiple
+   *     toolchains with the same identifier are found, or if the target_cpu or compiler of the
+   *     selected toolchain are not the same as --cpu and --compiler options.
+   */
+  public static CrosstoolConfig.CToolchain getToolchainByIdentifier(
+      CrosstoolConfig.CrosstoolRelease proto,
+      String toolchainIdentifier,
+      String cpu,
+      @Nullable String compiler)
+      throws InvalidConfigurationException {
+    checkToolchain(toolchainIdentifier, cpu);
+    CrosstoolConfig.CToolchain selectedToolchain = null;
+    for (CrosstoolConfig.CToolchain toolchain : proto.getToolchainList()) {
+      if (toolchain.getToolchainIdentifier().equals(toolchainIdentifier)) {
+        if (selectedToolchain != null) {
+          throw new InvalidConfigurationException(
+              String.format("Multiple toolchains with '%s' identifier", toolchainIdentifier));
+        }
+        selectedToolchain = toolchain;
+      }
+    }
+    if (selectedToolchain == null) {
+      throw new InvalidConfigurationException(
+          String.format("Toolchain identifier '%s' was not found", toolchainIdentifier));
+    }
+    if ((compiler != null && !selectedToolchain.getCompiler().equals(compiler))
+        || !selectedToolchain.getTargetCpu().equals(cpu)) {
+      throw new InvalidConfigurationException(
+          String.format(
+              "The selected toolchain's cpu and compiler must match the command line options:\n"
+                  + "  --cpu: %s, toolchain.target_cpu: %s\n"
+                  + "  --compiler: %s, toolchain.compiler: %s",
+              cpu,
+              selectedToolchain.getTargetCpu(),
+              Strings.nullToEmpty(compiler),
+              selectedToolchain.getCompiler()));
+    }
+    return selectedToolchain;
   }
 }

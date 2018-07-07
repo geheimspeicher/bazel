@@ -14,20 +14,21 @@
 package com.google.devtools.build.lib.exec.util;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
-import com.google.devtools.build.lib.analysis.config.BinTools;
+import com.google.devtools.build.lib.analysis.actions.LocalTemplateExpansionStrategy;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.ActionContextProvider;
+import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.BlazeExecutor;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.FileWriteStrategy;
+import com.google.devtools.build.lib.exec.SpawnActionContextMaps;
 import com.google.devtools.build.lib.exec.SymlinkTreeStrategy;
 import com.google.devtools.build.lib.runtime.CommonCommandOptions;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -60,6 +61,7 @@ public class TestExecutorBuilder {
     this.fileSystem = fileSystem;
     this.directories = directories;
     strategies.add(new FileWriteStrategy());
+    strategies.add(new LocalTemplateExpansionStrategy());
     strategies.add(new SymlinkTreeStrategy(null, binTools));
   }
 
@@ -107,8 +109,7 @@ public class TestExecutorBuilder {
         bus,
         BlazeClock.instance(),
         optionsParser,
-        strategies,
-        ImmutableMap.copyOf(spawnStrategyMap),
+        SpawnActionContextMaps.createStub(strategies, spawnStrategyMap),
         ImmutableList.<ActionContextProvider>of());
   }
 }

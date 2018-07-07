@@ -31,12 +31,6 @@ public abstract class SkylarkMethodDoc extends SkylarkDoc {
   public abstract boolean documented();
 
   /**
-   * Returns a string representing the method signature of the Skylark method, which contains
-   * HTML links to the documentation of parameter types if available.
-   */
-  public abstract String getSignature();
-
-  /**
    * Returns a string containing additional documentation about the method's return value.
    *
    * <p>Returns an empty string by default.
@@ -63,7 +57,7 @@ public abstract class SkylarkMethodDoc extends SkylarkDoc {
       argList.add("arg" + i + ":" + getTypeAnchor(method.getParameterTypes()[i]));
     }
     boolean named = false;
-    for (Param param : annotation.parameters()) {
+    for (Param param : withoutSelfParam(annotation, method)) {
       if (param.named() && !param.positional() && !named) {
         named = true;
         if (!argList.isEmpty()) {
@@ -72,21 +66,40 @@ public abstract class SkylarkMethodDoc extends SkylarkDoc {
       }
       argList.add(formatParameter(param));
     }
+    if (!annotation.extraPositionals().name().isEmpty()) {
+      argList.add("*" + annotation.extraPositionals().name());
+    }
+    if (!annotation.extraKeywords().name().isEmpty()) {
+      argList.add("**" + annotation.extraKeywords().name());
+    }
     return Joiner.on(", ").join(argList);
   }
 
+  /**
+   * Returns a string representing the method signature of the Skylark method, which contains
+   * HTML links to the documentation of parameter types if available.
+   */
+  public abstract String getSignature();
+
   protected String getSignature(String objectName, String methodName, Method method) {
+    String objectDotExpressionPrefix =
+        objectName.isEmpty() ? "" : objectName + ".";
+
+    return getSignature(objectDotExpressionPrefix + methodName, method);
+  }
+
+  protected String getSignature(String fullyQualifiedMethodName, Method method) {
     String args = SkylarkInterfaceUtils.getSkylarkCallable(method).structField()
         ? "" : "(" + getParameterString(method) + ")";
 
-    return String.format("%s %s.%s%s",
-        getTypeAnchor(method.getReturnType()), objectName, methodName, args);
+    return String.format("%s %s%s",
+        getTypeAnchor(method.getReturnType()), fullyQualifiedMethodName, args);
   }
 
   protected String getSignature(String objectName, SkylarkSignature method) {
     List<String> argList = new ArrayList<>();
     boolean named = false;
-    for (Param param : adjustedParameters(method)) {
+    for (Param param : withoutSelfParam(method)) {
       if (param.named() && !param.positional() && !named) {
         named = true;
         if (!method.extraPositionals().name().isEmpty()) {

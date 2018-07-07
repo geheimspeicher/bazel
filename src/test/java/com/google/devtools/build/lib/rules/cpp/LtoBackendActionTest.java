@@ -30,9 +30,11 @@ import com.google.devtools.build.lib.analysis.util.ActionTester;
 import com.google.devtools.build.lib.analysis.util.ActionTester.ActionCombinationFactory;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.util.TestExecutorBuilder;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Before;
@@ -75,6 +77,7 @@ public class LtoBackendActionTest extends BuildViewTestCase {
 
   @Before
   public final void createExecutorAndContext() throws Exception {
+    BinTools binTools = BinTools.forUnitTesting(directories, analysisMock.getEmbeddedTools());
     executor = new TestExecutorBuilder(fileSystem, directories, binTools).build();
     context =
         new ActionExecutionContext(
@@ -85,7 +88,9 @@ public class LtoBackendActionTest extends BuildViewTestCase {
             null,
             new FileOutErr(),
             ImmutableMap.<String, String>of(),
-            null);
+            ImmutableMap.of(),
+            null,
+            /*actionFileSystem=*/ null);
   }
 
   @Test
@@ -153,7 +158,8 @@ public class LtoBackendActionTest extends BuildViewTestCase {
     MNEMONIC,
     RUNFILES_SUPPLIER,
     INPUT,
-    ENVIRONMENT
+    FIXED_ENVIRONMENT,
+    VARIABLE_ENVIRONMENT
   }
 
   @Test
@@ -200,10 +206,13 @@ public class LtoBackendActionTest extends BuildViewTestCase {
             }
 
             Map<String, String> env = new HashMap<>();
-            if (attributesToFlip.contains(KeyAttributes.ENVIRONMENT)) {
+            if (attributesToFlip.contains(KeyAttributes.FIXED_ENVIRONMENT)) {
               env.put("foo", "bar");
             }
             builder.setEnvironment(env);
+            if (attributesToFlip.contains(KeyAttributes.VARIABLE_ENVIRONMENT)) {
+              builder.setInheritedEnvironment(Arrays.asList("baz"));
+            }
 
             Action[] actions =
                 builder.build(

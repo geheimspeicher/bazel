@@ -45,8 +45,8 @@ import java.io.Serializable;
  *       {@link SkylarkSemanticsCodec#deserialize}.
  *
  *   <li>Add a line to set the new field in both {@link
- *       SkylarkSemanticsOptionsTest#buildRandomOptions} and {@link
- *       SkylarkSemanticsOptions#buildRandomSemantics}.
+ *       SkylarkSemanticsConsistencyTest#buildRandomOptions} and {@link
+ *       SkylarkSemanticsConsistencyTest#buildRandomSemantics}.
  *
  *   <li>Update manual documentation in site/docs/skylark/backward-compatibility.md. Also remember
  *       to update this when flipping a flag's default value.
@@ -60,12 +60,23 @@ public class SkylarkSemanticsOptions extends OptionsBase implements Serializable
   // <== Add new options here in alphabetic order ==>
 
   @Option(
+      name = "experimental_enable_repo_mapping",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = OptionEffectTag.BUILD_FILE_SEMANTICS,
+      help = "If set to true, enables the use of the `repo_mapping` attribute in WORKSPACE files."
+  )
+  public boolean experimentalEnableRepoMapping;
+
+  @Option(
     name = "incompatible_bzl_disallow_load_after_statement",
     defaultValue = "false",
-    category = "incompatible changes",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
     help =
         "If set to true, all `load` must be called at the top of .bzl files, before any other "
             + "statement."
@@ -73,38 +84,14 @@ public class SkylarkSemanticsOptions extends OptionsBase implements Serializable
   public boolean incompatibleBzlDisallowLoadAfterStatement;
 
   @Option(
-    name = "incompatible_checked_arithmetic",
-    defaultValue = "true",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help = "If set to true, arithmetic operations throw an error in case of overflow/underflow."
-  )
-  public boolean incompatibleCheckedArithmetic;
-
-  @Option(
-    name = "incompatible_comprehension_variables_do_not_leak",
-    defaultValue = "true",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help =
-        "If set to true, loop variables in a comprehension shadow any existing variable by "
-            + "the same name. If the existing variable was declared in the same scope that "
-            + "contains the comprehension, then it also becomes inaccessible after the "
-            + " comprehension executes."
-  )
-  public boolean incompatibleComprehensionVariablesDoNotLeak;
-
-  @Option(
     name = "incompatible_depset_union",
     defaultValue = "false",
-    category = "incompatible changes",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
     help =
         "If set to true, depset union using `+`, `|` or `.union` are forbidden. "
             + "Use the `depset` constructor instead."
@@ -114,10 +101,12 @@ public class SkylarkSemanticsOptions extends OptionsBase implements Serializable
   @Option(
     name = "incompatible_depset_is_not_iterable",
     defaultValue = "false",
-    category = "incompatible changes",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
     help =
         "If set to true, depset type is not iterable. For loops and functions expecting an "
             + "iterable will reject depset objects. Use the `.to_list` method to explicitly "
@@ -126,119 +115,195 @@ public class SkylarkSemanticsOptions extends OptionsBase implements Serializable
   public boolean incompatibleDepsetIsNotIterable;
 
   @Option(
-    name = "incompatible_dict_literal_has_no_duplicates",
-    defaultValue = "true",
-    category = "incompatible changes",
+    name = "incompatible_disable_objc_provider_resources",
+    defaultValue = "false",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help = "If set to true, the dictionary literal syntax doesn't allow duplicated keys."
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help = "If set to true, disallow use of deprecated resource fields on the Objc provider."
   )
-  public boolean incompatibleDictLiteralHasNoDuplicates;
+  public boolean incompatibleDisableObjcProviderResources;
 
   @Option(
-    name = "incompatible_disable_glob_tracking",
-    defaultValue = "false",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help = "If set to true, do not track the values of globs (this is used by rare specific cases"
+      name = "incompatible_disallow_data_transition",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {
+          OptionMetadataTag.INCOMPATIBLE_CHANGE,
+          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If set to true, rule attributes cannot set 'cfg = \"data\"', which is a noop."
   )
-  public boolean incompatibleDisableGlobTracking;
+  public boolean incompatibleDisallowDataTransition;
 
   @Option(
     name = "incompatible_disallow_dict_plus",
     defaultValue = "false",
-    category = "incompatible changes",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
     help = "If set to true, the `+` becomes disabled for dicts."
   )
   public boolean incompatibleDisallowDictPlus;
 
   @Option(
-    name = "incompatible_disallow_keyword_only_args",
-    defaultValue = "true",
-    category = "incompatible changes",
+    name = "incompatible_disallow_filetype",
+    defaultValue = "false",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help = "If set to true, disables the keyword-only argument syntax in function definition."
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help = "If set to true, function `FileType` is not available."
   )
-  public boolean incompatibleDisallowKeywordOnlyArgs;
+  public boolean incompatibleDisallowFileType;
 
   @Option(
-    name = "incompatible_disallow_toplevel_if_statement",
-    defaultValue = "true",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help =
-        "If set to true, 'if' statements are forbidden at the top-level "
-            + "(outside a function definition)"
-  )
-  public boolean incompatibleDisallowToplevelIfStatement;
-
-  @Option(
-    name = "incompatible_disallow_uncalled_set_constructor",
-    defaultValue = "true",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help = "If set to true, it's not allowed to use `set()` even if that code is never executed."
-  )
-  public boolean incompatibleDisallowUncalledSetConstructor;
-
-  @Option(
-    name = "incompatible_load_argument_is_label",
-    defaultValue = "true",
-    category = "incompatible changes",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help =
-        "If set to true, the first argument of 'load' statements is a label (not a path). "
-            + "It must start with '//' or ':'."
-  )
-  public boolean incompatibleLoadArgumentIsLabel;
-
-  @Option(
-      name = "incompatible_new_actions_api",
+      name = "incompatible_disallow_legacy_javainfo",
       defaultValue = "false",
-      category = "incompatible changes",
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.UNKNOWN},
-      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-      help = "If set to true, the API to create actions is only available on `ctx.actions`, "
-          + "not on `ctx`."
-  )
-  public boolean incompatibleNewActionsApi;
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If set to true, old-style JavaInfo provider construction is disallowed.")
+  public boolean incompatibleDisallowLegacyJavaInfo;
 
   @Option(
-    name = "incompatible_show_all_print_messages",
-    defaultValue = "true",
-    category = "incompatible changes",
+      name = "incompatible_generate_javacommon_source_jar",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {
+          OptionMetadataTag.INCOMPATIBLE_CHANGE,
+          OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help = "If set to true, java_common.compile will always generate an output source jar."
+  )
+  public boolean incompatibleGenerateJavaCommonSourceJar;
+
+  @Option(
+    name = "incompatible_disallow_slash_operator",
+    defaultValue = "false",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-    help =
-        "If set to true, the print function will generate DEBUG messages that aren't affected by "
-            + "the --output_filter option. Otherwise it will generate filterable WARNING "
-            + "messages."
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help = "If set to true, the `/` operator is disabled. Use `//` for integer division."
   )
-  public boolean incompatibleShowAllPrintMessages;
+  public boolean incompatibleDisallowSlashOperator;
 
+  /** Controls legacy arguments to ctx.actions.Args#add. */
   @Option(
-    name = "incompatible_string_is_not_iterable",
+    name = "incompatible_disallow_old_style_args_add",
     defaultValue = "false",
     category = "incompatible changes",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
-    metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help = "If set to true, vectorized calls to Args#add are disallowed."
+  )
+  public boolean incompatibleDisallowOldStyleArgsAdd;
+
+  @Option(
+    name = "incompatible_new_actions_api",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help =
+        "If set to true, the API to create actions is only available on `ctx.actions`, "
+            + "not on `ctx`."
+  )
+  public boolean incompatibleNewActionsApi;
+
+  @Option(
+      name = "incompatible_no_support_tools_in_action_inputs",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+      effectTags = {OptionEffectTag.UNKNOWN},
+      metadataTags = {
+        OptionMetadataTag.INCOMPATIBLE_CHANGE,
+        OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+      },
+      help =
+          "If set to true, tools should be passed to `ctx.actions.run()` and "
+              + "`ctx.actions.run_shell()` using the `tools` parameter instead of the `inputs` "
+              + "parameter. Furthermore, if this flag is set and a `tools` parameter is not "
+              + "passed to the action, it is an error for any tools to appear in the `inputs`.")
+  public boolean incompatibleNoSupportToolsInActionInputs;
+
+  @Option(
+    name = "incompatible_package_name_is_a_function",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help =
+        "If set to true, the values PACKAGE_NAME and REPOSITORY_NAME are not available. "
+            + "Use the package_name() or repository_name() functions instead."
+  )
+  public boolean incompatiblePackageNameIsAFunction;
+
+  @Option(
+    name = "incompatible_remove_native_git_repository",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help =
+        "If set to true, the native git_repository rules are disabled; only the skylark version "
+            + "will be available"
+  )
+  public boolean incompatibleRemoveNativeGitRepository;
+
+  @Option(
+    name = "incompatible_remove_native_http_archive",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
+    help =
+        "If set to true, the native http_archive rules are disabled; only the skylark version "
+            + "will be available"
+  )
+  public boolean incompatibleRemoveNativeHttpArchive;
+
+  @Option(
+    name = "incompatible_string_is_not_iterable",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    metadataTags = {
+      OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      OptionMetadataTag.TRIGGERED_BY_ALL_INCOMPATIBLE_CHANGES
+    },
     help =
         "If set to true, iterating over a string will throw an error. String indexing and `len` "
             + "are still allowed."
@@ -258,20 +323,23 @@ public class SkylarkSemanticsOptions extends OptionsBase implements Serializable
   public SkylarkSemantics toSkylarkSemantics() {
     return SkylarkSemantics.builder()
         // <== Add new options here in alphabetic order ==>
+        .experimentalEnableRepoMapping(experimentalEnableRepoMapping)
         .incompatibleBzlDisallowLoadAfterStatement(incompatibleBzlDisallowLoadAfterStatement)
-        .incompatibleCheckedArithmetic(incompatibleCheckedArithmetic)
-        .incompatibleComprehensionVariablesDoNotLeak(incompatibleComprehensionVariablesDoNotLeak)
         .incompatibleDepsetIsNotIterable(incompatibleDepsetIsNotIterable)
         .incompatibleDepsetUnion(incompatibleDepsetUnion)
-        .incompatibleDictLiteralHasNoDuplicates(incompatibleDictLiteralHasNoDuplicates)
-        .incompatibleDisableGlobTracking(incompatibleDisableGlobTracking)
+        .incompatibleDisableObjcProviderResources(incompatibleDisableObjcProviderResources)
+        .incompatibleDisallowDataTransition(incompatibleDisallowDataTransition)
         .incompatibleDisallowDictPlus(incompatibleDisallowDictPlus)
-        .incompatibleDisallowKeywordOnlyArgs(incompatibleDisallowKeywordOnlyArgs)
-        .incompatibleDisallowToplevelIfStatement(incompatibleDisallowToplevelIfStatement)
-        .incompatibleDisallowUncalledSetConstructor(incompatibleDisallowUncalledSetConstructor)
-        .incompatibleLoadArgumentIsLabel(incompatibleLoadArgumentIsLabel)
+        .incompatibleDisallowFileType(incompatibleDisallowFileType)
+        .incompatibleDisallowLegacyJavaInfo(incompatibleDisallowLegacyJavaInfo)
+        .incompatibleDisallowOldStyleArgsAdd(incompatibleDisallowOldStyleArgsAdd)
+        .incompatibleDisallowSlashOperator(incompatibleDisallowSlashOperator)
+        .incompatibleGenerateJavaCommonSourceJar(incompatibleGenerateJavaCommonSourceJar)
         .incompatibleNewActionsApi(incompatibleNewActionsApi)
-        .incompatibleShowAllPrintMessages(incompatibleShowAllPrintMessages)
+        .incompatibleNoSupportToolsInActionInputs(incompatibleNoSupportToolsInActionInputs)
+        .incompatiblePackageNameIsAFunction(incompatiblePackageNameIsAFunction)
+        .incompatibleRemoveNativeGitRepository(incompatibleRemoveNativeGitRepository)
+        .incompatibleRemoveNativeHttpArchive(incompatibleRemoveNativeHttpArchive)
         .incompatibleStringIsNotIterable(incompatibleStringIsNotIterable)
         .internalSkylarkFlagTestCanary(internalSkylarkFlagTestCanary)
         .build();

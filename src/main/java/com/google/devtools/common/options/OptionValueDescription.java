@@ -18,11 +18,12 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
+import com.google.devtools.common.options.OptionPriority.PriorityCategory;
 import com.google.devtools.common.options.OptionsParser.ConstructionException;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map.Entry;
+import java.util.Map;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
@@ -221,6 +222,10 @@ public abstract class OptionValueDescription {
                         + "option by %s",
                     optionDefinition, optionThatDependsOnEffectiveValue));
           } else if (samePriorityCategory
+              && parsedOption
+                  .getPriority()
+                  .getPriorityCategory()
+                  .equals(PriorityCategory.COMMAND_LINE)
               && ((optionThatExpandedToEffectiveValue == null) && (expandedFrom != null))) {
             // Create a warning if an expansion option overrides an explicit option:
             warnings.add(
@@ -276,8 +281,8 @@ public abstract class OptionValueDescription {
           .asMap()
           .entrySet()
           .stream()
-          .sorted(Comparator.comparing(Entry::getKey))
-          .map(Entry::getValue)
+          .sorted(Comparator.comparing(Map.Entry::getKey))
+          .map(Map.Entry::getValue)
           .flatMap(Collection::stream)
           .map(ParsedOptionDescription::getSource)
           .distinct()
@@ -292,8 +297,8 @@ public abstract class OptionValueDescription {
           .asMap()
           .entrySet()
           .stream()
-          .sorted(Comparator.comparing(Entry::getKey))
-          .map(Entry::getValue)
+          .sorted(Comparator.comparing(Map.Entry::getKey))
+          .map(Map.Entry::getValue)
           .flatMap(Collection::stream)
           .collect(Collectors.toList());
     }
@@ -320,8 +325,8 @@ public abstract class OptionValueDescription {
           .asMap()
           .entrySet()
           .stream()
-          .sorted(Comparator.comparing(Entry::getKey))
-          .map(Entry::getValue)
+          .sorted(Comparator.comparing(Map.Entry::getKey))
+          .map(Map.Entry::getValue)
           .flatMap(Collection::stream)
           // Only provide the options that aren't implied elsewhere.
           .filter(optionDesc -> optionDesc.getImplicitDependent() == null)

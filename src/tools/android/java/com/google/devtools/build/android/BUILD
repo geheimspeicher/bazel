@@ -8,6 +8,7 @@ filegroup(
         "BUILD.tools",
         ":all_android_tools_deploy.jar",
         "//src/tools/android/java/com/google/devtools/build/android/desugar:embedded_tools",
+        "//src/tools/android/java/com/google/devtools/build/android/desugar/scan:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/dexer:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/idlclass:embedded_tools",
         "//src/tools/android/java/com/google/devtools/build/android/incrementaldeployment:embedded_tools",
@@ -23,6 +24,7 @@ java_binary(
     runtime_deps = [
         ":android_builder_lib",
         "//src/tools/android/java/com/google/devtools/build/android/desugar",
+        "//src/tools/android/java/com/google/devtools/build/android/desugar/scan",
         "//src/tools/android/java/com/google/devtools/build/android/dexer:dexerdeps",
         "//src/tools/android/java/com/google/devtools/build/android/idlclass:idlclass_lib",
         "//src/tools/android/java/com/google/devtools/build/android/ziputils:ziputils_lib",
@@ -64,6 +66,7 @@ java_library(
         "//src/tools/android/java/com/google/devtools/build/android/proto:resources_java_proto",
         "//src/tools/android/java/com/google/devtools/build/android/proto:serialize_format_java_pb",
         "//src/tools/android/java/com/google/devtools/build/android/resources",
+        "//src/tools/android/java/com/google/devtools/build/android/ziputils:ziputils_lib",
         "//third_party:android_common_25_0_0",
         "//third_party:asm",
         "//third_party:guava",

@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.actions.CommandAction;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
+import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
@@ -96,8 +97,8 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
     ConfiguredTarget a = getConfiguredTarget("//a:a");
     ConfiguredTarget b = getDirectPrerequisite(a, "//a:b");
 
-    PathFragment aPath = a.getConfiguration().getOutputDirectory(RepositoryName.MAIN).getExecPath();
-    PathFragment bPath = b.getConfiguration().getOutputDirectory(RepositoryName.MAIN).getExecPath();
+    PathFragment aPath = getConfiguration(a).getOutputDirectory(RepositoryName.MAIN).getExecPath();
+    PathFragment bPath = getConfiguration(b).getOutputDirectory(RepositoryName.MAIN).getExecPath();
 
     assertThat(aPath.getPathString()).doesNotMatch("-min[0-9]");
     assertThat(bPath.getPathString()).contains("-min7.0-");
@@ -596,21 +597,21 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         ")");
   }
 
-  /** Returns the bcsymbolmap artifact for given architecture. */
-  protected Artifact bitcodeSymbol(String arch) throws Exception {
+  /** Returns the bcsymbolmap artifact for given architecture and compilation mode. */
+  protected Artifact bitcodeSymbol(String arch, CompilationMode mode) throws Exception {
     SpawnAction lipoAction = (SpawnAction) lipoBinAction("//examples/apple_skylark:bin");
 
     String bin =
-        configurationBin(arch, ConfigurationDistinguisher.APPLEBIN_IOS)
+        configurationBin(arch, ConfigurationDistinguisher.APPLEBIN_IOS, null, mode)
             + "examples/apple_skylark/bin_bin";
     Artifact binArtifact = getFirstArtifactEndingWith(lipoAction.getInputs(), bin);
     CommandAction linkAction = (CommandAction) getGeneratingAction(binArtifact);
     return getFirstArtifactEndingWith(linkAction.getOutputs(), "bcsymbolmap");
   }
 
-  /** Returns the path to the dSYM binary artifact for given architecture. */
-  protected String dsymBinaryPath(String arch) throws Exception {
-    return configurationBin(arch, ConfigurationDistinguisher.APPLEBIN_IOS)
+  /** Returns the path to the dSYM binary artifact for given architecture and compilation mode. */
+  protected String dsymBinaryPath(String arch, CompilationMode mode) throws Exception {
+    return configurationBin(arch, ConfigurationDistinguisher.APPLEBIN_IOS, null, mode)
         + "examples/apple_skylark/bin.app.dSYM/Contents/Resources/DWARF/bin_bin";
   }
 
@@ -924,16 +925,14 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
   public void testLinkActionHasCorrectIosSimulatorMinVersion() throws Exception {
     getRuleType().scratchTarget(scratch, "platform_type", "'ios'");
     useConfiguration("--ios_multi_cpus=x86_64", "--ios_sdk_version=10.0", "--ios_minimum_os=8.0");
-    checkLinkMinimumOSVersion(
-        ConfigurationDistinguisher.APPLEBIN_IOS, "x86_64", "-mios-simulator-version-min=8.0");
+    checkLinkMinimumOSVersion("-mios-simulator-version-min=8.0");
   }
 
   @Test
   public void testLinkActionHasCorrectIosMinVersion() throws Exception {
     getRuleType().scratchTarget(scratch, "platform_type", "'ios'");
     useConfiguration("--ios_multi_cpus=arm64", "--ios_sdk_version=10.0", "--ios_minimum_os=8.0");
-    checkLinkMinimumOSVersion(
-        ConfigurationDistinguisher.APPLEBIN_IOS, "arm64", "-miphoneos-version-min=8.0");
+    checkLinkMinimumOSVersion("-miphoneos-version-min=8.0");
   }
 
   @Test
@@ -1037,7 +1036,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
       if (archBinary.getExecPathString().endsWith("bin_bin")) {
         Artifact protoLib =
             getFirstArtifactEndingWith(
-                getGeneratingAction(archBinary).getInputs(), "BundledProtos_0.a");
+                getGeneratingAction(archBinary).getInputs(), "BundledProtos.a");
         Artifact protoObject =
             getFirstArtifactEndingWith(
                 getGeneratingAction(protoLib).getInputs(), "Genfile.pbobjc.o");
@@ -1093,8 +1092,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
     Artifact arm64Binary = getSingleArchBinary(lipoAction, "arm64");
 
     Artifact armv7ProtoLib =
-        getFirstArtifactEndingWith(
-            getGeneratingAction(armv7Binary).getInputs(), "BundledProtos_0.a");
+        getFirstArtifactEndingWith(getGeneratingAction(armv7Binary).getInputs(), "BundledProtos.a");
     Artifact armv7ProtoObject =
         getFirstArtifactEndingWith(
             getGeneratingAction(armv7ProtoLib).getInputs(), "One.pbobjc.o");
@@ -1105,8 +1103,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         getGeneratingAction(armv7ProtoObjcSource).getInputs(), "one.proto")).isNotNull();
 
     Artifact arm64ProtoLib =
-        getFirstArtifactEndingWith(
-            getGeneratingAction(arm64Binary).getInputs(), "BundledProtos_0.a");
+        getFirstArtifactEndingWith(getGeneratingAction(arm64Binary).getInputs(), "BundledProtos.a");
     Artifact arm64ProtoObject =
         getFirstArtifactEndingWith(
             getGeneratingAction(arm64ProtoLib).getInputs(), "Two.pbobjc.o");
@@ -1196,22 +1193,26 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
   }
 
   private void checkAppleDebugSymbolProvider_DsymEntries(
-      SkylarkDict<String, SkylarkDict<String, Artifact>> outputMap) throws Exception {
+      SkylarkDict<String, SkylarkDict<String, Artifact>> outputMap, CompilationMode compilationMode)
+      throws Exception {
     assertThat(outputMap).containsKey("arm64");
     assertThat(outputMap).containsKey("armv7");
 
     Map<String, Artifact> arm64 = outputMap.get("arm64");
-    assertThat(arm64).containsEntry("bitcode_symbols", bitcodeSymbol("arm64"));
-    assertThat(arm64.get("dsym_binary").getExecPathString()).isEqualTo(dsymBinaryPath("arm64"));
+    assertThat(arm64).containsEntry("bitcode_symbols", bitcodeSymbol("arm64", compilationMode));
+    String expectedArm64Path = dsymBinaryPath("arm64", compilationMode);
+    assertThat(arm64.get("dsym_binary").getExecPathString()).isEqualTo(expectedArm64Path);
 
     Map<String, Artifact> armv7 = outputMap.get("armv7");
-    assertThat(armv7).containsEntry("bitcode_symbols", bitcodeSymbol("armv7"));
-    assertThat(armv7.get("dsym_binary").getExecPathString()).isEqualTo(dsymBinaryPath("armv7"));
+    assertThat(armv7).containsEntry("bitcode_symbols", bitcodeSymbol("armv7", compilationMode));
+    String expectedArmv7Path = dsymBinaryPath("armv7", compilationMode);
+    assertThat(armv7.get("dsym_binary").getExecPathString()).isEqualTo(expectedArmv7Path);
 
     Map<String, Artifact> x8664 = outputMap.get("x86_64");
     // Simulator build has bitcode disabled.
     assertThat(x8664).doesNotContainKey("bitcode_symbols");
-    assertThat(x8664.get("dsym_binary").getExecPathString()).isEqualTo(dsymBinaryPath("x86_64"));
+    String expectedx8664Path = dsymBinaryPath("x86_64", compilationMode);
+    assertThat(x8664.get("dsym_binary").getExecPathString()).isEqualTo(expectedx8664Path);
   }
 
   private void checkAppleDebugSymbolProvider_LinkMapEntries(
@@ -1233,7 +1234,20 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
   public void testAppleDebugSymbolProviderWithDsymsExposedToSkylark() throws Exception {
     useConfiguration(
         "--apple_bitcode=embedded", "--apple_generate_dsym", "--ios_multi_cpus=armv7,arm64,x86_64");
-    checkAppleDebugSymbolProvider_DsymEntries(generateAppleDebugOutputsSkylarkProviderMap());
+    checkAppleDebugSymbolProvider_DsymEntries(
+        generateAppleDebugOutputsSkylarkProviderMap(), CompilationMode.FASTBUILD);
+  }
+
+  @Test
+  public void testAppleDebugSymbolProviderWithAutoDsymDbgAndDsymsExposedToSkylark()
+      throws Exception {
+    useConfiguration(
+        "--apple_bitcode=embedded",
+        "--compilation_mode=dbg",
+        "--apple_enable_auto_dsym_dbg",
+        "--ios_multi_cpus=armv7,arm64,x86_64");
+    checkAppleDebugSymbolProvider_DsymEntries(
+        generateAppleDebugOutputsSkylarkProviderMap(), CompilationMode.DBG);
   }
 
   @Test
@@ -1255,7 +1269,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
 
     SkylarkDict<String, SkylarkDict<String, Artifact>> outputMap =
         generateAppleDebugOutputsSkylarkProviderMap();
-    checkAppleDebugSymbolProvider_DsymEntries(outputMap);
+    checkAppleDebugSymbolProvider_DsymEntries(outputMap, CompilationMode.FASTBUILD);
     checkAppleDebugSymbolProvider_LinkMapEntries(outputMap);
   }
 
@@ -1321,8 +1335,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "platform_type", "'watchos'");
     useConfiguration(
         "--watchos_cpus=i386", "--watchos_sdk_version=3.0", "--watchos_minimum_os=2.0");
-    checkLinkMinimumOSVersion(ConfigurationDistinguisher.APPLEBIN_WATCHOS, "i386",
-        "-mwatchos-simulator-version-min=2.0");
+    checkLinkMinimumOSVersion("-mwatchos-simulator-version-min=2.0");
   }
 
   @Test
@@ -1331,8 +1344,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "platform_type", "'watchos'");
     useConfiguration(
         "--watchos_cpus=armv7k", "--watchos_sdk_version=3.0", "--watchos_minimum_os=2.0");
-    checkLinkMinimumOSVersion(ConfigurationDistinguisher.APPLEBIN_WATCHOS, "armv7k",
-        "-mwatchos-version-min=2.0");
+    checkLinkMinimumOSVersion("-mwatchos-version-min=2.0");
   }
 
   @Test
@@ -1341,8 +1353,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "platform_type", "'tvos'");
     useConfiguration(
         "--tvos_cpus=x86_64", "--tvos_sdk_version=10.1", "--tvos_minimum_os=10.0");
-    checkLinkMinimumOSVersion(ConfigurationDistinguisher.APPLEBIN_TVOS, "x86_64",
-        "-mtvos-simulator-version-min=10.0");
+    checkLinkMinimumOSVersion("-mtvos-simulator-version-min=10.0");
   }
 
   @Test
@@ -1351,8 +1362,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "platform_type", "'tvos'");
     useConfiguration(
         "--tvos_cpus=arm64", "--tvos_sdk_version=10.1", "--tvos_minimum_os=10.0");
-    checkLinkMinimumOSVersion(ConfigurationDistinguisher.APPLEBIN_TVOS, "arm64",
-        "-mtvos-version-min=10.0");
+    checkLinkMinimumOSVersion("-mtvos-version-min=10.0");
   }
 
   @Test
@@ -1460,7 +1470,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
 
   @Test
   public void testCustomModuleMap() throws Exception {
-    checkCustomModuleMap(getRuleType());
+    checkCustomModuleMapNotPropagatedByTargetUnderTest(getRuleType());
   }
 
   @Test
@@ -1502,6 +1512,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_offByDefault() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -1509,6 +1520,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "    name = 'bin',",
         "    deps = ['//lib:objcLib'],",
         "    platform_type = 'ios',",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkAction("//test:bin");
@@ -1530,6 +1542,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_oneFlagOn() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -1539,7 +1552,8 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "    platform_type = 'ios',",
         "    feature_flags = {",
         "      '//lib:flag2': 'on',",
-        "    }",
+        "    },",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkAction("//test:bin");
@@ -1561,6 +1575,7 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_allFlagsOn() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -1571,7 +1586,8 @@ public class AppleBinaryTest extends ObjcRuleTestCase {
         "    feature_flags = {",
         "      '//lib:flag1': 'on',",
         "      '//lib:flag2': 'on',",
-        "    }",
+        "    },",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkAction("//test:bin");

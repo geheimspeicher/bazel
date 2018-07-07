@@ -16,6 +16,7 @@ package com.google.devtools.build.android;
 
 import com.google.devtools.build.android.AndroidResourceMerger.MergingException;
 import com.google.devtools.build.android.aapt2.Aapt2Exception;
+import com.google.devtools.build.android.resources.JavaIdentifierValidator.InvalidJavaIdentifier;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -41,7 +42,6 @@ import java.util.logging.Logger;
  *      --tool PACKAGE\
  *      --sdkRoot path/to/sdk\
  *      --aapt path/to/sdk/aapt\
- *      --annotationJar path/to/sdk/annotationJar\
  *      --adb path/to/sdk/adb\
  *      --zipAlign path/to/sdk/zipAlign\
  *      --androidJar path/to/sdk/androidJar\
@@ -144,6 +144,12 @@ public class ResourceProcessorBusyBox {
       void call(String[] args) throws Exception {
         Aapt2ResourceShrinkingAction.main(args);
       }
+    },
+    MERGE_ASSETS() {
+      @Override
+      void call(String[] args) throws Exception {
+        AndroidAssetMergingAction.main(args);
+      }
     };
 
     abstract void call(String[] args) throws Exception;
@@ -162,18 +168,17 @@ public class ResourceProcessorBusyBox {
   /** Flag specifications for this action. */
   public static final class Options extends OptionsBase {
     @Option(
-      name = "tool",
-      defaultValue = "null",
-      converter = ToolConverter.class,
-      category = "input",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
-      help =
-          "The processing tool to execute. "
-              + "Valid tools: PACKAGE, VALIDATE, GENERATE_BINARY_R, GENERATE_LIBRARY_R, PARSE, "
-              + "MERGE, GENERATE_AAR, SHRINK, MERGE_MANIFEST, COMPILE_LIBRARY_RESOURCES, "
-              + "LINK_STATIC_LIBRARY, AAPT2_PACKAGE, SHRINK_AAPT2, MERGE_COMPILED."
-    )
+        name = "tool",
+        defaultValue = "null",
+        converter = ToolConverter.class,
+        category = "input",
+        documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+        effectTags = {OptionEffectTag.UNKNOWN},
+        help =
+            "The processing tool to execute. "
+                + "Valid tools: PACKAGE, VALIDATE, GENERATE_BINARY_R, GENERATE_LIBRARY_R, PARSE, "
+                + "MERGE, GENERATE_AAR, SHRINK, MERGE_MANIFEST, COMPILE_LIBRARY_RESOURCES, "
+                + "LINK_STATIC_LIBRARY, AAPT2_PACKAGE, SHRINK_AAPT2, MERGE_COMPILED.")
     public Tool tool;
   }
 
@@ -186,10 +191,8 @@ public class ResourceProcessorBusyBox {
     Options options = optionsParser.getOptions(Options.class);
     try {
       options.tool.call(optionsParser.getResidue().toArray(new String[0]));
-    } catch (MergingException | IOException e) {
+    } catch (MergingException | IOException | Aapt2Exception | InvalidJavaIdentifier e) {
       logger.severe(e.getMessage());
-      logSuppressedAndExit(e);
-    } catch (Aapt2Exception e) {
       logSuppressedAndExit(e);
     }
   }

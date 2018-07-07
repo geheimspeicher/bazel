@@ -14,19 +14,18 @@
 package com.google.devtools.build.lib.analysis.config.transitions;
 
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 
-/**
- * A {@link PatchTransition} to a null configuration.
- */
+/** A {@link PatchTransition} to a null configuration. */
 public class NullTransition implements PatchTransition {
 
-  public static final NullTransition INSTANCE = new NullTransition();
+  @AutoCodec public static final NullTransition INSTANCE = new NullTransition();
 
   private NullTransition() {
   }
 
   @Override
-  public BuildOptions apply(BuildOptions options) {
+  public BuildOptions patch(BuildOptions options) {
     throw new UnsupportedOperationException(
         "This is only referenced in a few places, so it's easier and more efficient to optimize "
         + "Blaze's transition logic in the presence of null transitions vs. actually call this "

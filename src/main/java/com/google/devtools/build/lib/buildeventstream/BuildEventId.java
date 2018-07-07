@@ -18,6 +18,7 @@ import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.Bui
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.ConfigurationId;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.protobuf.TextFormat;
 import java.io.Serializable;
@@ -34,11 +35,13 @@ import javax.annotation.concurrent.Immutable;
  * identifiers that do not accidentally coincide is by providing a target or a target pattern;
  * therefore, those (if provided) are made specially visible.
  */
+@AutoCodec
 @Immutable
 public final class BuildEventId implements Serializable {
   private final BuildEventStreamProtos.BuildEventId protoid;
 
-  private BuildEventId(BuildEventStreamProtos.BuildEventId protoid) {
+  @AutoCodec.VisibleForSerialization
+  BuildEventId(BuildEventStreamProtos.BuildEventId protoid) {
     this.protoid = protoid;
   }
 
@@ -300,6 +303,14 @@ public final class BuildEventId implements Serializable {
         BuildEventStreamProtos.BuildEventId.newBuilder()
             .setBuildToolLogs(
                 BuildEventStreamProtos.BuildEventId.BuildToolLogsId.getDefaultInstance())
+            .build());
+  }
+
+  public static BuildEventId buildMetrics() {
+    return new BuildEventId(
+        BuildEventStreamProtos.BuildEventId.newBuilder()
+            .setBuildMetrics(
+                BuildEventStreamProtos.BuildEventId.BuildMetricsId.getDefaultInstance())
             .build());
   }
 }

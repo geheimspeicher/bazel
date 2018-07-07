@@ -17,8 +17,6 @@ package com.google.devtools.build.lib.rules.objc;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -29,17 +27,12 @@ import java.util.List;
  * Command-line options for J2ObjC translation of Java source code to ObjC. These command line
  * options are used by Java rules that can be transpiled (specifically, J2ObjCAspects thereof).
  */
-@AutoCodec(strategy = AutoCodec.Strategy.PUBLIC_FIELDS)
 public class J2ObjcCommandLineOptions extends FragmentOptions {
-  public static final ObjectCodec<J2ObjcCommandLineOptions> CODEC =
-      new J2ObjcCommandLineOptions_AutoCodec();
-
   @Option(
     name = "j2objc_translation_flags",
     converter = Converters.CommaSeparatedOptionListConverter.class,
     allowMultiple = true,
     defaultValue = "",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     help = "Additional options to pass to the J2ObjC tool."
@@ -72,7 +65,6 @@ public class J2ObjcCommandLineOptions extends FragmentOptions {
   @Option(
     name = "explicit_jre_deps",
     defaultValue = "true",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     help = "This flag is a noop and will be removed."
@@ -82,7 +74,6 @@ public class J2ObjcCommandLineOptions extends FragmentOptions {
   @Option(
     name = "experimental_j2objc_header_map",
     defaultValue = "true",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     help = "Whether to generate J2ObjC header map in parallel of J2ObjC transpilation."

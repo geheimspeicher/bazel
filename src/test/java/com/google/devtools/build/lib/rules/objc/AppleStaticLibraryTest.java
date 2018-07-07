@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.getFirstArtifactEndingWith;
 import static com.google.devtools.build.lib.rules.objc.ObjcRuleClasses.LIPO;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
@@ -214,8 +215,8 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
         "--crosstool_top=//tools/osx/crosstool:crosstool");
 
     CommandAction action = (CommandAction) lipoLibAction("//package:test");
-    String i386Prefix = configurationBin("i386", ConfigurationDistinguisher.APPLEBIN_IOS, null);
-    String x8664Prefix = configurationBin("x86_64", ConfigurationDistinguisher.APPLEBIN_IOS, null);
+    String i386Prefix = configurationBin("i386", ConfigurationDistinguisher.APPLEBIN_IOS);
+    String x8664Prefix = configurationBin("x86_64", ConfigurationDistinguisher.APPLEBIN_IOS);
 
     CommandAction i386BinAction =
         (CommandAction)
@@ -482,7 +483,7 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
   }
 
   @Test
-  public void testAppleStaticLibraryProvider() throws Exception {
+  public void testAppleStaticLibraryInfo() throws Exception {
     RULE_TYPE.scratchTarget(scratch, "platform_type", "'ios'");
     ConfiguredTarget binTarget = getConfiguredTarget("//x:x");
     AppleStaticLibraryInfo provider =
@@ -566,6 +567,7 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_offByDefault() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -573,6 +575,7 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
         "    name = 'static_lib',",
         "    deps = ['//lib:objcLib'],",
         "    platform_type = 'ios',",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkLibAction("//test:static_lib");
@@ -594,6 +597,7 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_oneFlagOn() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -603,7 +607,8 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
         "    platform_type = 'ios',",
         "    feature_flags = {",
         "      '//lib:flag2': 'on',",
-        "    }",
+        "    },",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkLibAction("//test:static_lib");
@@ -625,6 +630,7 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
 
   @Test
   public void testFeatureFlags_allFlagsOn() throws Exception {
+    useConfiguration("--enforce_transitive_configs_for_config_feature_flag");
     scratchFeatureFlagTestLib();
     scratch.file(
         "test/BUILD",
@@ -635,7 +641,8 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
         "    feature_flags = {",
         "      '//lib:flag1': 'on',",
         "      '//lib:flag2': 'on',",
-        "    }",
+        "    },",
+        "    transitive_configs = ['//lib:flag1', '//lib:flag2'],",
         ")");
 
     CommandAction linkAction = linkLibAction("//test:static_lib");
@@ -653,5 +660,80 @@ public class AppleStaticLibraryTest extends ObjcRuleTestCase {
     assertThat(compileArgs1).contains("FLAG_2_ON");
     assertThat(compileArgs2).contains("FLAG_1_ON");
     assertThat(compileArgs2).contains("FLAG_2_ON");
+  }
+
+  @Test
+  public void testAppleStaticLibraryProvider() throws Exception {
+    RULE_TYPE.scratchTarget(scratch, "platform_type", "'ios'");
+    scratch.file("examples/rule/BUILD");
+    scratch.file(
+        "examples/rule/apple_rules.bzl",
+        "def skylark_static_lib_impl(ctx):",
+        "   dep_provider = ctx.attr.proxy[apple_common.AppleStaticLibrary]",
+        "   my_provider = apple_common.AppleStaticLibrary(archive = dep_provider.archive,",
+        "       objc = dep_provider.objc)",
+        "   return struct(",
+        "      providers = [my_provider]",
+        "   )",
+        "",
+        "skylark_static_lib = rule(",
+        "  implementation = skylark_static_lib_impl,",
+        "  attrs = {'proxy': attr.label()},",
+        ")");
+
+    scratch.file(
+        "examples/apple_skylark/BUILD",
+        "package(default_visibility = ['//visibility:public'])",
+        "load('//examples/rule:apple_rules.bzl', 'skylark_static_lib')",
+        "skylark_static_lib(",
+        "   name='my_target',",
+        "   proxy='//x:x'",
+        ")");
+
+    ConfiguredTarget binTarget = getConfiguredTarget("//examples/apple_skylark:my_target");
+
+    AppleStaticLibraryInfo provider =
+        binTarget.get(AppleStaticLibraryInfo.SKYLARK_CONSTRUCTOR);
+    assertThat(provider).isNotNull();
+    assertThat(provider.getMultiArchArchive()).isNotNull();
+    assertThat(provider.getDepsObjcProvider()).isNotNull();
+    assertThat(provider.getMultiArchArchive()).isEqualTo(
+        Iterables.getOnlyElement(
+            provider.getDepsObjcProvider().get(ObjcProvider.MULTI_ARCH_LINKED_ARCHIVES)));
+  }
+
+  @Test
+  public void testAppleStaticLibraryProvider_invalidArgs() throws Exception {
+    RULE_TYPE.scratchTarget(scratch, "platform_type", "'ios'");
+    scratch.file("examples/rule/BUILD");
+    scratch.file(
+        "examples/rule/apple_rules.bzl",
+        "def skylark_static_lib_impl(ctx):",
+        "   dep_provider = ctx.attr.proxy[apple_common.AppleStaticLibrary]",
+        "   my_provider = apple_common.AppleStaticLibrary(archive = dep_provider.archive,",
+        "       objc = dep_provider.objc, foo = 'bar')",
+        "   return struct(",
+        "      providers = [my_provider]",
+        "   )",
+        "",
+        "skylark_static_lib = rule(",
+        "  implementation = skylark_static_lib_impl,",
+        "  attrs = {'proxy': attr.label()},",
+        ")");
+
+    scratch.file(
+        "examples/apple_skylark/BUILD",
+        "package(default_visibility = ['//visibility:public'])",
+        "load('//examples/rule:apple_rules.bzl', 'skylark_static_lib')",
+        "skylark_static_lib(",
+        "   name='my_target',",
+        "   proxy='//x:x'",
+        ")");
+
+    AssertionError expected =
+        assertThrows(AssertionError.class, () ->
+            getConfiguredTarget("//examples/apple_skylark:my_target"));
+    assertThat(expected).hasMessageThat()
+        .contains("unexpected keyword 'foo' in call");
   }
 }

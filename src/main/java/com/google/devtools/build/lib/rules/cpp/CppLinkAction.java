@@ -22,7 +22,9 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.AbstractAction;
+import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
@@ -38,21 +40,24 @@ import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SimpleSpawn;
 import com.google.devtools.build.lib.actions.Spawn;
+import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.extra.CppLinkInfo;
 import com.google.devtools.build.lib.actions.extra.ExtraActionInfo;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.collect.CollectionUtils;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams.Linkstamp;
-import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
-import com.google.devtools.build.lib.rules.cpp.Link.LinkStaticness;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
+import com.google.devtools.build.lib.rules.cpp.Link.LinkingMode;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -61,12 +66,12 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 
-/** 
- * Action that represents a linking step. 
- */
+/** Action that represents a linking step. */
 @ThreadCompatible
+@AutoCodec
 public final class CppLinkAction extends AbstractAction
     implements ExecutionInfoSpecifier, CommandAction {
 
@@ -103,12 +108,9 @@ public final class CppLinkAction extends AbstractAction
   private static final String FAKE_LINK_GUID = "da36f819-5a15-43a9-8a45-e01b60e10c8b";
   
   @Nullable private final String mnemonic;
-  private final CppConfiguration cppConfiguration;
   private final LibraryToLink outputLibrary;
   private final Artifact linkOutput;
   private final LibraryToLink interfaceOutputLibrary;
-  private final ImmutableSet<String> clientEnvironmentVariables;
-  private final ImmutableMap<String, String> actionEnv;
   private final ImmutableMap<String, String> toolchainEnv;
   private final ImmutableSet<String> executionRequirements;
   private final ImmutableList<Artifact> linkstampObjects;
@@ -117,6 +119,8 @@ public final class CppLinkAction extends AbstractAction
 
   /** True for cc_fake_binary targets. */
   private final boolean fake;
+
+  private final Iterable<Artifact> fakeLinkerInputArtifacts;
   private final boolean isLtoIndexing;
 
   private final PathFragment ldExecutable;
@@ -153,46 +157,41 @@ public final class CppLinkAction extends AbstractAction
       ActionOwner owner,
       String mnemonic,
       Iterable<Artifact> inputs,
-      ImmutableList<Artifact> outputs,
-      CppConfiguration cppConfiguration,
+      ImmutableSet<Artifact> outputs,
       LibraryToLink outputLibrary,
       Artifact linkOutput,
       LibraryToLink interfaceOutputLibrary,
       boolean fake,
+      Iterable<Artifact> fakeLinkerInputArtifacts,
       boolean isLtoIndexing,
       ImmutableList<Artifact> linkstampObjects,
       LinkCommandLine linkCommandLine,
-      ImmutableSet<String> clientEnvironmentVariables,
-      ImmutableMap<String, String> actionEnv,
+      ActionEnvironment env,
       ImmutableMap<String, String> toolchainEnv,
       ImmutableSet<String> executionRequirements,
-      CcToolchainProvider toolchain) {
-    super(owner, inputs, outputs);
+      PathFragment ldExecutable,
+      String hostSystemName,
+      String targetCpu) {
+    super(owner, inputs, outputs, env);
     if (mnemonic == null) {
       this.mnemonic = (isLtoIndexing) ? "CppLTOIndexing" : "CppLink";
     } else {
       this.mnemonic = mnemonic;
     }
     this.mandatoryInputs = inputs;
-    this.cppConfiguration = cppConfiguration;
     this.outputLibrary = outputLibrary;
     this.linkOutput = linkOutput;
     this.interfaceOutputLibrary = interfaceOutputLibrary;
     this.fake = fake;
+    this.fakeLinkerInputArtifacts = CollectionUtils.makeImmutable(fakeLinkerInputArtifacts);
     this.isLtoIndexing = isLtoIndexing;
     this.linkstampObjects = linkstampObjects;
     this.linkCommandLine = linkCommandLine;
-    this.clientEnvironmentVariables = clientEnvironmentVariables;
-    this.actionEnv = actionEnv;
     this.toolchainEnv = toolchainEnv;
     this.executionRequirements = executionRequirements;
-    this.ldExecutable = toolchain.getToolPathFragment(Tool.LD);
-    this.hostSystemName = toolchain.getHostSystemName();
-    this.targetCpu = toolchain.getTargetCpu();
-  }
-
-  private CppConfiguration getCppConfiguration() {
-    return cppConfiguration;
+    this.ldExecutable = ldExecutable;
+    this.hostSystemName = hostSystemName;
+    this.targetCpu = targetCpu;
   }
 
   @VisibleForTesting
@@ -211,15 +210,15 @@ public final class CppLinkAction extends AbstractAction
   }
 
   @Override
-  public Iterable<String> getClientEnvironmentVariables() {
-    return clientEnvironmentVariables;
+  @VisibleForTesting
+  public ImmutableMap<String, String> getIncompleteEnvironmentForTesting() {
+    return getEnvironment(ImmutableMap.of());
   }
 
-  @Override
-  public ImmutableMap<String, String> getEnvironment() {
-    LinkedHashMap<String, String> result = new LinkedHashMap<>();
+  public ImmutableMap<String, String> getEnvironment(Map<String, String> clientEnv) {
+    LinkedHashMap<String, String> result = Maps.newLinkedHashMapWithExpectedSize(env.size());
+    env.resolve(result, clientEnv);
 
-    result.putAll(actionEnv);
     result.putAll(toolchainEnv);
 
     if (!executionRequirements.contains(ExecutionRequirements.REQUIRES_DARWIN)) {
@@ -260,11 +259,9 @@ public final class CppLinkAction extends AbstractAction
     return linkOutput;
   }
 
-  /**
-   * Returns the path to the output artifact produced by the linker.
-   */
-  public Path getOutputFile() {
-    return linkOutput.getPath();
+  /** Returns the path to the output artifact produced by the linker. */
+  private Path getOutputFile(ActionExecutionContext actionExecutionContext) {
+    return actionExecutionContext.getInputPath(linkOutput);
   }
 
   @Override
@@ -275,7 +272,7 @@ public final class CppLinkAction extends AbstractAction
     }
     return result.build();
   }
-  
+
   @Override
   public List<String> getArguments() {
     return linkCommandLine.arguments();
@@ -307,7 +304,7 @@ public final class CppLinkAction extends AbstractAction
   public ActionResult execute(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
     if (fake) {
-      executeFake(actionExecutionContext.getArtifactExpander());
+      executeFake(actionExecutionContext);
       return ActionResult.EMPTY;
     } else {
       try {
@@ -315,14 +312,14 @@ public final class CppLinkAction extends AbstractAction
             new SimpleSpawn(
                 this,
                 ImmutableList.copyOf(getCommandLine(actionExecutionContext.getArtifactExpander())),
-                getEnvironment(),
+                getEnvironment(actionExecutionContext.getClientEnv()),
                 getExecutionInfo(),
                 ImmutableList.copyOf(getMandatoryInputs()),
                 getOutputs().asList(),
                 estimateResourceConsumptionLocal());
         return ActionResult.create(
             actionExecutionContext
-                .getSpawnActionContext(getMnemonic())
+                .getContext(SpawnActionContext.class)
                 .exec(spawn, actionExecutionContext));
       } catch (ExecException e) {
         throw e.toActionExecutionException(
@@ -335,11 +332,14 @@ public final class CppLinkAction extends AbstractAction
 
   // Don't forget to update FAKE_LINK_GUID if you modify this method.
   @ThreadCompatible
-  private void executeFake(@Nullable ArtifactExpander expander) throws ActionExecutionException {
+  private void executeFake(ActionExecutionContext actionExecutionContext)
+      throws ActionExecutionException {
     // Prefix all fake output files in the command line with $TEST_TMPDIR/.
     final String outputPrefix = "$TEST_TMPDIR/";
     List<String> escapedLinkArgv =
-        escapeLinkArgv(linkCommandLine.getRawLinkArgv(expander), outputPrefix);
+        escapeLinkArgv(
+            linkCommandLine.getRawLinkArgv(actionExecutionContext.getArtifactExpander()),
+            outputPrefix);
     // Write the commands needed to build the real target to the fake target
     // file.
     StringBuilder s = new StringBuilder();
@@ -355,28 +355,29 @@ public final class CppLinkAction extends AbstractAction
 
     try {
       // Concatenate all the (fake) .o files into the result.
-      for (LinkerInput linkerInput : getLinkCommandLine().getLinkerInputs()) {
-        Artifact objectFile = linkerInput.getArtifact();
-        if ((CppFileTypes.OBJECT_FILE.matches(objectFile.getFilename())
-                || CppFileTypes.PIC_OBJECT_FILE.matches(objectFile.getFilename()))
-            && linkerInput.isFake()) {
-          s.append(FileSystemUtils.readContentAsLatin1(objectFile.getPath())); // (IOException)
+      for (Artifact objectFile : fakeLinkerInputArtifacts) {
+        if (CppFileTypes.OBJECT_FILE.matches(objectFile.getFilename())
+            || CppFileTypes.PIC_OBJECT_FILE.matches(objectFile.getFilename())) {
+          s.append(
+              FileSystemUtils.readContentAsLatin1(
+                  actionExecutionContext.getInputPath(objectFile))); // (IOException)
         }
       }
+      Path outputFile = getOutputFile(actionExecutionContext);
 
-      s.append(getOutputFile().getBaseName()).append(": ");
+      s.append(outputFile.getBaseName()).append(": ");
       Joiner.on(' ').appendTo(s, escapedLinkArgv);
       s.append('\n');
-      if (getOutputFile().exists()) {
-        getOutputFile().setWritable(true); // (IOException)
+      if (outputFile.exists()) {
+        outputFile.setWritable(true); // (IOException)
       }
-      FileSystemUtils.writeContent(getOutputFile(), ISO_8859_1, s.toString());
-      getOutputFile().setExecutable(true); // (IOException)
+      FileSystemUtils.writeContent(outputFile, ISO_8859_1, s.toString());
+      outputFile.setExecutable(true); // (IOException)
       for (Artifact output : getOutputs()) {
         // Make ThinLTO link actions (that also have ThinLTO-specific outputs) kind of work; It does
         // not actually work because this makes cc_fake_binary see the indexing action and not the
         // actual linking action, but it's good enough for now.
-        FileSystemUtils.touchFile(output.getPath());
+        FileSystemUtils.touchFile(actionExecutionContext.getInputPath(output));
       }
     } catch (IOException e) {
       throw new ActionExecutionException("failed to create fake link command for rule '"
@@ -415,16 +416,13 @@ public final class CppLinkAction extends AbstractAction
     // The uses of getLinkConfiguration in this method may not be consistent with the computed key.
     // I.e., this may be incrementally incorrect.
     CppLinkInfo.Builder info = CppLinkInfo.newBuilder();
-    info.addAllInputFile(Artifact.toExecPaths(
-        LinkerInputs.toLibraryArtifacts(getLinkCommandLine().getLinkerInputs())));
-    info.addAllInputFile(Artifact.toExecPaths(
-        LinkerInputs.toLibraryArtifacts(getLinkCommandLine().getRuntimeInputs())));
+    info.addAllInputFile(Artifact.toExecPaths(getLinkCommandLine().getLinkerInputArtifacts()));
     info.setOutputFile(getPrimaryOutput().getExecPathString());
     if (interfaceOutputLibrary != null) {
       info.setInterfaceOutputFile(interfaceOutputLibrary.getArtifact().getExecPathString());
     }
     info.setLinkTargetType(getLinkCommandLine().getLinkTargetType().name());
-    info.setLinkStaticness(getLinkCommandLine().getLinkStaticness().name());
+    info.setLinkStaticness(getLinkCommandLine().getLinkingMode().name());
     info.addAllLinkStamp(Artifact.toExecPaths(getLinkstampObjects()));
     info.addAllBuildInfoHeaderArtifact(Artifact.toExecPaths(getBuildInfoHeaderArtifacts()));
     info.addAllLinkOpt(getLinkCommandLine().getRawLinkArgv(null));
@@ -443,12 +441,11 @@ public final class CppLinkAction extends AbstractAction
   }
 
   @Override
-  protected String computeKey(ActionKeyContext actionKeyContext) {
-    Fingerprint f = new Fingerprint();
-    f.addString(fake ? FAKE_LINK_GUID : LINK_GUID);
-    f.addString(ldExecutable.getPathString());
-    f.addStrings(linkCommandLine.arguments());
-    f.addStrings(getExecutionInfo().keySet());
+  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+    fp.addString(fake ? FAKE_LINK_GUID : LINK_GUID);
+    fp.addString(ldExecutable.getPathString());
+    fp.addStrings(linkCommandLine.arguments());
+    fp.addStrings(getExecutionInfo().keySet());
 
     // TODO(bazel-team): For correctness, we need to ensure the invariant that all values accessed
     // during the execution phase are also covered by the key. Above, we add the argv to the key,
@@ -457,13 +454,12 @@ public final class CppLinkAction extends AbstractAction
     // key. We either need to change the code to cover them in the key computation, or change the
     // LinkConfiguration to disallow the combinations where the value of a setting does not affect
     // the argv.
-    f.addBoolean(linkCommandLine.isNativeDeps());
-    f.addBoolean(linkCommandLine.useTestOnlyFlags());
-    if (linkCommandLine.getRuntimeSolibDir() != null) {
-      f.addPath(linkCommandLine.getRuntimeSolibDir());
+    fp.addBoolean(linkCommandLine.isNativeDeps());
+    fp.addBoolean(linkCommandLine.useTestOnlyFlags());
+    if (linkCommandLine.getToolchainLibrariesSolibDir() != null) {
+      fp.addPath(linkCommandLine.getToolchainLibrariesSolibDir());
     }
-    f.addBoolean(isLtoIndexing);
-    return f.hexDigestAndReset();
+    fp.addBoolean(isLtoIndexing);
   }
 
   @Override
@@ -475,9 +471,7 @@ public final class CppLinkAction extends AbstractAction
     message.append(getProgressMessage());
     message.append('\n');
     message.append("  Command: ");
-    message.append(
-        ShellEscaper.escapeString(
-            getCppConfiguration().getToolPathFragment(Tool.LD).getPathString()));
+    message.append(ShellEscaper.escapeString(linkCommandLine.getLinkerPathString()));
     message.append('\n');
     // Outputting one argument per line makes it easier to diff the results.
     for (String argument : ShellEscaper.escapeAll(linkCommandLine.arguments())) {
@@ -504,12 +498,11 @@ public final class CppLinkAction extends AbstractAction
   public ResourceSet estimateResourceConsumptionLocal() {
     // It's ok if this behaves differently even if the key is identical.
     ResourceSet minLinkResources =
-        getLinkCommandLine().getLinkStaticness() == Link.LinkStaticness.DYNAMIC
-        ? MIN_DYNAMIC_LINK_RESOURCES
-        : MIN_STATIC_LINK_RESOURCES;
+        getLinkCommandLine().getLinkingMode() == LinkingMode.DYNAMIC
+            ? MIN_DYNAMIC_LINK_RESOURCES
+            : MIN_STATIC_LINK_RESOURCES;
 
-    final int inputSize = Iterables.size(getLinkCommandLine().getLinkerInputs())
-        + Iterables.size(getLinkCommandLine().getRuntimeInputs());
+    final int inputSize = Iterables.size(getLinkCommandLine().getLinkerInputArtifacts());
 
     return ResourceSet.createWithRamCpuIo(
         Math.max(inputSize * LINK_RESOURCES_PER_INPUT.getMemoryMb(),
@@ -542,10 +535,10 @@ public final class CppLinkAction extends AbstractAction
     return binaryName.replaceName(binaryName.getBaseName() + ".sc");
   }
 
-  /**
-   * TransitiveInfoProvider for ELF link actions.
-   */
-  @Immutable @ThreadSafe
+  /** TransitiveInfoProvider for ELF link actions. */
+  @Immutable
+  @ThreadSafe
+  @AutoCodec
   public static final class Context implements TransitiveInfoProvider {
     // Morally equivalent with {@link Builder}, except these are immutable.
     // Keep these in sync with {@link Builder}.
@@ -560,7 +553,7 @@ public final class CppLinkAction extends AbstractAction
     final ImmutableSet<Linkstamp> linkstamps;
     final ImmutableList<String> linkopts;
     final LinkTargetType linkType;
-    final LinkStaticness linkStaticness;
+    final LinkingMode linkingMode;
     final boolean fake;
     final boolean isNativeDeps;
     final boolean useTestOnlyFlags;
@@ -572,24 +565,63 @@ public final class CppLinkAction extends AbstractAction
      * @param builder a mutable {@link CppLinkActionBuilder} to clone from
      */
     public Context(CppLinkActionBuilder builder) {
-      this.objectFiles = ImmutableSet.copyOf(builder.getObjectFiles());
-      this.nonCodeInputs = ImmutableSet.copyOf(builder.getNonCodeInputs());
-      this.libraries = NestedSetBuilder.<LibraryToLink>linkOrder()
-          .addTransitive(builder.getLibraries().build()).build();
-      this.crosstoolInputs =
-          NestedSetBuilder.<Artifact>stableOrder().addTransitive(builder.getCrosstoolInputs()).build();
-      this.ltoBitcodeFiles = ImmutableMap.copyOf(builder.getLtoBitcodeFiles());
-      this.runtimeMiddleman = builder.getRuntimeMiddleman();
-      this.runtimeInputs =
-          NestedSetBuilder.<Artifact>stableOrder().addTransitive(builder.getRuntimeInputs()).build();
-      this.runtimeType = builder.getRuntimeType();
-      this.linkstamps = builder.getLinkstamps();
-      this.linkopts = ImmutableList.copyOf(builder.getLinkopts());
-      this.linkType = builder.getLinkType();
-      this.linkStaticness = builder.getLinkStaticness();
-      this.fake = builder.isFake();
-      this.isNativeDeps = builder.isNativeDeps();
-      this.useTestOnlyFlags = builder.useTestOnlyFlags();
+      this(
+          ImmutableSet.copyOf(builder.getObjectFiles()),
+          ImmutableSet.copyOf(builder.getNonCodeInputs()),
+          NestedSetBuilder.<LibraryToLink>linkOrder()
+              .addTransitive(builder.getLibraries().build())
+              .build(),
+          NestedSetBuilder.<Artifact>stableOrder()
+              .addTransitive(builder.getCrosstoolInputs())
+              .build(),
+          ImmutableMap.copyOf(builder.getLtoBitcodeFiles()),
+          builder.getRuntimeMiddleman(),
+          NestedSetBuilder.<Artifact>stableOrder()
+              .addTransitive(builder.getToolchainLibrariesInputs())
+              .build(),
+          builder.getToolchainLibrariesType(),
+          builder.getLinkstamps(),
+          ImmutableList.copyOf(builder.getLinkopts()),
+          builder.getLinkType(),
+          builder.getLinkingMode(),
+          builder.isFake(),
+          builder.isNativeDeps(),
+          builder.useTestOnlyFlags());
+    }
+
+    @AutoCodec.Instantiator
+    @VisibleForSerialization
+    Context(
+        ImmutableSet<LinkerInput> objectFiles,
+        ImmutableSet<Artifact> nonCodeInputs,
+        NestedSet<LibraryToLink> libraries,
+        NestedSet<Artifact> crosstoolInputs,
+        ImmutableMap<Artifact, Artifact> ltoBitcodeFiles,
+        Artifact runtimeMiddleman,
+        NestedSet<Artifact> runtimeInputs,
+        ArtifactCategory runtimeType,
+        ImmutableSet<Linkstamp> linkstamps,
+        ImmutableList<String> linkopts,
+        LinkTargetType linkType,
+        Link.LinkingMode linkingMode,
+        boolean fake,
+        boolean isNativeDeps,
+        boolean useTestOnlyFlags) {
+      this.objectFiles = objectFiles;
+      this.nonCodeInputs = nonCodeInputs;
+      this.libraries = libraries;
+      this.crosstoolInputs = crosstoolInputs;
+      this.ltoBitcodeFiles = ltoBitcodeFiles;
+      this.runtimeMiddleman = runtimeMiddleman;
+      this.runtimeInputs = runtimeInputs;
+      this.runtimeType = runtimeType;
+      this.linkstamps = linkstamps;
+      this.linkopts = linkopts;
+      this.linkType = linkType;
+      this.linkingMode = linkingMode;
+      this.fake = fake;
+      this.isNativeDeps = isNativeDeps;
+      this.useTestOnlyFlags = useTestOnlyFlags;
     }
 
     /**
@@ -645,12 +677,10 @@ public final class CppLinkAction extends AbstractAction
     public LinkTargetType getLinkType() {
       return this.linkType;
     }
-    
-    /**
-     * Returns the staticness of the linking of this target.
-     */
-    public LinkStaticness getLinkStaticness() {
-      return this.linkStaticness;
+
+    /** Returns the staticness of the linking of this target. */
+    public LinkingMode getLinkingMode() {
+      return this.linkingMode;
     }
     
     /**

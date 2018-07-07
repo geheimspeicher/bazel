@@ -34,7 +34,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import javax.annotation.Nullable;
 
 /**
@@ -130,7 +129,7 @@ public final class CommandHelper {
     this.toolsRunfilesSuppliers = SkylarkList.createImmutable(toolsRunfilesBuilder.build());
     ImmutableMap.Builder<Label, ImmutableCollection<Artifact>> labelMapBuilder =
         ImmutableMap.builder();
-    for (Entry<Label, Collection<Artifact>> entry : tempLabelMap.entrySet()) {
+    for (Map.Entry<Label, Collection<Artifact>> entry : tempLabelMap.entrySet()) {
       labelMapBuilder.put(entry.getKey(), ImmutableList.copyOf(entry.getValue()));
     }
     this.labelMap = labelMapBuilder.build();
@@ -255,29 +254,36 @@ public final class CommandHelper {
   }
 
   /**
-   * Builds the set of command-line arguments. Creates a bash script if the
-   * command line is longer than the allowed maximum {@link #maxCommandLength}.
-   * Fixes up the input artifact list with the created bash script when required.
+   * Builds the set of command-line arguments. Creates a bash script if the command line is longer
+   * than the allowed maximum {@link #maxCommandLength}. Fixes up the input artifact list with the
+   * created bash script when required.
    */
   public List<String> buildCommandLine(
-      String command, NestedSetBuilder<Artifact> inputs, String scriptPostFix) {
-    return buildCommandLine(command, inputs, scriptPostFix, ImmutableMap.<String, String>of());
+      PathFragment shExecutable,
+      String command,
+      NestedSetBuilder<Artifact> inputs,
+      String scriptPostFix) {
+    return buildCommandLine(
+        shExecutable, command, inputs, scriptPostFix, ImmutableMap.<String, String>of());
   }
 
   /**
    * Builds the set of command-line arguments using the specified shell path. Creates a bash script
-   * if the command line is longer than the allowed maximum {@link #maxCommandLength}.
-   * Fixes up the input artifact list with the created bash script when required.
+   * if the command line is longer than the allowed maximum {@link #maxCommandLength}. Fixes up the
+   * input artifact list with the created bash script when required.
    *
    * @param executionInfo an execution info map of the action associated with the command line to be
    *     built.
    */
   public List<String> buildCommandLine(
-      String command, NestedSetBuilder<Artifact> inputs, String scriptPostFix,
+      PathFragment shExecutable,
+      String command,
+      NestedSetBuilder<Artifact> inputs,
+      String scriptPostFix,
       Map<String, String> executionInfo) {
     Pair<List<String>, Artifact> argvAndScriptFile =
-        buildCommandLineMaybeWithScriptFile(ruleContext, command, scriptPostFix,
-            shellPath(executionInfo));
+        buildCommandLineMaybeWithScriptFile(
+            ruleContext, command, scriptPostFix, shellPath(executionInfo, shExecutable));
     if (argvAndScriptFile.second != null) {
       inputs.add(argvAndScriptFile.second);
     }
@@ -285,27 +291,30 @@ public final class CommandHelper {
   }
 
   /**
-   * Builds the set of command-line arguments. Creates a bash script if the
-   * command line is longer than the allowed maximum {@link #maxCommandLength}.
-   * Fixes up the input artifact list with the created bash script when required.
+   * Builds the set of command-line arguments. Creates a bash script if the command line is longer
+   * than the allowed maximum {@link #maxCommandLength}. Fixes up the input artifact list with the
+   * created bash script when required.
    */
   public List<String> buildCommandLine(
-      String command, List<Artifact> inputs, String scriptPostFix,
+      PathFragment shExecutable,
+      String command,
+      List<Artifact> inputs,
+      String scriptPostFix,
       Map<String, String> executionInfo) {
-    Pair<List<String>, Artifact> argvAndScriptFile = buildCommandLineMaybeWithScriptFile(
-        ruleContext, command, scriptPostFix, shellPath(executionInfo));
+    Pair<List<String>, Artifact> argvAndScriptFile =
+        buildCommandLineMaybeWithScriptFile(
+            ruleContext, command, scriptPostFix, shellPath(executionInfo, shExecutable));
     if (argvAndScriptFile.second != null) {
       inputs.add(argvAndScriptFile.second);
     }
     return argvAndScriptFile.first;
   }
 
-  /**
-   * Returns the path to the shell for an action with the given execution requirements.
-   */
-  private PathFragment shellPath(Map<String, String> executionInfo) {
+  /** Returns the path to the shell for an action with the given execution requirements. */
+  private PathFragment shellPath(Map<String, String> executionInfo, PathFragment shExecutable) {
     // Use vanilla /bin/bash for actions running on mac machines.
     return executionInfo.containsKey(ExecutionRequirements.REQUIRES_DARWIN)
-        ? PathFragment.create("/bin/bash") : ruleContext.getConfiguration().getShellExecutable();
+        ? PathFragment.create("/bin/bash")
+        : shExecutable;
   }
 }

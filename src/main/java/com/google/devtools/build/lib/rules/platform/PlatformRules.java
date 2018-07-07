@@ -14,11 +14,12 @@
 package com.google.devtools.build.lib.rules.platform;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.Builder;
+import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSet;
 import com.google.devtools.build.lib.analysis.PlatformConfigurationLoader;
 import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.rules.core.CoreRules;
+import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformBootstrap;
 
 /**
  * Rules for supporting different platforms in Bazel.
@@ -31,7 +32,7 @@ public class PlatformRules implements RuleSet {
   }
 
   @Override
-  public void init(Builder builder) {
+  public void init(ConfiguredRuleClassProvider.Builder builder) {
     builder.addConfigurationOptions(PlatformOptions.class);
     builder.addConfigurationFragment(new PlatformConfigurationLoader());
 
@@ -42,7 +43,7 @@ public class PlatformRules implements RuleSet {
 
     builder.addRuleDefinition(new ToolchainRule());
 
-    builder.addSkylarkAccessibleTopLevels("platform_common", new PlatformCommon());
+    builder.addSkylarkBootstrap(new PlatformBootstrap(new PlatformCommon()));
   }
 
   @Override

@@ -46,11 +46,11 @@ import com.google.devtools.build.lib.actions.ArtifactOwner;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.Executor;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.MutableActionGraph;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.PackageRootResolver;
 import com.google.devtools.build.lib.actions.cache.Md5Digest;
-import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissDetail;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissReason;
@@ -64,7 +64,9 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.exec.SingleBuildFileCache;
 import com.google.devtools.build.lib.packages.AspectDescriptor;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.util.FileType;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.ResourceUsage;
 import com.google.devtools.build.lib.util.io.FileOutErr;
 import com.google.devtools.build.lib.vfs.FileStatus;
@@ -78,7 +80,6 @@ import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationResult;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import com.google.devtools.build.skyframe.ValueOrExceptionUtils;
 import com.google.devtools.build.skyframe.ValueOrUntypedException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -142,9 +143,11 @@ public final class ActionsTestUtil {
         metadataHandler,
         fileOutErr,
         ImmutableMap.copyOf(clientEnv),
+        ImmutableMap.of(),
         actionGraph == null
             ? createDummyArtifactExpander()
-            : ActionInputHelper.actionGraphArtifactExpander(actionGraph));
+            : ActionInputHelper.actionGraphArtifactExpander(actionGraph),
+        /*actionFileSystem=*/ null);
   }
 
   public static ActionExecutionContext createContextForInputDiscovery(
@@ -163,10 +166,11 @@ public final class ActionsTestUtil {
         fileOutErr,
         ImmutableMap.of(),
         new BlockingSkyFunctionEnvironment(
-            buildDriver, executor == null ? null : executor.getEventHandler()));
+            buildDriver, executor == null ? null : executor.getEventHandler()),
+        /*actionFileSystem=*/ null);
   }
 
-  public static ActionExecutionContext createContext(EventHandler eventHandler) {
+  public static ActionExecutionContext createContext(ExtendedEventHandler eventHandler) {
     DummyExecutor dummyExecutor = new DummyExecutor(eventHandler);
     return new ActionExecutionContext(
         dummyExecutor,
@@ -176,7 +180,9 @@ public final class ActionsTestUtil {
         null,
         null,
         ImmutableMap.of(),
-        createDummyArtifactExpander());
+        ImmutableMap.of(),
+        createDummyArtifactExpander(),
+        /*actionFileSystem=*/ null);
   }
 
   private static ArtifactExpander createDummyArtifactExpander() {
@@ -217,22 +223,22 @@ public final class ActionsTestUtil {
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         for (SkyKey key : depKeys) {
-          result.put(key, ValueOrExceptionUtils.ofNull());
+          result.put(key, ValueOrUntypedException.ofNull());
         }
         return result;
       }
       for (SkyKey key : depKeys) {
         SkyValue value = evaluationResult.get(key);
         if (value != null) {
-          result.put(key, ValueOrExceptionUtils.ofValue(value));
+          result.put(key, ValueOrUntypedException.ofValueUntyped(value));
           continue;
         }
         ErrorInfo errorInfo = evaluationResult.getError(key);
         if (errorInfo == null || errorInfo.getException() == null) {
-          result.put(key, ValueOrExceptionUtils.ofNull());
+          result.put(key, ValueOrUntypedException.ofNull());
           continue;
         }
-        result.put(key, ValueOrExceptionUtils.ofExn(errorInfo.getException()));
+        result.put(key, ValueOrUntypedException.ofExn(errorInfo.getException()));
       }
       return result;
     }
@@ -265,13 +271,16 @@ public final class ActionsTestUtil {
           null,
           null);
 
-  public static final ArtifactOwner NULL_ARTIFACT_OWNER =
-      new ArtifactOwner() {
-        @Override
-        public Label getLabel() {
-          return NULL_LABEL;
-        }
-      };
+  static class NullArtifactOwner implements ArtifactOwner {
+    private NullArtifactOwner() {}
+
+    @Override
+    public Label getLabel() {
+      return NULL_LABEL;
+    }
+  }
+
+  @AutoCodec public static final ArtifactOwner NULL_ARTIFACT_OWNER = new NullArtifactOwner();
 
   /** An unchecked exception class for action conflicts. */
   public static class UncheckedActionConflictException extends RuntimeException {
@@ -307,8 +316,8 @@ public final class ActionsTestUtil {
     }
 
     @Override
-    protected String computeKey(ActionKeyContext actionKeyContext) {
-      return "action";
+    protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+      fp.addString("action");
     }
 
     @Override
@@ -665,13 +674,12 @@ public final class ActionsTestUtil {
    */
   public static class FakeArtifactResolverBase implements ArtifactResolver {
     @Override
-    public Artifact getSourceArtifact(
-        PathFragment execPath, ArtifactRoot root, ArtifactOwner owner) {
+    public Artifact getSourceArtifact(PathFragment execPath, Root root, ArtifactOwner owner) {
       throw new UnsupportedOperationException();
     }
 
     @Override
-    public Artifact getSourceArtifact(PathFragment execPath, ArtifactRoot root) {
+    public Artifact getSourceArtifact(PathFragment execPath, Root root) {
       throw new UnsupportedOperationException();
     }
 
@@ -701,7 +709,7 @@ public final class ActionsTestUtil {
    */
   public static class FakeMetadataHandlerBase implements MetadataHandler {
     @Override
-    public Metadata getMetadata(Artifact artifact) throws IOException {
+    public FileArtifactValue getMetadata(Artifact artifact) throws IOException {
       throw new UnsupportedOperationException();
     }
 
@@ -722,6 +730,11 @@ public final class ActionsTestUtil {
 
     @Override
     public void injectDigest(ActionInput output, FileStatus statNoFollow, byte[] digest) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void injectRemoteFile(Artifact output, byte[] digest, long size, int locationIndex) {
       throw new UnsupportedOperationException();
     }
 

@@ -23,7 +23,9 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.LabelValidator;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.events.StoredEventHandler;
 import com.google.devtools.build.lib.packages.Package.NameConflictException;
@@ -32,32 +34,29 @@ import com.google.devtools.build.lib.packages.RuleFactory.InvalidRuleException;
 import com.google.devtools.build.lib.skylarkinterface.Param;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
 import com.google.devtools.build.lib.syntax.BaseFunction;
-import com.google.devtools.build.lib.syntax.BazelLibrary;
 import com.google.devtools.build.lib.syntax.BuildFileAST;
 import com.google.devtools.build.lib.syntax.BuiltinFunction;
 import com.google.devtools.build.lib.syntax.ClassObject;
 import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.Environment.Extension;
-import com.google.devtools.build.lib.syntax.Environment.Frame;
+import com.google.devtools.build.lib.syntax.Environment.GlobalFrame;
 import com.google.devtools.build.lib.syntax.Environment.Phase;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.FuncallExpression;
 import com.google.devtools.build.lib.syntax.FunctionSignature;
 import com.google.devtools.build.lib.syntax.Mutability;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
-import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.Runtime.NoneType;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.File;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
@@ -74,12 +73,14 @@ public class WorkspaceFactory {
           "__embedded_dir__", // serializable so optional
           "__workspace_dir__", // serializable so optional
           "DEFAULT_SERVER_JAVABASE", // serializable so optional
+          "DEFAULT_SYSTEM_JAVABASE", // serializable so optional
           PackageFactory.PKG_CONTEXT);
 
   private final Package.Builder builder;
 
   private final Path installDir;
   private final Path workspaceDir;
+  private final Path defaultSystemJavabaseDir;
   private final Mutability mutability;
 
   private final boolean allowOverride;
@@ -110,7 +111,7 @@ public class WorkspaceFactory {
       RuleClassProvider ruleClassProvider,
       ImmutableList<EnvironmentExtension> environmentExtensions,
       Mutability mutability) {
-    this(builder, ruleClassProvider, environmentExtensions, mutability, true, null, null);
+    this(builder, ruleClassProvider, environmentExtensions, mutability, true, null, null, null);
   }
 
   // TODO(bazel-team): document installDir
@@ -121,6 +122,7 @@ public class WorkspaceFactory {
    * @param mutability the Mutability for the current evaluation context
    * @param installDir the install directory
    * @param workspaceDir the workspace directory
+   * @param defaultSystemJavabaseDir the local JDK directory
    */
   public WorkspaceFactory(
       Package.Builder builder,
@@ -129,11 +131,13 @@ public class WorkspaceFactory {
       Mutability mutability,
       boolean allowOverride,
       @Nullable Path installDir,
-      @Nullable Path workspaceDir) {
+      @Nullable Path workspaceDir,
+      @Nullable Path defaultSystemJavabaseDir) {
     this.builder = builder;
     this.mutability = mutability;
     this.installDir = installDir;
     this.workspaceDir = workspaceDir;
+    this.defaultSystemJavabaseDir = defaultSystemJavabaseDir;
     this.allowOverride = allowOverride;
     this.environmentExtensions = environmentExtensions;
     this.ruleFactory = new RuleFactory(ruleClassProvider, AttributeContainer::new);
@@ -228,7 +232,7 @@ public class WorkspaceFactory {
     // also have a package builder specific to the current part and should be reinitialized for
     // each workspace file.
     ImmutableMap.Builder<String, Object> bindingsBuilder = ImmutableMap.builder();
-    Frame globals = workspaceEnv.getGlobals();
+    GlobalFrame globals = workspaceEnv.getGlobals();
     for (String s : globals.getBindings().keySet()) {
       Object o = globals.get(s);
       if (!isAWorkspaceFunction(s, o)) {
@@ -274,8 +278,9 @@ public class WorkspaceFactory {
     if (aPackage.containsErrors()) {
       builder.setContainsErrors();
     }
-    builder.addRegisteredExecutionPlatformLabels(aPackage.getRegisteredExecutionPlatformLabels());
-    builder.addRegisteredToolchainLabels(aPackage.getRegisteredToolchainLabels());
+    builder.addRegisteredExecutionPlatforms(aPackage.getRegisteredExecutionPlatforms());
+    builder.addRegisteredToolchains(aPackage.getRegisteredToolchains());
+    builder.addRepositoryMappings(aPackage);
     for (Rule rule : aPackage.getTargets(Rule.class)) {
       try {
         // The old rule references another Package instance and we wan't to keep the invariant that
@@ -326,8 +331,9 @@ public class WorkspaceFactory {
                 if (errorMessage != null) {
                   throw new EvalException(ast.getLocation(), errorMessage);
                 }
-                PackageFactory.getContext(env, ast).pkgBuilder.setWorkspaceName(name);
-                Package.Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
+                PackageFactory.getContext(env, ast.getLocation()).pkgBuilder.setWorkspaceName(name);
+                Package.Builder builder =
+                    PackageFactory.getContext(env, ast.getLocation()).pkgBuilder;
                 RuleClass localRepositoryRuleClass = ruleFactory.getRuleClass("local_repository");
                 RuleClass bindRuleClass = ruleFactory.getRuleClass("bind");
                 Map<String, Object> kwargs =
@@ -363,15 +369,15 @@ public class WorkspaceFactory {
           throws EvalException, InterruptedException {
         Label nameLabel;
         try {
-          nameLabel = Label.parseAbsolute("//external:" + name);
+          nameLabel = Label.parseAbsolute("//external:" + name, ImmutableMap.of());
           try {
-            Package.Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
+            Package.Builder builder = PackageFactory.getContext(env, ast.getLocation()).pkgBuilder;
             RuleClass ruleClass = ruleFactory.getRuleClass("bind");
             WorkspaceFactoryHelper.addBindRule(
                 builder,
                 ruleClass,
                 nameLabel,
-                actual == null ? null : Label.parseAbsolute(actual),
+                actual == null ? null : Label.parseAbsolute(actual, ImmutableMap.of()),
                 ast.getLocation(),
                 ruleFactory.getAttributeContainer(ruleClass));
           } catch (RuleFactory.InvalidRuleException
@@ -400,7 +406,7 @@ public class WorkspaceFactory {
           generic1 = String.class,
           doc = "The labels of the platforms to register."
         ),
-    useAst = true,
+    useLocation = true,
     useEnvironment = true
   )
   private static final BuiltinFunction.Factory newRegisterExecutionPlatformsFunction =
@@ -409,29 +415,15 @@ public class WorkspaceFactory {
           return new BuiltinFunction(
               "register_execution_platforms",
               FunctionSignature.POSITIONALS,
-              BuiltinFunction.USE_AST_ENV) {
+              BuiltinFunction.USE_LOC_ENV) {
             public Object invoke(
-                SkylarkList<String> platformLabels, FuncallExpression ast, Environment env)
+                SkylarkList<String> platformLabels, Location location, Environment env)
                 throws EvalException, InterruptedException {
 
-              // Collect the platform labels.
-              List<Label> platforms = new ArrayList<>();
-              for (String rawLabel : platformLabels.getContents(String.class, "platform_labels")) {
-                try {
-                  platforms.add(Label.parseAbsolute(rawLabel));
-                } catch (LabelSyntaxException e) {
-                  throw new EvalException(
-                      ast.getLocation(),
-                      String.format(
-                          "In register_execution_platforms: unable to parse platform label %s: %s",
-                          rawLabel, e.getMessage()),
-                      e);
-                }
-              }
-
               // Add to the package definition for later.
-              Package.Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
-              builder.addRegisteredExecutionPlatformLabels(platforms);
+              Package.Builder builder = PackageFactory.getContext(env, location).pkgBuilder;
+              builder.addRegisteredExecutionPlatforms(
+                  platformLabels.getContents(String.class, "platform_labels"));
 
               return NONE;
             }
@@ -453,37 +445,22 @@ public class WorkspaceFactory {
           generic1 = String.class,
           doc = "The labels of the toolchains to register."
         ),
-    useAst = true,
+    useLocation = true,
     useEnvironment = true
   )
   private static final BuiltinFunction.Factory newRegisterToolchainsFunction =
       new BuiltinFunction.Factory("register_toolchains") {
         public BuiltinFunction create(final RuleFactory ruleFactory) {
           return new BuiltinFunction(
-              "register_toolchains", FunctionSignature.POSITIONALS, BuiltinFunction.USE_AST_ENV) {
+              "register_toolchains", FunctionSignature.POSITIONALS, BuiltinFunction.USE_LOC_ENV) {
             public Object invoke(
-                SkylarkList<String> toolchainLabels, FuncallExpression ast, Environment env)
+                SkylarkList<String> toolchainLabels, Location location, Environment env)
                 throws EvalException, InterruptedException {
 
-              // Collect the toolchain labels.
-              List<Label> toolchains = new ArrayList<>();
-              for (String rawLabel :
-                  toolchainLabels.getContents(String.class, "toolchain_labels")) {
-                try {
-                  toolchains.add(Label.parseAbsolute(rawLabel));
-                } catch (LabelSyntaxException e) {
-                  throw new EvalException(
-                      ast.getLocation(),
-                      String.format(
-                          "In register_toolchains: unable to parse toolchain label %s: %s",
-                          rawLabel, e.getMessage()),
-                      e);
-                }
-              }
-
               // Add to the package definition for later.
-              Package.Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
-              builder.addRegisteredToolchainLabels(toolchains);
+              Package.Builder builder = PackageFactory.getContext(env, location).pkgBuilder;
+              builder.addRegisteredToolchains(
+                  toolchainLabels.getContents(String.class, "toolchain_labels"));
 
               return NONE;
             }
@@ -492,8 +469,8 @@ public class WorkspaceFactory {
       };
 
   /**
-   * Returns a function-value implementing the build rule "ruleClass" (e.g. cc_library) in the
-   * specified package context.
+   * Returns a function-value implementing the build or workspace rule "ruleClass" (e.g. cc_library)
+   * in the specified package context.
    */
   private static BuiltinFunction newRuleFunction(
       final RuleFactory ruleFactory, final String ruleClassName, final boolean allowOverride) {
@@ -502,7 +479,7 @@ public class WorkspaceFactory {
       public Object invoke(Map<String, Object> kwargs, FuncallExpression ast, Environment env)
           throws EvalException, InterruptedException {
         try {
-          Package.Builder builder = PackageFactory.getContext(env, ast).pkgBuilder;
+          Package.Builder builder = PackageFactory.getContext(env, ast.getLocation()).pkgBuilder;
           if (!allowOverride
               && kwargs.containsKey("name")
               && builder.targets.containsKey(kwargs.get("name"))) {
@@ -513,11 +490,34 @@ public class WorkspaceFactory {
                     + kwargs.get("name")
                     + "')");
           }
+          if (env.getSemantics().experimentalEnableRepoMapping()) {
+            if (kwargs.containsKey("repo_mapping")) {
+              if (!(kwargs.get("repo_mapping") instanceof Map)) {
+                throw new EvalException(
+                    ast.getLocation(),
+                    "Invalid value for 'repo_mapping': '" + kwargs.get("repo_mapping")
+                        + "'. Value must be a map.");
+              }
+              @SuppressWarnings("unchecked")
+              Map<String, String> map = (Map<String, String>) kwargs.get("repo_mapping");
+              String externalRepoName = (String) kwargs.get("name");
+              for (Map.Entry<String, String> e : map.entrySet()) {
+                builder.addRepositoryMappingEntry(
+                    RepositoryName.createFromValidStrippedName(externalRepoName),
+                    RepositoryName.create((String) e.getKey()),
+                    RepositoryName.create((String) e.getValue()));
+              }
+            }
+          }
           RuleClass ruleClass = ruleFactory.getRuleClass(ruleClassName);
           RuleClass bindRuleClass = ruleFactory.getRuleClass("bind");
           Rule rule =
               WorkspaceFactoryHelper.createAndAddRepositoryRule(
-                  builder, ruleClass, bindRuleClass, kwargs, ast);
+                  builder,
+                  ruleClass,
+                  bindRuleClass,
+                  getFinalKwargs(kwargs, env.getSemantics()),
+                  ast);
           if (!isLegalWorkspaceName(rule.getName())) {
             throw new EvalException(
                 ast.getLocation(), rule + "'s name field must be a legal workspace name");
@@ -530,6 +530,19 @@ public class WorkspaceFactory {
         return NONE;
       }
     };
+  }
+
+  private static Map<String, Object> getFinalKwargs(
+      Map<String, Object> kwargs,
+      SkylarkSemantics semantics) {
+    if (semantics.experimentalEnableRepoMapping()) {
+      // 'repo_mapping' is not an explicit attribute of any rule and so it would
+      // result in a rule error if propagated to the rule factory.
+      return kwargs.entrySet().stream()
+          .filter(x -> !x.getKey().equals("repo_mapping"))
+          .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+    return kwargs;
   }
 
   private static ImmutableMap<String, BaseFunction> createWorkspaceFunctions(
@@ -565,6 +578,11 @@ public class WorkspaceFactory {
         javaHome = javaHome.getParentFile();
       }
       workspaceEnv.update("DEFAULT_SERVER_JAVABASE", javaHome.toString());
+      workspaceEnv.update(
+          "DEFAULT_SYSTEM_JAVABASE",
+          defaultSystemJavabaseDir != null
+              ? defaultSystemJavabaseDir.toString()
+              : javaHome.toString());
 
       for (EnvironmentExtension extension : environmentExtensions) {
         extension.updateWorkspace(workspaceEnv);
@@ -580,16 +598,17 @@ public class WorkspaceFactory {
   private static ClassObject newNativeModule(
       ImmutableMap<String, BaseFunction> workspaceFunctions, String version) {
     ImmutableMap.Builder<String, Object> builder = new ImmutableMap.Builder<>();
-    Runtime.BuiltinRegistry builtins = Runtime.getBuiltinRegistry();
-    for (String nativeFunction : builtins.getFunctionNames(SkylarkNativeModule.class)) {
-      builder.put(nativeFunction, builtins.getFunction(SkylarkNativeModule.class, nativeFunction));
+    SkylarkNativeModule nativeModuleInstance = new SkylarkNativeModule();
+    for (String nativeFunction : FuncallExpression.getMethodNames(SkylarkNativeModule.class)) {
+      builder.put(nativeFunction,
+          FuncallExpression.getBuiltinCallable(nativeModuleInstance, nativeFunction));
     }
     for (Map.Entry<String, BaseFunction> function : workspaceFunctions.entrySet()) {
       builder.put(function.getKey(), function.getValue());
     }
 
     builder.put("bazel_version", version);
-    return NativeProvider.STRUCT.create(builder.build(), "no native function or rule '%s'");
+    return StructProvider.STRUCT.create(builder.build(), "no native function or rule '%s'");
   }
 
   static ClassObject newNativeModule(RuleClassProvider ruleClassProvider, String version) {

@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.AbstractAction;
 import com.google.devtools.build.lib.actions.Action;
@@ -37,11 +36,19 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
 import com.google.devtools.build.lib.actions.BaseSpawn;
 import com.google.devtools.build.lib.actions.CommandAction;
+import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.actions.CommandLineItemSimpleFormatter;
+import com.google.devtools.build.lib.actions.CommandLines;
+import com.google.devtools.build.lib.actions.CommandLines.CommandLineAndParamFileInfo;
+import com.google.devtools.build.lib.actions.CommandLines.CommandLineLimits;
+import com.google.devtools.build.lib.actions.CommandLines.ExpandedCommandLines;
 import com.google.devtools.build.lib.actions.CompositeRunfilesSupplier;
 import com.google.devtools.build.lib.actions.EmptyRunfilesSupplier;
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.ExecutionInfoSpecifier;
+import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
+import com.google.devtools.build.lib.actions.ParamFileInfo;
 import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.RunfilesSupplier;
@@ -57,7 +64,10 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.collect.nestedset.NestedSetView;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.SkylarkList;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.LazyString;
@@ -66,10 +76,8 @@ import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.errorprone.annotations.CompileTimeConstant;
 import com.google.errorprone.annotations.FormatMethod;
 import com.google.errorprone.annotations.FormatString;
-import com.google.protobuf.GeneratedMessage.GeneratedExtension;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,27 +85,18 @@ import javax.annotation.CheckReturnValue;
 import javax.annotation.Nullable;
 
 /** An Action representing an arbitrary subprocess to be forked and exec'd. */
+@AutoCodec
 public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifier, CommandAction {
 
-
-  /** Sets extensions on ExtraActionInfo **/
-  protected static class ExtraActionInfoSupplier<T> {
-    private final GeneratedExtension<ExtraActionInfo, T> extension;
-    private final T value;
-
-    protected ExtraActionInfoSupplier(GeneratedExtension<ExtraActionInfo, T> extension, T value) {
-      this.extension = extension;
-      this.value = value;
-    }
-
-    void extend(ExtraActionInfo.Builder builder) {
-      builder.setExtension(extension, value);
-    }
+  /** Sets extensions on {@link ExtraActionInfo}. */
+  public interface ExtraActionInfoSupplier {
+    void extend(ExtraActionInfo.Builder builder);
   }
 
   private static final String GUID = "ebd6fce3-093e-45ee-adb6-bf513b602f0d";
 
-  private final CommandLine argv;
+  @VisibleForSerialization protected final CommandLines commandLines;
+  @VisibleForSerialization protected final CommandLineLimits commandLineLimits;
 
   private final boolean executeUnconditionally;
   private final boolean isShellCommand;
@@ -107,7 +106,8 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
   private final ResourceSet resourceSet;
   private final ImmutableMap<String, String> executionInfo;
 
-  private final ExtraActionInfoSupplier<?> extraActionInfoSupplier;
+  private final ExtraActionInfoSupplier extraActionInfoSupplier;
+  private final Artifact primaryOutput;
 
   /**
    * Constructs a SpawnAction using direct initialization arguments.
@@ -119,23 +119,27 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    * @param inputs the set of all files potentially read by this action; must not be subsequently
    *     modified.
    * @param outputs the set of all files written by this action; must not be subsequently modified.
+   * @param primaryOutput the primary output of this action
    * @param resourceSet the resources consumed by executing this Action
    * @param env the action environment
-   * @param argv the command line to execute. This is merely a list of options to the executable,
-   *     and is uninterpreted by the build tool for the purposes of dependency checking; typically
-   *     it may include the names of input and output files, but this is not necessary.
+   * @param commandLines the command lines to execute. This includes the main argv vector and any
+   *     param file-backed command lines.
+   * @param commandLineLimits the command line limits, from the build configuration
    * @param isShellCommand Whether the command line represents a shell command with the given shell
    *     executable. This is used to give better error messages.
    * @param progressMessage the message printed during the progression of the build.
    * @param mnemonic the mnemonic that is reported in the master log.
    */
+  @AutoCodec.Instantiator
   public SpawnAction(
       ActionOwner owner,
       Iterable<Artifact> tools,
       Iterable<Artifact> inputs,
       Iterable<Artifact> outputs,
+      Artifact primaryOutput,
       ResourceSet resourceSet,
-      CommandLine argv,
+      CommandLines commandLines,
+      CommandLineLimits commandLineLimits,
       boolean isShellCommand,
       ActionEnvironment env,
       CharSequence progressMessage,
@@ -145,8 +149,10 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
         tools,
         inputs,
         outputs,
+        primaryOutput,
         resourceSet,
-        argv,
+        commandLines,
+        commandLineLimits,
         isShellCommand,
         env,
         ImmutableMap.<String, String>of(),
@@ -168,13 +174,13 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    * @param inputs the set of all files potentially read by this action; must not be subsequently
    *     modified
    * @param outputs the set of all files written by this action; must not be subsequently modified.
+   * @param primaryOutput the primary output of this action
    * @param resourceSet the resources consumed by executing this Action
    * @param env the action's environment
    * @param executionInfo out-of-band information for scheduling the spawn
-   * @param argv the argv array (including argv[0]) of arguments to pass. This is merely a list of
-   *     options to the executable, and is uninterpreted by the build tool for the purposes of
-   *     dependency checking; typically it may include the names of input and output files, but this
-   *     is not necessary.
+   * @param commandLines the command lines to execute. This includes the main argv vector and any
+   *     param file-backed command lines.
+   * @param commandLineLimits the command line limits, from the build configuration
    * @param isShellCommand Whether the command line represents a shell command with the given shell
    *     executable. This is used to give better error messages.
    * @param progressMessage the message printed during the progression of the build
@@ -186,8 +192,10 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
       Iterable<Artifact> tools,
       Iterable<Artifact> inputs,
       Iterable<Artifact> outputs,
+      Artifact primaryOutput,
       ResourceSet resourceSet,
-      CommandLine argv,
+      CommandLines commandLines,
+      CommandLineLimits commandLineLimits,
       boolean isShellCommand,
       ActionEnvironment env,
       ImmutableMap<String, String> executionInfo,
@@ -195,11 +203,13 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
       RunfilesSupplier runfilesSupplier,
       String mnemonic,
       boolean executeUnconditionally,
-      ExtraActionInfoSupplier<?> extraActionInfoSupplier) {
+      ExtraActionInfoSupplier extraActionInfoSupplier) {
     super(owner, tools, inputs, runfilesSupplier, outputs, env);
+    this.primaryOutput = primaryOutput;
     this.resourceSet = resourceSet;
     this.executionInfo = executionInfo;
-    this.argv = argv;
+    this.commandLines = commandLines;
+    this.commandLineLimits = commandLineLimits;
     this.isShellCommand = isShellCommand;
     this.progressMessage = progressMessage;
     this.mnemonic = mnemonic;
@@ -208,18 +218,28 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
   }
 
   @Override
+  public Artifact getPrimaryOutput() {
+    return primaryOutput;
+  }
+
   @VisibleForTesting
-  public List<String> getArguments() throws CommandLineExpansionException {
-    return ImmutableList.copyOf(argv.arguments());
+  public CommandLines getCommandLines() {
+    return commandLines;
   }
 
   @Override
-  public SkylarkList<String> getSkylarkArgv() throws CommandLineExpansionException {
-    return SkylarkList.createImmutable(getArguments());
+  @VisibleForTesting
+  public List<String> getArguments() throws CommandLineExpansionException {
+    return ImmutableList.copyOf(commandLines.allArguments());
   }
 
-  protected CommandLine getCommandLine() {
-    return argv;
+  @Override
+  public SkylarkList<String> getSkylarkArgv() throws EvalException {
+    try {
+      return SkylarkList.createImmutable(getArguments());
+    } catch (CommandLineExpansionException exception) {
+      throw new EvalException(Location.BUILTIN, exception);
+    }
   }
 
   @Override
@@ -231,13 +251,13 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
   /** Returns command argument, argv[0]. */
   @VisibleForTesting
   public String getCommandFilename() throws CommandLineExpansionException {
-    return Iterables.getFirst(argv.arguments(), null);
+    return Iterables.getFirst(getArguments(), null);
   }
 
   /** Returns the (immutable) list of arguments, excluding the command name, argv[0]. */
   @VisibleForTesting
   public List<String> getRemainingArguments() throws CommandLineExpansionException {
-    return ImmutableList.copyOf(Iterables.skip(argv.arguments(), 1));
+    return ImmutableList.copyOf(Iterables.skip(getArguments(), 1));
   }
 
   @VisibleForTesting
@@ -262,8 +282,9 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    */
   protected List<SpawnResult> internalExecute(ActionExecutionContext actionExecutionContext)
       throws ExecException, InterruptedException, CommandLineExpansionException {
-    return getContext(actionExecutionContext)
-        .exec(getSpawn(actionExecutionContext.getClientEnv()), actionExecutionContext);
+    Spawn spawn = getSpawn(actionExecutionContext);
+    return actionExecutionContext.getContext(SpawnActionContext.class)
+        .exec(spawn, actionExecutionContext);
   }
 
   @Override
@@ -285,7 +306,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           failMessage =
               "error executing shell command: "
                   + "'"
-                  + truncate(Iterables.get(argv.arguments(), 2), 200)
+                  + truncate(Iterables.get(getArguments(), 2), 200)
                   + "'";
         } catch (CommandLineExpansionException commandLineExpansionException) {
           failMessage =
@@ -318,40 +339,58 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    *
    * <p>This method is final, as it is merely a shorthand use of the generic way to obtain a spawn,
    * which also depends on the client environment. Subclasses that which to override the way to get
-   * a spawn should override {@link #getSpawn(Map)} instead.
+   * a spawn should override the other GetSpawn() methods instead.
    */
+  @VisibleForTesting
   public final Spawn getSpawn() throws CommandLineExpansionException {
-    return getSpawn(null);
+    return new ActionSpawn(
+        commandLines.allArguments(), ImmutableMap.of(), ImmutableList.of(), ImmutableMap.of());
   }
 
   /**
    * Return a spawn that is representative of the command that this Action will execute in the given
    * client environment.
    */
-  public Spawn getSpawn(Map<String, String> clientEnv) throws CommandLineExpansionException {
-    return new ActionSpawn(ImmutableList.copyOf(argv.arguments()), clientEnv);
+  public Spawn getSpawn(ActionExecutionContext actionExecutionContext)
+      throws CommandLineExpansionException {
+    return getSpawn(
+        actionExecutionContext.getArtifactExpander(),
+        actionExecutionContext.getClientEnv(),
+        actionExecutionContext.getInputFilesetMappings());
+  }
+
+  Spawn getSpawn(
+      ArtifactExpander artifactExpander,
+      Map<String, String> clientEnv,
+      Map<PathFragment, ImmutableList<FilesetOutputSymlink>> filesetMappings)
+      throws CommandLineExpansionException {
+    ExpandedCommandLines expandedCommandLines =
+        commandLines.expand(artifactExpander, getPrimaryOutput().getExecPath(), commandLineLimits);
+    return new ActionSpawn(
+        ImmutableList.copyOf(expandedCommandLines.arguments()),
+        clientEnv,
+        expandedCommandLines.getParamFiles(),
+        filesetMappings);
   }
 
   @Override
-  protected String computeKey(ActionKeyContext actionKeyContext)
+  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp)
       throws CommandLineExpansionException {
-    Fingerprint f = new Fingerprint();
-    f.addString(GUID);
-    argv.addToFingerprint(actionKeyContext, f);
-    f.addString(getMnemonic());
+    fp.addString(GUID);
+    commandLines.addToFingerprint(actionKeyContext, fp);
+    fp.addString(getMnemonic());
     // We don't need the toolManifests here, because they are a subset of the inputManifests by
     // definition and the output of an action shouldn't change whether something is considered a
     // tool or not.
-    f.addPaths(getRunfilesSupplier().getRunfilesDirs());
+    fp.addPaths(getRunfilesSupplier().getRunfilesDirs());
     ImmutableList<Artifact> runfilesManifests = getRunfilesSupplier().getManifests();
-    f.addInt(runfilesManifests.size());
+    fp.addInt(runfilesManifests.size());
     for (Artifact runfilesManifest : runfilesManifests) {
-      f.addPath(runfilesManifest.getExecPath());
+      fp.addPath(runfilesManifest.getExecPath());
     }
-    f.addStringMap(getEnvironment());
-    f.addStrings(getClientEnvironmentVariables());
-    f.addStringMap(getExecutionInfo());
-    return f.hexDigestAndReset();
+    fp.addStringMap(env.getFixedEnv());
+    fp.addStrings(getClientEnvironmentVariables());
+    fp.addStringMap(getExecutionInfo());
   }
 
   @Override
@@ -359,7 +398,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     StringBuilder message = new StringBuilder();
     message.append(getProgressMessage());
     message.append('\n');
-    for (Map.Entry<String, String> entry : getEnvironment().entrySet()) {
+    for (Map.Entry<String, String> entry : env.getFixedEnv().entrySet()) {
       message.append("  Environment variable: ");
       message.append(ShellEscaper.escapeString(entry.getKey()));
       message.append('=');
@@ -372,7 +411,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
       message.append('\n');
     }
     try {
-      for (String argument : ShellEscaper.escapeAll(argv.arguments())) {
+      for (String argument : ShellEscaper.escapeAll(getArguments())) {
         message.append("  Argument: ");
         message.append(argument);
         message.append('\n');
@@ -440,7 +479,8 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
   }
 
   @Override
-  public ImmutableMap<String, String> getEnvironment() {
+  @VisibleForTesting
+  public final ImmutableMap<String, String> getIncompleteEnvironmentForTesting() {
     // TODO(ulfjack): AbstractAction should declare getEnvironment with a return value of type
     // ActionEnvironment to avoid developers misunderstanding the purpose of this method. That
     // requires first updating all subclasses and callers to actually handle environments correctly,
@@ -456,16 +496,11 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     return executionInfo;
   }
 
-  protected SpawnActionContext getContext(ActionExecutionContext actionExecutionContext) {
-    return actionExecutionContext.getSpawnActionContext(getMnemonic());
-  }
+  /** A spawn instance that is tied to a specific SpawnAction. */
+  private class ActionSpawn extends BaseSpawn {
 
-  /**
-   * A spawn instance that is tied to a specific SpawnAction.
-   */
-  public class ActionSpawn extends BaseSpawn {
-
-    private final ImmutableList<Artifact> filesets;
+    private final ImmutableList<ActionInput> inputs;
+    private final Map<PathFragment, ImmutableList<FilesetOutputSymlink>> filesetMappings;
     private final ImmutableMap<String, String> effectiveEnvironment;
 
     /**
@@ -474,7 +509,11 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
      * <p>Subclasses of ActionSpawn may subclass in order to provide action-specific values for
      * environment variables or action inputs.
      */
-    protected ActionSpawn(ImmutableList<String> arguments, Map<String, String> clientEnv) {
+    private ActionSpawn(
+        ImmutableList<String> arguments,
+        Map<String, String> clientEnv,
+        Iterable<? extends ActionInput> additionalInputs,
+        Map<PathFragment, ImmutableList<FilesetOutputSymlink>> filesetMappings) {
       super(
           arguments,
           ImmutableMap.<String, String>of(),
@@ -482,24 +521,18 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           SpawnAction.this.getRunfilesSupplier(),
           SpawnAction.this,
           resourceSet);
-      ImmutableList.Builder<Artifact> builder = ImmutableList.builder();
+      ImmutableList.Builder<ActionInput> inputs = ImmutableList.builder();
+      ImmutableList<Artifact> manifests = getRunfilesSupplier().getManifests();
       for (Artifact input : getInputs()) {
-        if (input.isFileset()) {
-          builder.add(input);
+        if (!input.isFileset() && !manifests.contains(input)) {
+          inputs.add(input);
         }
       }
-      filesets = builder.build();
-      LinkedHashMap<String, String> env = new LinkedHashMap<>(SpawnAction.this.getEnvironment());
-      if (clientEnv != null) {
-        for (String var : SpawnAction.this.getClientEnvironmentVariables()) {
-          String value = clientEnv.get(var);
-          if (value == null) {
-            env.remove(var);
-          } else {
-            env.put(var, value);
-          }
-        }
-      }
+      inputs.addAll(additionalInputs);
+      this.inputs = inputs.build();
+      this.filesetMappings = filesetMappings;
+      LinkedHashMap<String, String> env = new LinkedHashMap<>(SpawnAction.this.env.size());
+      SpawnAction.this.env.resolve(env, clientEnv);
       effectiveEnvironment = ImmutableMap.copyOf(env);
     }
 
@@ -509,69 +542,14 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     }
 
     @Override
-    public ImmutableList<Artifact> getFilesetManifests() {
-      return filesets;
+    public ImmutableMap<PathFragment, ImmutableList<FilesetOutputSymlink>> getFilesetMappings() {
+      return ImmutableMap.copyOf(filesetMappings);
     }
 
     @Override
     @SuppressWarnings("unchecked")
     public Iterable<? extends ActionInput> getInputFiles() {
-      Iterable<? extends ActionInput> inputs = getInputs();
-      ImmutableList<Artifact> manifests = getRunfilesSupplier().getManifests();
-      if (filesets.isEmpty() && manifests.isEmpty()) {
-        return inputs;
-      }
-      // TODO(buchgr): These optimizations shouldn't exists. Instead getInputFiles() should
-      // directly return a NestedSet. In order to do this, rules need to be updated to
-      // provide inputs as nestedsets and store manifest files and filesets separately.
-      if (inputs instanceof NestedSet) {
-        return new FilesetAndManifestFilteringNestedSetView<>(
-            (NestedSet<ActionInput>) inputs, filesets, manifests);
-      } else {
-        return new FilesetAndManifestFilteringIterable<>(inputs, filesets, manifests);
-      }
-    }
-  }
-
-  /**
-   * Remove Fileset directories in inputs list. Instead, these are included as manifests in
-   * getEnvironment().
-   */
-  private static class FilesetAndManifestFilteringIterable<E> implements Iterable<E> {
-
-    private final Iterable<E> inputs;
-    private final ImmutableSet<Artifact> exclude;
-
-    FilesetAndManifestFilteringIterable(
-        Iterable<E> inputs, ImmutableList<Artifact> filesets, ImmutableList<Artifact> manifests) {
-      this.inputs = inputs;
-      this.exclude = ImmutableSet.<Artifact>builder().addAll(filesets).addAll(manifests).build();
-    }
-
-    @Override
-    public Iterator<E> iterator() {
-      return Iterators.filter(inputs.iterator(), (e) -> !exclude.contains(e));
-    }
-  }
-
-  /**
-   * The same as {@link FilesetAndManifestFilteringIterable} but retains the information that this
-   * the input files are stored as NestedSets.
-   */
-  private static class FilesetAndManifestFilteringNestedSetView<E> extends NestedSetView<E>
-      implements Iterable<E> {
-
-    private final FilesetAndManifestFilteringIterable<E> filteredInputs;
-
-    FilesetAndManifestFilteringNestedSetView(
-        NestedSet<E> set, ImmutableList<Artifact> filesets, ImmutableList<Artifact> manifests) {
-      super(set);
-      this.filteredInputs = new FilesetAndManifestFilteringIterable<E>(set, filesets, manifests);
-    }
-
-    @Override
-    public Iterator<E> iterator() {
-      return filteredInputs.iterator();
+      return inputs;
     }
   }
 
@@ -580,17 +558,6 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    */
   public static class Builder {
 
-    private static class CommandLineAndParamFileInfo {
-      private final CommandLine commandLine;
-      @Nullable private final ParamFileInfo paramFileInfo;
-
-      private CommandLineAndParamFileInfo(
-          CommandLine commandLine, @Nullable ParamFileInfo paramFileInfo) {
-        this.commandLine = commandLine;
-        this.paramFileInfo = paramFileInfo;
-      }
-    }
-
     private final NestedSetBuilder<Artifact> toolsBuilder = NestedSetBuilder.stableOrder();
     private final NestedSetBuilder<Artifact> inputsBuilder = NestedSetBuilder.stableOrder();
     private final List<Artifact> outputs = new ArrayList<>();
@@ -598,6 +565,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     private final List<RunfilesSupplier> toolRunfilesSuppliers = new ArrayList<>();
     private ResourceSet resourceSet = AbstractAction.DEFAULT_RESOURCE_SET;
     private ImmutableMap<String, String> environment = ImmutableMap.of();
+    private ImmutableSet<String> inheritedEnvironment = ImmutableSet.of();
     private ImmutableMap<String, String> executionInfo = ImmutableMap.of();
     private boolean isShellCommand = false;
     private boolean useDefaultShellEnvironment = false;
@@ -609,7 +577,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
 
     private CharSequence progressMessage;
     private String mnemonic = "Unknown";
-    protected ExtraActionInfoSupplier<?> extraActionInfoSupplier = null;
+    protected ExtraActionInfoSupplier extraActionInfoSupplier = null;
     private boolean disableSandboxing = false;
 
     /**
@@ -635,7 +603,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
       this.executableArgs = (other.executableArgs != null)
           ? Lists.newArrayList(other.executableArgs)
           : null;
-      this.commandLines = Lists.newArrayList(other.commandLines);
+      this.commandLines = new ArrayList<>(other.commandLines);
       this.progressMessage = other.progressMessage;
       this.mnemonic = other.mnemonic;
     }
@@ -666,26 +634,65 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     @VisibleForTesting @CheckReturnValue
     public Action[] build(ActionOwner owner, AnalysisEnvironment analysisEnvironment,
         BuildConfiguration configuration) {
-      List<Action> paramFileActions = new ArrayList<>(commandLines.size());
-      CommandLine actualCommandLine =
-          buildCommandLine(owner, analysisEnvironment, configuration, paramFileActions);
-      Action[] actions = new Action[1 + paramFileActions.size()];
-      Action spawnAction =
-          buildSpawnAction(owner, actualCommandLine, configuration.getActionEnvironment());
-      actions[0] = spawnAction;
-      for (int i = 0; i < paramFileActions.size(); ++i) {
-        actions[i + 1] = paramFileActions.get(i);
+      final Action[] actions;
+      final CommandLines commandLines;
+      ImmutableList<String> executableArgs = buildExecutableArgs();
+      if (configuration.deferParamFiles()) {
+        actions = new Action[1];
+        CommandLines.Builder result = CommandLines.builder();
+        result.addCommandLine(CommandLine.of(executableArgs));
+        for (CommandLineAndParamFileInfo pair : this.commandLines) {
+          result.addCommandLine(pair);
+        }
+        commandLines = result.build();
+      } else {
+        List<Action> paramFileActions = new ArrayList<>(this.commandLines.size());
+        CommandLine commandLine =
+            buildCommandLinesAndParamFileActions(
+                owner,
+                analysisEnvironment,
+                configuration,
+                executableArgs,
+                this.commandLines,
+                paramFileActions);
+        commandLines = CommandLines.of(commandLine);
+        actions = new Action[1 + paramFileActions.size()];
+        for (int i = 0; i < paramFileActions.size(); ++i) {
+          actions[i + 1] = paramFileActions.get(i);
+        }
       }
+      ActionEnvironment env =
+          useDefaultShellEnvironment
+              ? configuration.getActionEnvironment()
+              : ActionEnvironment.create(environment, inheritedEnvironment);
+      Action spawnAction =
+          buildSpawnAction(owner, commandLines, configuration.getCommandLineLimits(), env);
+      actions[0] = spawnAction;
       return actions;
     }
 
-    private CommandLine buildCommandLine(
+    @CheckReturnValue
+    SpawnAction buildForActionTemplate(ActionOwner owner) {
+      CommandLines.Builder result = CommandLines.builder();
+      ImmutableList<String> executableArgs = buildExecutableArgs();
+      result.addCommandLine(CommandLine.of(executableArgs));
+      for (CommandLineAndParamFileInfo pair : commandLines) {
+        result.addCommandLine(pair.commandLine);
+      }
+      return buildSpawnAction(
+          owner,
+          result.build(),
+          CommandLineLimits.UNLIMITED,
+          ActionEnvironment.create(environment, inheritedEnvironment));
+    }
+
+    private CommandLine buildCommandLinesAndParamFileActions(
         ActionOwner owner,
         AnalysisEnvironment analysisEnvironment,
         BuildConfiguration configuration,
+        ImmutableList<String> executableArgs,
+        List<CommandLineAndParamFileInfo> commandLines,
         List<Action> paramFileActions) {
-      ImmutableList<String> executableArgs =
-          buildExecutableArgs(configuration.getShellExecutable());
       boolean hasConditionalParamFile =
           commandLines.stream().anyMatch(c -> c.paramFileInfo != null && !c.paramFileInfo.always());
       boolean spillToParamFiles = false;
@@ -695,7 +702,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           totalLen += getCommandLineSize(commandLineAndParamFileInfo.commandLine);
         }
         // To reduce implementation complexity we either spill all or none of the param files.
-        spillToParamFiles = totalLen > configuration.getMinParamFileSize();
+        spillToParamFiles = totalLen >= configuration.getCommandLineLimits().maxLength;
       }
       // We a name based on the output, starting at <output>-2.params
       // and then incrementing
@@ -758,18 +765,12 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
      *
      * <p>This method makes a copy of all the collections, so it is safe to reuse the builder after
      * this method returns.
-     *
-     * <p>This method is invoked by {@link SpawnActionTemplate} in the execution phase. It is
-     * important that analysis-phase objects (RuleContext, Configuration, etc.) are not directly
-     * referenced in this function to prevent them from bleeding into the execution phase.
-     *
-     * @param owner the {@link ActionOwner} for the SpawnAction
-     * @param configEnv the config's action environment to use. May be null if not used.
-     * @return the SpawnAction and any actions required by it, with the first item always being the
-     *     SpawnAction itself.
      */
-    SpawnAction buildSpawnAction(
-        ActionOwner owner, CommandLine commandLine, @Nullable ActionEnvironment configEnv) {
+    private SpawnAction buildSpawnAction(
+        ActionOwner owner,
+        CommandLines commandLines,
+        CommandLineLimits commandLineLimits,
+        ActionEnvironment env) {
       NestedSet<Artifact> tools = toolsBuilder.build();
 
       // Tools are by definition a subset of the inputs, so make sure they're present there, too.
@@ -778,13 +779,6 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
               .addTransitive(inputsBuilder.build())
               .addTransitive(tools)
               .build();
-
-      ActionEnvironment env;
-      if (useDefaultShellEnvironment) {
-        env = Preconditions.checkNotNull(configEnv);
-      } else {
-        env = ActionEnvironment.create(this.environment);
-      }
 
       if (disableSandboxing) {
         ImmutableMap.Builder<String, String> builder = ImmutableMap.builder();
@@ -798,8 +792,10 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           tools,
           inputsAndTools,
           ImmutableList.copyOf(outputs),
+          outputs.get(0),
           resourceSet,
-          commandLine,
+          commandLines,
+          commandLineLimits,
           isShellCommand,
           env,
           ImmutableMap.copyOf(executionInfo),
@@ -809,29 +805,16 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           mnemonic);
     }
 
-    /**
-     * Builds the command line, forcing no params file.
-     *
-     * <p>This method is invoked by {@link SpawnActionTemplate} in the execution phase.
-     */
-    CommandLine buildCommandLineWithoutParamsFiles() {
-      SpawnActionCommandLine.Builder result = new SpawnActionCommandLine.Builder();
-      ImmutableList<String> executableArgs = buildExecutableArgs(null);
-      result.addExecutableArguments(executableArgs);
-      for (CommandLineAndParamFileInfo commandLineAndParamFileInfo : commandLines) {
-        result.addCommandLine(commandLineAndParamFileInfo.commandLine);
-      }
-      return result.build();
-    }
-
     /** Creates a SpawnAction. */
     protected SpawnAction createSpawnAction(
         ActionOwner owner,
         NestedSet<Artifact> tools,
         NestedSet<Artifact> inputsAndTools,
         ImmutableList<Artifact> outputs,
+        Artifact primaryOutput,
         ResourceSet resourceSet,
-        CommandLine actualCommandLine,
+        CommandLines commandLines,
+        CommandLineLimits commandLineLimits,
         boolean isShellCommand,
         ActionEnvironment env,
         ImmutableMap<String, String> executionInfo,
@@ -843,8 +826,10 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           tools,
           inputsAndTools,
           outputs,
+          primaryOutput,
           resourceSet,
-          actualCommandLine,
+          commandLines,
+          commandLineLimits,
           isShellCommand,
           env,
           executionInfo,
@@ -855,12 +840,7 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
           extraActionInfoSupplier);
     }
 
-    private ImmutableList<String> buildExecutableArgs(
-        @Nullable PathFragment defaultShellExecutable) {
-      if (isShellCommand && executable == null) {
-        Preconditions.checkNotNull(defaultShellExecutable);
-        executable = defaultShellExecutable;
-      }
+    private ImmutableList<String> buildExecutableArgs() {
       Preconditions.checkNotNull(executable);
       Preconditions.checkNotNull(executableArgs);
 
@@ -966,6 +946,16 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     }
 
     /**
+     * Sets the set of inherited environment variables. Do not use! This makes the builder ignore
+     * the 'default shell environment', which is computed from the --action_env command line option.
+     */
+    public Builder setInheritedEnvironment(Iterable<String> inheritedEnvironment) {
+      this.inheritedEnvironment = ImmutableSet.copyOf(inheritedEnvironment);
+      this.useDefaultShellEnvironment = false;
+      return this;
+    }
+
+    /**
      * Sets the map of execution info.
      */
     public Builder setExecutionInfo(Map<String, String> info) {
@@ -1006,7 +996,8 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
      */
     public Builder useDefaultShellEnvironment() {
       this.environment = null;
-      this.useDefaultShellEnvironment  = true;
+      this.inheritedEnvironment = null;
+      this.useDefaultShellEnvironment = true;
       return this;
     }
 
@@ -1123,18 +1114,16 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
     }
 
     /**
-     * Sets the executable to be the shell and adds the given command as the
-     * command to be executed.
+     * Sets the executable to be the shell and adds the given command as the command to be executed.
      *
-     * <p>Note that this will not clear the arguments, so any arguments will
-     * be passed in addition to the command given here.
+     * <p>Note that this will not clear the arguments, so any arguments will be passed in addition
+     * to the command given here.
      *
-     * <p>Calling this method overrides any previous values set via calls to
-     * {@link #setExecutable(Artifact)}, {@link #setJavaExecutable}, or
-     * {@link #setShellCommand(String)}.
+     * <p>Calling this method overrides any previous values set via calls to {@link
+     * #setExecutable(Artifact)}, {@link #setJavaExecutable}, or {@link #setShellCommand(String)}.
      */
-    public Builder setShellCommand(String command) {
-      this.executable = null;
+    public Builder setShellCommand(PathFragment shExecutable, String command) {
+      this.executable = shExecutable;
       // 0=shell command switch, 1=command
       this.executableArgs = Lists.newArrayList("-c", command);
       this.isShellCommand = true;
@@ -1344,9 +1333,8 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
       return this;
     }
 
-    public <T> Builder setExtraActionInfo(
-        GeneratedExtension<ExtraActionInfo, T> extension, T value) {
-      this.extraActionInfoSupplier = new ExtraActionInfoSupplier<>(extension, value);
+    public <T> Builder setExtraActionInfo(ExtraActionInfoSupplier extraActionInfoSupplier) {
+      this.extraActionInfoSupplier = extraActionInfoSupplier;
       return this;
     }
 
@@ -1360,7 +1348,8 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
    * Command line implementation that optimises for containing executable args, command lines, and
    * command lines spilled to param files.
    */
-  private static class SpawnActionCommandLine extends CommandLine {
+  @AutoCodec
+  static class SpawnActionCommandLine extends CommandLine {
     private final Object[] values;
 
     SpawnActionCommandLine(Object[] values) {
@@ -1389,7 +1378,9 @@ public class SpawnAction extends AbstractAction implements ExecutionInfoSpecifie
         } else if (value instanceof Artifact) {
           Artifact paramFile = (Artifact) value;
           String flagFormatString = (String) values[++i];
-          result.add(flagFormatString.replaceFirst("%s", paramFile.getExecPathString()));
+          result.add(
+              CommandLineItemSimpleFormatter.format(
+                  flagFormatString, paramFile.getExecPathString()));
         } else if (value instanceof CommandLine) {
           CommandLine commandLine = (CommandLine) value;
           if (artifactExpander != null) {

@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <chrono>  // NOLINT (gRPC requires this)
 #include <cinttypes>
+#include <map>
 #include <mutex>  // NOLINT
 #include <set>
 #include <sstream>
@@ -57,11 +58,14 @@
 #include "src/main/cpp/global_variables.h"
 #include "src/main/cpp/option_processor.h"
 #include "src/main/cpp/startup_options.h"
+#include "src/main/cpp/util/bazel_log_handler.h"
 #include "src/main/cpp/util/errors.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/file.h"
 #include "src/main/cpp/util/logging.h"
 #include "src/main/cpp/util/numbers.h"
+#include "src/main/cpp/util/path.h"
+#include "src/main/cpp/util/path_platform.h"
 #include "src/main/cpp/util/port.h"
 #include "src/main/cpp/util/strings.h"
 #include "src/main/cpp/workspace_layout.h"
@@ -69,15 +73,15 @@
 
 #include "src/main/protobuf/command_server.grpc.pb.h"
 
-using blaze_util::die;
-using blaze_util::pdie;
-using blaze_util::PrintWarning;
+using blaze_util::GetLastErrorString;
 
 namespace blaze {
 
+using std::map;
 using std::set;
 using std::string;
 using std::vector;
+using command_server::CommandServer;
 
 // The following is a treatise on how the interaction between the client and the
 // server works.
@@ -224,7 +228,7 @@ class GrpcBlazeServer : public BlazeServer {
  private:
   enum CancelThreadAction { NOTHING, JOIN, CANCEL, COMMAND_ID_RECEIVED };
 
-  std::unique_ptr<command_server::CommandServer::Stub> client_;
+  std::unique_ptr<CommandServer::Stub> client_;
   std::string request_cookie_;
   std::string response_cookie_;
   std::string command_id_;
@@ -240,7 +244,7 @@ class GrpcBlazeServer : public BlazeServer {
   // actions from.
   blaze_util::IPipe *pipe_;
 
-  bool TryConnect(command_server::CommandServer::Stub *client);
+  bool TryConnect(CommandServer::Stub *client);
   void CancelThread();
   void SendAction(CancelThreadAction action);
   void SendCancelMessage();
@@ -279,8 +283,8 @@ class NoteAllFilesZipProcessor : public PureZipExtractorProcessor {
 
   void Process(const char *filename, const devtools_ijar::u4 attr,
                const devtools_ijar::u1 *data, const size_t size) override {
-    die(blaze_exit_code::INTERNAL_ERROR,
-        "NoteAllFilesZipProcessor::Process shouldn't be called");
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "NoteAllFilesZipProcessor::Process shouldn't be called";
   }
  private:
   std::vector<std::string>* files_;
@@ -319,6 +323,8 @@ class CompoundZipProcessor : public devtools_ijar::ZipExtractorProcessor {
   const vector<PureZipExtractorProcessor*> processors_;
 };
 
+static map<string, EnvVarValue> PrepareEnvironmentForJvm();
+
 // A PureZipExtractorProcessor to extract the InstallKeyFile
 class GetInstallKeyFileProcessor : public PureZipExtractorProcessor {
  public:
@@ -339,10 +345,10 @@ class GetInstallKeyFileProcessor : public PureZipExtractorProcessor {
     string str(reinterpret_cast<const char *>(data), size);
     blaze_util::StripWhitespace(&str);
     if (str.size() != 32) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "\nFailed to extract install_base_key: file size mismatch "
-          "(should be 32, is %zd)",
-          str.size());
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "Failed to extract install_base_key: file size mismatch "
+             "(should be 32, is "
+          << str.size() << ")";
     }
     *install_base_key_ = str;
   }
@@ -361,20 +367,19 @@ static void ComputeInstallMd5AndNoteAllFiles(const string &self_path) {
                                   &install_key_processor});
   std::unique_ptr<devtools_ijar::ZipExtractor> extractor(
       devtools_ijar::ZipExtractor::Create(self_path.c_str(), &processor));
-  if (extractor.get() == NULL) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "\nFailed to open %s as a zip file: %s",
-        globals->options->product_name.c_str(),
-        blaze_util::GetLastErrorString().c_str());
+  if (extractor == NULL) {
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Failed to open " << globals->options->product_name
+        << " as a zip file: " << GetLastErrorString();
   }
   if (extractor->ProcessAll() < 0) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "\nFailed to extract install_base_key: %s", extractor->GetError());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Failed to extract install_base_key: " << extractor->GetError();
   }
 
   if (globals->install_md5.empty()) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "\nFailed to find install_base_key's in zip file");
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Failed to find install_base_key's in zip file";
   }
 }
 
@@ -410,7 +415,15 @@ static vector<string> GetArgumentArray(
 
   result.push_back("-XX:+HeapDumpOnOutOfMemoryError");
   string heap_crash_path = globals->options->output_base;
-  result.push_back("-XX:HeapDumpPath=" + blaze::PathAsJvmFlag(heap_crash_path));
+  result.push_back("-XX:HeapDumpPath=" +
+                   blaze_util::PathAsJvmFlag(heap_crash_path));
+
+  // TODO(b/109998449): only assume JDK >= 9 for embedded JDKs
+  if (!globals->options->GetEmbeddedJavabase().empty()) {
+    // quiet warnings from com.google.protobuf.UnsafeUtil,
+    // see: https://github.com/google/protobuf/issues/3781
+    result.push_back("--add-opens=java.base/java.nio=ALL-UNNAMED");
+  }
 
   result.push_back("-Xverify:none");
 
@@ -427,7 +440,7 @@ static vector<string> GetArgumentArray(
       globals->options->AddJVMArguments(globals->options->GetHostJavabase(),
                                         &result, user_options, &error);
   if (jvm_args_exit_code != blaze_exit_code::SUCCESS) {
-    die(jvm_args_exit_code, "%s", error.c_str());
+    BAZEL_DIE(jvm_args_exit_code) << error;
   }
 
   // We put all directories on java.library.path that contain .so/.dll files.
@@ -440,7 +453,7 @@ static vector<string> GetArgumentArray(
   bool first = true;
   for (const auto &it : globals->extracted_binaries) {
     if (IsSharedLibrary(it)) {
-      string libpath(blaze::PathAsJvmFlag(
+      string libpath(blaze_util::PathAsJvmFlag(
           blaze_util::JoinPath(real_install_dir, blaze_util::Dirname(it))));
       // Only add the library path if it's not added yet.
       if (java_library_paths.find(libpath) == java_library_paths.end()) {
@@ -459,8 +472,8 @@ static vector<string> GetArgumentArray(
   result.push_back("-Dfile.encoding=ISO-8859-1");
 
   if (globals->options->host_jvm_debug) {
-    fprintf(stderr,
-            "Running host JVM under debugger (listening on TCP port 5005).\n");
+    BAZEL_LOG(USER)
+        << "Running host JVM under debugger (listening on TCP port 5005).";
     // Start JVM so that it listens for a connection from a
     // JDWP-compliant debugger:
     result.push_back("-Xdebug");
@@ -494,21 +507,21 @@ static vector<string> GetArgumentArray(
   result.push_back("--connect_timeout_secs=" +
                    ToString(globals->options->connect_timeout_secs));
 
+  result.push_back("--output_user_root=" +
+                   blaze_util::ConvertPath(globals->options->output_user_root));
   result.push_back("--install_base=" +
-                   blaze::ConvertPath(globals->options->install_base));
+                   blaze_util::ConvertPath(globals->options->install_base));
   result.push_back("--install_md5=" + globals->install_md5);
   result.push_back("--output_base=" +
-                   blaze::ConvertPath(globals->options->output_base));
+                   blaze_util::ConvertPath(globals->options->output_base));
   result.push_back("--workspace_directory=" +
-                   blaze::ConvertPath(globals->workspace));
+                   blaze_util::ConvertPath(globals->workspace));
+  result.push_back("--default_system_javabase=" + GetSystemJavabase());
 
   if (!globals->options->server_jvm_out.empty()) {
     result.push_back("--server_jvm_out=" + globals->options->server_jvm_out);
   }
 
-  if (globals->options->allow_configurable_attributes) {
-    result.push_back("--allow_configurable_attributes");
-  }
   if (globals->options->deep_execroot) {
     result.push_back("--deep_execroot");
   } else {
@@ -521,16 +534,22 @@ static vector<string> GetArgumentArray(
   }
   if (globals->options->oom_more_eagerly) {
     result.push_back("--experimental_oom_more_eagerly");
+  } else {
+    result.push_back("--noexperimental_oom_more_eagerly");
   }
   result.push_back("--experimental_oom_more_eagerly_threshold=" +
                    ToString(globals->options->oom_more_eagerly_threshold));
 
-  if (!globals->options->write_command_log) {
+  if (globals->options->write_command_log) {
+    result.push_back("--write_command_log");
+  } else {
     result.push_back("--nowrite_command_log");
   }
 
   if (globals->options->watchfs) {
     result.push_back("--watchfs");
+  } else {
+    result.push_back("--nowatchfs");
   }
   if (globals->options->fatal_event_bus_exceptions) {
     result.push_back("--fatal_event_bus_exceptions");
@@ -538,25 +557,25 @@ static vector<string> GetArgumentArray(
     result.push_back("--nofatal_event_bus_exceptions");
   }
 
-  // We use this syntax so that the logic in ServerNeedsToBeKilled() that
+  // We use this syntax so that the logic in AreStartupOptionsDifferent() that
   // decides whether the server needs killing is simpler. This is parsed by the
   // Java code where --noclient_debug and --client_debug=false are equivalent.
   // Note that --client_debug false (separated by space) won't work either,
-  // because the logic in ServerNeedsToBeKilled() assumes that every argument
-  // is in the --arg=value form.
+  // because the logic in AreStartupOptionsDifferent() assumes that every
+  // argument is in the --arg=value form.
   if (globals->options->client_debug) {
     result.push_back("--client_debug=true");
   } else {
     result.push_back("--client_debug=false");
   }
 
+  // These flags are passed to the java process only for Blaze reporting
+  // purposes; the real interpretation of the jvm flags occurs when we set up
+  // the java command line.
   if (!globals->options->GetExplicitHostJavabase().empty()) {
     result.push_back("--host_javabase=" +
                      globals->options->GetExplicitHostJavabase());
   }
-
-  // This is only for Blaze reporting purposes; the real interpretation of the
-  // jvm flags occurs when we set up the java command line.
   if (globals->options->host_jvm_debug) {
     result.push_back("--host_jvm_debug");
   }
@@ -636,39 +655,10 @@ static string GetArgumentString(const vector<string> &argument_array) {
 static void GoToWorkspace(const WorkspaceLayout *workspace_layout) {
   if (workspace_layout->InWorkspace(globals->workspace) &&
       !blaze_util::ChangeDirectory(globals->workspace)) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "changing directory into %s failed",
-         globals->workspace.c_str());
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "changing directory into " << globals->workspace
+        << " failed: " << GetLastErrorString();
   }
-}
-
-// Check the java version if a java version specification is bundled. On
-// success, returns the executable path of the java command.
-static void VerifyJavaVersionAndSetJvm() {
-  string exe = globals->options->GetJvm();
-
-  string version_spec_file = blaze_util::JoinPath(
-      GetEmbeddedBinariesRoot(globals->options->install_base), "java.version");
-  string version_spec = "";
-  if (blaze_util::ReadFile(version_spec_file, &version_spec)) {
-    blaze_util::StripWhitespace(&version_spec);
-    // A version specification is given, get version of java.
-    string jvm_version = GetJvmVersion(exe);
-
-    // Compare that jvm_version is found and at least the one specified.
-    if (jvm_version.empty()) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "Java version not detected while at least %s is needed.\n"
-          "Please set JAVA_HOME.",
-          version_spec.c_str());
-    } else if (!CheckJavaVersionIsAtLeast(jvm_version, version_spec)) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "Java version is %s while at least %s is needed.\n"
-          "Please set JAVA_HOME.",
-          jvm_version.c_str(), version_spec.c_str());
-    }
-  }
-
-  globals->jvm_path = exe;
 }
 
 // Starts the Blaze server.
@@ -697,9 +687,9 @@ static int StartServer(const WorkspaceLayout *workspace_layout,
   // we can still print errors to the terminal.
   GoToWorkspace(workspace_layout);
 
-  return ExecuteDaemon(exe, jvm_args_vector, globals->jvm_log_file,
-                       globals->jvm_log_file_append, server_dir,
-                       server_startup);
+  return ExecuteDaemon(exe, jvm_args_vector, PrepareEnvironmentForJvm(),
+                       globals->jvm_log_file, globals->jvm_log_file_append,
+                       server_dir, server_startup);
 }
 
 // Replace this process with blaze in standalone/batch mode.
@@ -716,10 +706,9 @@ static void StartStandalone(const WorkspaceLayout *workspace_layout,
   // Wall clock time since process startup.
   globals->startup_time = GetMillisecondsSinceProcessStart();
 
-  if (VerboseLogging()) {
-    fprintf(stderr, "Starting %s in batch mode.\n",
-            globals->options->product_name.c_str());
-  }
+  BAZEL_LOG(INFO) << "Starting " << globals->options->product_name
+                  << " in batch mode.";
+
   string command = globals->option_processor->GetCommand();
   const vector<string> command_arguments =
       globals->option_processor->GetCommandArguments();
@@ -727,13 +716,13 @@ static void StartStandalone(const WorkspaceLayout *workspace_layout,
   if (!command_arguments.empty() && command == "shutdown") {
     string product = globals->options->product_name;
     blaze_util::ToLower(&product);
-    PrintWarning(
-        "Running command \"shutdown\" in batch mode.  Batch mode "
-        "is triggered\nwhen not running %s within a workspace. If you "
-        "intend to shutdown an\nexisting %s server, run \"%s "
-        "shutdown\" from the directory where\nit was started.",
-        globals->options->product_name.c_str(),
-        globals->options->product_name.c_str(), product.c_str());
+    BAZEL_LOG(WARNING)
+        << "Running command \"shutdown\" in batch mode.  Batch mode is "
+           "triggered\nwhen not running "
+        << globals->options->product_name
+        << " within a workspace. If you intend to shutdown an\nexisting "
+        << globals->options->product_name << " server, run \"" << product
+        << " shutdown\" from the directory where\nit was started.";
   }
   vector<string> jvm_args_vector = GetArgumentArray(workspace_layout);
   if (!command.empty()) {
@@ -745,25 +734,30 @@ static void StartStandalone(const WorkspaceLayout *workspace_layout,
                          command_arguments.end());
 
   GoToWorkspace(workspace_layout);
-
   string exe =
       globals->options->GetExe(globals->jvm_path, globals->ServerJarPath());
-  ExecuteProgram(exe, jvm_args_vector);
-  pdie(blaze_exit_code::INTERNAL_ERROR, "execv of '%s' failed", exe.c_str());
+
+  {
+    WithEnvVars env_obj(PrepareEnvironmentForJvm());
+    ExecuteProgram(exe, jvm_args_vector);
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "execv of '" << exe << "' failed: " << GetLastErrorString();
+  }
 }
 
 static void WriteFileToStderrOrDie(const char *file_name) {
   FILE *fp = fopen(file_name, "r");
   if (fp == NULL) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "opening %s failed",
-         file_name);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "opening " << file_name << " failed: " << GetLastErrorString();
   }
   char buffer[255];
   int num_read;
   while ((num_read = fread(buffer, 1, sizeof buffer, fp)) > 0) {
     if (ferror(fp)) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "failed to read from '%s'", file_name);
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "failed to read from '" << file_name
+          << "': " << GetLastErrorString();
     }
     fwrite(buffer, 1, num_read, stderr);
   }
@@ -801,8 +795,9 @@ static void StartServerAndConnect(const WorkspaceLayout *workspace_layout,
   // The server dir has the socket, so we don't allow access by other
   // users.
   if (!blaze_util::MakeDirectories(server_dir, 0700)) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "server directory '%s' could not be created", server_dir.c_str());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "server directory '" << server_dir
+        << "' could not be created: " << GetLastErrorString();
   }
 
   // If we couldn't connect to the server check if there is still a PID file
@@ -814,8 +809,8 @@ static void StartServerAndConnect(const WorkspaceLayout *workspace_layout,
   if (server_pid > 0) {
     if (VerifyServerProcess(server_pid, globals->options->output_base)) {
       if (KillServerProcess(server_pid, globals->options->output_base)) {
-        fprintf(stderr, "Killed non-responsive server process (pid=%d)\n",
-                server_pid);
+        BAZEL_LOG(USER) << "Killed non-responsive server process (pid="
+                        << server_pid << ")";
         SetRestartReasonIfNotSet(SERVER_UNRESPONSIVE);
       } else {
         SetRestartReasonIfNotSet(SERVER_VANISHED);
@@ -830,48 +825,54 @@ static void StartServerAndConnect(const WorkspaceLayout *workspace_layout,
 
   BlazeServerStartup *server_startup;
   server_pid = StartServer(workspace_layout, &server_startup);
+  BAZEL_LOG(USER) << "Starting local " << globals->options->product_name
+                  << " server and connecting to it...";
 
   // Give the server two minutes to start up. That's enough to connect with a
   // debugger.
-  auto try_until_time(std::chrono::system_clock::now() +
-                      std::chrono::seconds(120));
-  bool had_to_wait = false;
+  const auto start_time = std::chrono::system_clock::now();
+  const auto try_until_time = start_time + std::chrono::seconds(120);
+  // Print an update at most once every 10 seconds if we are still trying to
+  // connect.
+  const auto min_message_interval = std::chrono::seconds(10);
+  auto last_message_time = start_time;
   while (std::chrono::system_clock::now() < try_until_time) {
-    auto next_attempt_time(std::chrono::system_clock::now() +
-                           std::chrono::milliseconds(100));
+    const auto attempt_time = std::chrono::system_clock::now();
+    const auto next_attempt_time =
+        attempt_time + std::chrono::milliseconds(100);
+
     if (server->Connect()) {
-      if (had_to_wait && !globals->options->client_debug) {
-        fputc('\n', stderr);
-        fflush(stderr);
-      }
       delete server_startup;
       return;
     }
 
-    had_to_wait = true;
-    if (!globals->options->client_debug) {
-      fputc('.', stderr);
-      fflush(stderr);
+    if (attempt_time >= (last_message_time + min_message_interval)) {
+      auto elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(
+          attempt_time - start_time);
+      BAZEL_LOG(USER) << "... still trying to connect to local "
+                      << globals->options->product_name << " server after "
+                      << elapsed_time.count() << " seconds ...";
+      last_message_time = attempt_time;
     }
 
     std::this_thread::sleep_until(next_attempt_time);
     if (!server_startup->IsStillAlive()) {
       globals->option_processor->PrintStartupOptionsProvenanceMessage();
-      fprintf(stderr, "\nServer crashed during startup. ");
       if (globals->jvm_log_file_append) {
         // Don't dump the log if we were appending - the user should know where
         // to find it, and who knows how much content they may have accumulated.
-        fprintf(stderr, "See '%s'\n", globals->jvm_log_file.c_str());
+        BAZEL_LOG(USER) << "Server crashed during startup. See "
+                        << globals->jvm_log_file;
       } else {
-        fprintf(stderr, "Now printing '%s':\n", globals->jvm_log_file.c_str());
+        BAZEL_LOG(USER) << "Server crashed during startup. Now printing "
+                        << globals->jvm_log_file;
         WriteFileToStderrOrDie(globals->jvm_log_file.c_str());
       }
       exit(blaze_exit_code::INTERNAL_ERROR);
     }
   }
-  die(blaze_exit_code::INTERNAL_ERROR,
-      "\nError: couldn't connect to server (%d) after 120 seconds.",
-      server_pid);
+  BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+      << "couldn't connect to server (" << server_pid << ") after 120 seconds.";
 }
 
 // A PureZipExtractorProcessor to extract the files from the blaze zip.
@@ -892,20 +893,28 @@ class ExtractBlazeZipProcessor : public PureZipExtractorProcessor {
   void Process(const char *filename, const devtools_ijar::u4 attr,
                const devtools_ijar::u1 *data, const size_t size) override {
     string path = blaze_util::JoinPath(embedded_binaries_, filename);
-    if (!blaze_util::MakeDirectories(blaze_util::Dirname(path), 0777)) {
-      pdie(blaze_exit_code::INTERNAL_ERROR, "couldn't create '%s'",
-           path.c_str());
+    string dirname = blaze_util::Dirname(path);
+    // Performance optimization: memoize the paths we already created a
+    // directory for, to spare a stat in attempting to recreate an already
+    // existing directory. This optimization alone shaves off seconds from the
+    // extraction time on Windows.
+    if (created_directories_.insert(dirname).second) {
+      if (!blaze_util::MakeDirectories(dirname, 0777)) {
+        BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+            << "couldn't create '" << path << "': " << GetLastErrorString();
+      }
     }
 
     if (!blaze_util::WriteFile(data, size, path, 0755)) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "\nFailed to write zipped file \"%s\": %s", path.c_str(),
-          blaze_util::GetLastErrorString().c_str());
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "Failed to write zipped file '" << path
+          << "': " << GetLastErrorString();
     }
   }
 
  private:
   const string embedded_binaries_;
+  set<string> created_directories_;
 };
 
 // Actually extracts the embedded data files into the tree whose root
@@ -918,37 +927,36 @@ static void ActuallyExtractData(const string &argv0,
   CompoundZipProcessor processor({&extract_blaze_processor,
                                   &install_key_processor});
   if (!blaze_util::MakeDirectories(embedded_binaries, 0777)) {
-    pdie(blaze_exit_code::INTERNAL_ERROR, "couldn't create '%s'",
-         embedded_binaries.c_str());
+    BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+        << "couldn't create '" << embedded_binaries
+        << "': " << GetLastErrorString();
   }
 
-  fprintf(stderr, "Extracting %s installation...\n",
-          globals->options->product_name.c_str());
+  BAZEL_LOG(USER) << "Extracting " << globals->options->product_name
+                  << " installation...";
+
   std::unique_ptr<devtools_ijar::ZipExtractor> extractor(
       devtools_ijar::ZipExtractor::Create(argv0.c_str(), &processor));
-  if (extractor.get() == NULL) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "\nFailed to open %s as a zip file: %s",
-        globals->options->product_name.c_str(),
-        blaze_util::GetLastErrorString().c_str());
+  if (extractor == NULL) {
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Failed to open " << globals->options->product_name
+        << " as a zip file: " << GetLastErrorString();
   }
   if (extractor->ProcessAll() < 0) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "\nFailed to extract %s as a zip file: %s",
-        globals->options->product_name.c_str(), extractor->GetError());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Failed to extract " << globals->options->product_name
+        << " as a zip file: " << extractor->GetError();
   }
 
   if (install_md5 != globals->install_md5) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "The %s binary at %s was replaced during the client's self-extraction "
-        "(old md5: %s new md5: %s). If you expected this then you should "
-        "simply re-run %s in order to pick up the different version. If you "
-        "didn't expect this then you should investigate what happened.",
-        globals->options->product_name.c_str(),
-        argv0.c_str(),
-        globals->install_md5.c_str(),
-        install_md5.c_str(),
-        globals->options->product_name.c_str());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "The " << globals->options->product_name << " binary at " << argv0
+        << " was replaced during the client's self-extraction (old md5: "
+        << globals->install_md5 << " new md5: " << install_md5
+        << "). If you expected this then you should simply re-run "
+        << globals->options->product_name
+        << " in order to pick up the different version. If you didn't expect "
+           "this then you should investigate what happened.";
   }
 
   // Set the timestamps of the extracted files to the future and make sure (or
@@ -972,9 +980,10 @@ static void ActuallyExtractData(const string &argv0,
     // releases so that the metadata cache knows that the files may have
     // changed. This is essential for the correctness of actions that use
     // embedded binaries as artifacts.
-    if (!mtime.get()->SetToDistantFuture(it)) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "failed to set timestamp on '%s'", extracted_path);
+    if (!mtime->SetToDistantFuture(it)) {
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "failed to set timestamp on '" << extracted_path
+          << "': " << GetLastErrorString();
     }
 
     blaze_util::SyncFile(it);
@@ -1035,26 +1044,24 @@ static void ExtractData(const string &self_path) {
         // (in case we're running on Windows) so we need to wait for that to
         // finish and try renaming again.
         ++attempts;
-        fprintf(stderr,
-                "install base directory '%s' could not be renamed into place"
-                "after %d second(s), trying again\r",
-                tmp_install.c_str(), attempts);
+        BAZEL_LOG(USER) << "install base directory '" << tmp_install
+                        << "' could not be renamed into place after "
+                        << attempts << " second(s), trying again\r";
         std::this_thread::sleep_for(std::chrono::seconds(1));
       }
     }
 
     // Give up renaming after 120 failed attempts / 2 minutes.
     if (attempts == 120) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "install base directory '%s' could not be renamed into place",
-           tmp_install.c_str());
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "install base directory '" << tmp_install
+          << "' could not be renamed into place: " << GetLastErrorString();
     }
   } else {
     if (!blaze_util::IsDirectory(globals->options->install_base)) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "Error: Install base directory '%s' could not be created. "
-          "It exists but is not a directory.",
-          globals->options->install_base.c_str());
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "install base directory '" << globals->options->install_base
+          << "' could not be created. It exists but is not a directory.";
     }
 
     std::unique_ptr<blaze_util::IFileMtime> mtime(
@@ -1063,71 +1070,58 @@ static void ExtractData(const string &self_path) {
         globals->options->install_base, "_embedded_binaries");
     for (const auto &it : globals->extracted_binaries) {
       string path = blaze_util::JoinPath(real_install_dir, it);
-      // Check that the file exists and is readable.
-      if (blaze_util::IsDirectory(path)) {
-        continue;
-      }
-      if (!blaze_util::CanReadFile(path)) {
-        die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-            "Error: corrupt installation: file '%s' missing."
-            " Please remove '%s' and try again.",
-            path.c_str(), globals->options->install_base.c_str());
-      }
-      // Check that the timestamp is in the future. A past timestamp would
-      // indicate that the file has been tampered with.
-      // See ActuallyExtractData().
-      bool is_in_future = false;
-      if (!mtime.get()->GetIfInDistantFuture(path, &is_in_future)) {
-        die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-            "Error: could not retrieve mtime of file '%s'. "
-            "Please remove '%s' and try again.",
-            path.c_str(), globals->options->install_base.c_str());
-      }
-      if (!is_in_future) {
-        die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-            "Error: corrupt installation: file '%s' "
-            "modified.  Please remove '%s' and try again.",
-            path.c_str(), globals->options->install_base.c_str());
+      if (!mtime->IsUntampered(path)) {
+        BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+            << "corrupt installation: file '" << path
+            << "' is missing or modified.  Please remove '"
+            << globals->options->install_base << "' and try again.";
       }
     }
   }
 }
 
-const char *volatile_startup_options[] = {
-    "--option_sources=",
-    "--max_idle_secs=",
-    "--connect_timeout_secs=",
-    "--client_debug=",
-    NULL,
-};
+// TODO(ccalvarin) when --batch is gone and the startup_options field in the
+// gRPC message is always set, there is no reason for client options that are
+// not used at server startup to be part of the startup command line. The server
+// command line difference logic can be simplified then.
+const std::vector<string> volatile_startup_options = {
+    "--option_sources=", "--max_idle_secs=", "--connect_timeout_secs=",
+    "--client_debug="};
 
 // Returns true if the server needs to be restarted to accommodate changes
 // between the two argument lists.
-static bool ServerNeedsToBeKilled(const vector<string> &args1,
-                                  const vector<string> &args2) {
+static bool AreStartupOptionsDifferent(
+    const vector<string> &running_server_args,
+    const vector<string> &requested_args) {
   // We need not worry about one side missing an argument and the other side
-  // having the default value, since this command line is already the
-  // canonicalized one that always contains every switch (with default values
-  // if it was not present on the real command line). Same applies for argument
-  // ordering.
-  if (args1.size() != args2.size()) {
+  // having the default value, since this command line is the canonical one for
+  // this version of Bazel: either the default value is listed explicitly or it
+  // is not, but this has nothing to do with the user's command line: it is
+  // defined by GetArgumentArray(). Same applies for argument ordering.
+  if (running_server_args.size() != requested_args.size()) {
+    BAZEL_LOG(INFO) << "The new command line has a different length from the "
+                       "running server's.";
     return true;
   }
 
-  for (int i = 0; i < args1.size(); i++) {
-    bool option_volatile = false;
-    for (const char **candidate = volatile_startup_options; *candidate != NULL;
-         candidate++) {
-      string candidate_string(*candidate);
-      if (args1[i].substr(0, candidate_string.size()) == candidate_string &&
-          args2[i].substr(0, candidate_string.size()) == candidate_string) {
-        option_volatile = true;
-        break;
+  for (int i = 0; i < running_server_args.size(); i++) {
+    if (running_server_args[i] != requested_args[i]) {
+      bool option_volatile = false;
+      // Only check if this is a volatile option for dissimilar args.
+      for (const string &candidate : volatile_startup_options) {
+        if (running_server_args[i].substr(0, candidate.size()) == candidate &&
+            requested_args[i].substr(0, candidate.size()) == candidate) {
+          option_volatile = true;
+          break;
+        }
       }
-    }
-
-    if (!option_volatile && args1[i] != args2[i]) {
-      return true;
+      if (!option_volatile) {
+        BAZEL_LOG(INFO)
+            << "A difference was found between the command lines at position "
+            << i << ": the running server has option " << running_server_args[i]
+            << ", and requested option is: " << requested_args[i];
+        return true;
+      }
     }
   }
 
@@ -1143,24 +1137,24 @@ static void KillRunningServerIfDifferentStartupOptions(
 
   string cmdline_path =
       blaze_util::JoinPath(globals->options->output_base, "server/cmdline");
-  string joined_arguments;
+  string old_joined_arguments;
 
   // No, /proc/$PID/cmdline does not work, because it is limited to 4K. Even
   // worse, its behavior differs slightly between kernels (in some, when longer
   // command lines are truncated, the last 4 bytes are replaced with
   // "..." + NUL.
-  blaze_util::ReadFile(cmdline_path, &joined_arguments);
-  vector<string> arguments = blaze_util::Split(joined_arguments, '\0');
+  blaze_util::ReadFile(cmdline_path, &old_joined_arguments);
+  vector<string> old_arguments = blaze_util::Split(old_joined_arguments, '\0');
 
   // These strings contain null-separated command line arguments. If they are
   // the same, the server can stay alive, otherwise, it needs shuffle off this
   // mortal coil.
-  if (ServerNeedsToBeKilled(arguments, GetArgumentArray(workspace_layout))) {
+  if (AreStartupOptionsDifferent(old_arguments,
+                                 GetArgumentArray(workspace_layout))) {
     globals->restart_reason = NEW_OPTIONS;
-    PrintWarning(
-        "Running %s server needs to be killed, because the "
-        "startup options are different.",
-        globals->options->product_name.c_str());
+    BAZEL_LOG(WARNING) << "Running " << globals->options->product_name
+                       << " server needs to be killed, because the startup "
+                          "options are different.";
     server->KillRunningServer();
   }
 }
@@ -1180,9 +1174,12 @@ static void EnsureCorrectRunningVersion(BlazeServer *server) {
   string prev_installation;
   bool ok =
       blaze_util::ReadDirectorySymlink(installation_path, &prev_installation);
-  if (!ok || !CompareAbsolutePaths(prev_installation,
-                                   globals->options->install_base)) {
+  if (!ok || !blaze_util::CompareAbsolutePaths(
+                 prev_installation, globals->options->install_base)) {
     if (server->Connected()) {
+      BAZEL_LOG(INFO)
+          << "Killing running server because it is using another version of "
+          << globals->options->product_name;
       server->KillRunningServer();
       globals->restart_reason = NEW_VERSION;
     }
@@ -1190,19 +1187,19 @@ static void EnsureCorrectRunningVersion(BlazeServer *server) {
     blaze_util::UnlinkPath(installation_path);
     if (!SymlinkDirectories(globals->options->install_base,
                             installation_path)) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "failed to create installation symlink '%s'",
-           installation_path.c_str());
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "failed to create installation symlink '" << installation_path
+          << "': " << GetLastErrorString();
     }
 
     // Update the mtime of the install base so that cleanup tools can
     // find install bases that haven't been used for a long time
     std::unique_ptr<blaze_util::IFileMtime> mtime(
         blaze_util::CreateFileMtime());
-    if (!mtime.get()->SetToNow(globals->options->install_base)) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "failed to set timestamp on '%s'",
-           globals->options->install_base.c_str());
+    if (!mtime->SetToNow(globals->options->install_base)) {
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "failed to set timestamp on '" << globals->options->install_base
+          << "': " << GetLastErrorString();
     }
   }
 }
@@ -1239,19 +1236,15 @@ static ATTRIBUTE_NORETURN void SendServerRequest(
       // There's a distant possibility that the two paths look the same yet are
       // actually different because the two processes have different mount
       // tables.
-      if (VerboseLogging()) {
-        fprintf(stderr, "Server's cwd moved or deleted (%s).\n",
-                server_cwd.c_str());
-      }
+      BAZEL_LOG(INFO) << "Server's cwd moved or deleted (" << server_cwd
+                      << ").";
       server->KillRunningServer();
     } else {
       break;
     }
   }
 
-  if (VerboseLogging()) {
-    fprintf(stderr, "Connected (server pid=%d).\n", globals->server_pid);
-  }
+  BAZEL_LOG(INFO) << "Connected (server pid=" << globals->server_pid << ").";
 
   // Wall clock time since process startup.
   globals->startup_time = GetMillisecondsSinceProcessStart();
@@ -1271,7 +1264,7 @@ static void ParseOptions(int argc, const char *argv[]) {
 
   if (parse_exit_code != blaze_exit_code::SUCCESS) {
     globals->option_processor->PrintStartupOptionsProvenanceMessage();
-    die(parse_exit_code, "%s", error.c_str());
+    BAZEL_DIE(parse_exit_code) << error;
   }
   globals->options = globals->option_processor->GetParsedStartupOptions();
 }
@@ -1280,9 +1273,9 @@ static void ParseOptions(int argc, const char *argv[]) {
 static void ComputeWorkspace(const WorkspaceLayout *workspace_layout) {
   globals->cwd = blaze_util::MakeCanonical(blaze_util::GetCwd().c_str());
   if (globals->cwd.empty()) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "blaze_util::MakeCanonical('%s') failed",
-         blaze_util::GetCwd().c_str());
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "blaze_util::MakeCanonical('" << blaze_util::GetCwd()
+        << "') failed: " << GetLastErrorString();
   }
   globals->workspace = workspace_layout->GetWorkspace(globals->cwd);
 }
@@ -1322,28 +1315,29 @@ static void ComputeBaseDirectories(const WorkspaceLayout *workspace_layout,
   const char *output_base = globals->options->output_base.c_str();
   if (!blaze_util::PathExists(globals->options->output_base)) {
     if (!blaze_util::MakeDirectories(globals->options->output_base, 0777)) {
-      pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-           "Output base directory '%s' could not be created", output_base);
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "Output base directory '" << output_base
+          << "' could not be created: " << GetLastErrorString();
     }
   } else {
     if (!blaze_util::IsDirectory(globals->options->output_base)) {
-      die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-          "Error: Output base directory '%s' could not be created. "
-          "It exists but is not a directory.",
-          output_base);
+      BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+          << "Output base directory '" << output_base
+          << "' could not be created. It exists but is not a directory.";
     }
   }
   if (!blaze_util::CanAccessDirectory(globals->options->output_base)) {
-    die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-        "Error: Output base directory '%s' must be readable and writable.",
-        output_base);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Output base directory '" << output_base
+        << "' must be readable and writable.";
   }
   ExcludePathFromBackup(output_base);
 
   globals->options->output_base = blaze_util::MakeCanonical(output_base);
   if (globals->options->output_base.empty()) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
-         "blaze_util::MakeCanonical('%s') failed", output_base);
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "blaze_util::MakeCanonical('" << output_base
+        << "') failed: " << GetLastErrorString();
   }
 
   globals->lockfile =
@@ -1361,10 +1355,26 @@ static void ComputeBaseDirectories(const WorkspaceLayout *workspace_layout,
 // Prepares the environment to be suitable to start a JVM.
 // Changes made to the environment in this function *will not* be part
 // of '--client_env'.
-static void PrepareEnvironmentForJvm() {
-  if (!blaze::GetEnv("http_proxy").empty()) {
-    PrintWarning("ignoring http_proxy in environment.");
-    blaze::UnsetEnv("http_proxy");
+static map<string, EnvVarValue> PrepareEnvironmentForJvm() {
+  map<string, EnvVarValue> result;
+
+  // We need to disable HTTP proxies for local (gRPC-based) communication
+  // between the client and server. gRPC currently only checks http_proxy, but
+  // HTTP_PROXY could also be used to specify a proxy, so we check for both.
+  if (!blaze::GetEnv("http_proxy").empty() ||
+      !blaze::GetEnv("HTTP_PROXY").empty()) {
+    BAZEL_LOG(WARNING)
+        << "detected http_proxy set in env, setting no_proxy for localhost.";
+
+    // Disable HTTP proxies for localhost and any localhost-like address,
+    // in case we (or gRPC, etc.) ever use one of these addresses.
+    std::string localhost_addresses = "localhost,127.0.0.1,0:0:0:0:0:0:0:1,::1";
+    result["no_proxy"] = EnvVarValue(EnvVarAction::SET, localhost_addresses);
+    result["NO_PROXY"] = EnvVarValue(EnvVarAction::SET, localhost_addresses);
+
+    // Set no_proxy for the client, as well.
+    blaze::SetEnv("no_proxy", localhost_addresses);
+    blaze::SetEnv("NO_PROXY", localhost_addresses);
   }
 
   if (!blaze::GetEnv("LD_ASSUME_KERNEL").empty()) {
@@ -1372,19 +1382,19 @@ static void PrepareEnvironmentForJvm() {
     // specified, the JVM fails to create threads.  See thread_stack_regtest.
     // This is also provoked by LD_LIBRARY_PATH=/usr/lib/debug,
     // or anything else that causes the JVM to use LinuxThreads.
-    PrintWarning("ignoring LD_ASSUME_KERNEL in environment.");
-    blaze::UnsetEnv("LD_ASSUME_KERNEL");
+    BAZEL_LOG(WARNING) << "ignoring LD_ASSUME_KERNEL in environment.";
+    result["LD_ASSUME_KERNEL"] = EnvVarValue(EnvVarAction::UNSET, "");
   }
 
   if (!blaze::GetEnv("LD_PRELOAD").empty()) {
-    PrintWarning("ignoring LD_PRELOAD in environment.");
-    blaze::UnsetEnv("LD_PRELOAD");
+    BAZEL_LOG(WARNING) << "ignoring LD_PRELOAD in environment.";
+    result["LD_PRELOAD"] = EnvVarValue(EnvVarAction::UNSET, "");
   }
 
   if (!blaze::GetEnv("_JAVA_OPTIONS").empty()) {
     // This would override --host_jvm_args
-    PrintWarning("ignoring _JAVA_OPTIONS in environment.");
-    blaze::UnsetEnv("_JAVA_OPTIONS");
+    BAZEL_LOG(WARNING) << "ignoring _JAVA_OPTIONS in environment.";
+    result["_JAVA_OPTIONS"] = EnvVarValue(EnvVarAction::UNSET, "");
   }
 
   // TODO(bazel-team):  We've also seen a failure during loading (creating
@@ -1393,10 +1403,12 @@ static void PrepareEnvironmentForJvm() {
   // Make the JVM use ISO-8859-1 for parsing its command line because "blaze
   // run" doesn't handle non-ASCII command line arguments. This is apparently
   // the most reliable way to select the platform default encoding.
-  blaze::SetEnv("LANG", "en_US.ISO-8859-1");
-  blaze::SetEnv("LANGUAGE", "en_US.ISO-8859-1");
-  blaze::SetEnv("LC_ALL", "en_US.ISO-8859-1");
-  blaze::SetEnv("LC_CTYPE", "en_US.ISO-8859-1");
+  result["LANG"] = EnvVarValue(EnvVarAction::SET, "en_US.ISO-8859-1");
+  result["LANGUAGE"] = EnvVarValue(EnvVarAction::SET, "en_US.ISO-8859-1");
+  result["LC_ALL"] = EnvVarValue(EnvVarAction::SET, "en_US.ISO-8859-1");
+  result["LC_CTYPE"] = EnvVarValue(EnvVarAction::SET, "en_US.ISO-8859-1");
+
+  return result;
 }
 
 static string CheckAndGetBinaryPath(const string &argv0) {
@@ -1442,10 +1454,11 @@ int GetExitCodeForAbruptExit(const GlobalVariables &globals) {
 }
 
 int Main(int argc, const char *argv[], WorkspaceLayout *workspace_layout,
-         OptionProcessor *option_processor,
-         std::unique_ptr<blaze_util::LogHandler> log_handler) {
+         OptionProcessor *option_processor) {
   // Logging must be set first to assure no log statements are missed.
-  blaze_util::SetLogHandler(std::move(log_handler));
+  std::unique_ptr<blaze_util::BazelLogHandler> default_handler(
+      new blaze_util::BazelLogHandler());
+  blaze_util::SetLogHandler(std::move(default_handler));
 
   globals = new GlobalVariables(option_processor);
   blaze::SetupStdStreams();
@@ -1474,10 +1487,15 @@ int Main(int argc, const char *argv[], WorkspaceLayout *workspace_layout,
   globals->binary_path = CheckAndGetBinaryPath(argv[0]);
   ParseOptions(argc, argv);
 
-  blaze::SetDebugLog(globals->options->client_debug);
-  debug_log("Debug logging active");
+  SetDebugLog(globals->options->client_debug);
+  // If client_debug was false, this is ignored, so it's accurate.
+  BAZEL_LOG(INFO) << "Debug logging requested, sending all client log "
+                     "statements to stderr";
+  // TODO(b/79206210): Can't log this before SetDebugLog is called, since the
+  // warning might get swallowed. Once the bug is fixed, move this call to
+  // OptionProcessor::ParseOptions where the order of operations is more clear.
+  globals->options->MaybeLogStartupOptionWarnings();
 
-  PrepareEnvironmentForJvm();
   blaze::CreateSecureOutputRoot(globals->options->output_user_root);
 
   const string self_path = GetSelfPath();
@@ -1491,9 +1509,16 @@ int Main(int argc, const char *argv[], WorkspaceLayout *workspace_layout,
   WarnFilesystemType(globals->options->output_base);
 
   ExtractData(self_path);
-  VerifyJavaVersionAndSetJvm();
+  globals->jvm_path = globals->options->GetJvm();
 
   blaze_server->Connect();
+
+  if (!globals->options->batch &&
+      "shutdown" == globals->option_processor->GetCommand() &&
+      !blaze_server->Connected()) {
+    return 0;
+  }
+
   EnsureCorrectRunningVersion(blaze_server);
   KillRunningServerIfDifferentStartupOptions(workspace_layout, blaze_server);
 
@@ -1517,7 +1542,8 @@ GrpcBlazeServer::GrpcBlazeServer(int connect_timeout_secs) {
 
   pipe_ = blaze_util::CreatePipe();
   if (pipe_ == NULL) {
-    pdie(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR, "Couldn't create pipe");
+    BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+        << "Couldn't create pipe: " << GetLastErrorString();
   }
 }
 
@@ -1526,7 +1552,8 @@ GrpcBlazeServer::~GrpcBlazeServer() {
   pipe_ = NULL;
 }
 
-bool GrpcBlazeServer::TryConnect(command_server::CommandServer::Stub *client) {
+bool GrpcBlazeServer::TryConnect(
+    CommandServer::Stub *client) {
   grpc::ClientContext context;
   context.set_deadline(std::chrono::system_clock::now() +
                        std::chrono::seconds(connect_timeout_secs_));
@@ -1535,13 +1562,13 @@ bool GrpcBlazeServer::TryConnect(command_server::CommandServer::Stub *client) {
   command_server::PingResponse response;
   request.set_cookie(request_cookie_);
 
-  debug_log("Trying to connect to server (timeout: %d secs)...",
-            connect_timeout_secs_);
+  BAZEL_LOG(INFO) << "Trying to connect to server (timeout: "
+                  << connect_timeout_secs_ << " secs)...";
   grpc::Status status = client->Ping(&context, request, &response);
 
   if (!status.ok() || response.cookie() != response_cookie_) {
-    debug_log("Connection to server failed: %s",
-              status.error_message().c_str());
+    BAZEL_LOG(INFO) << "Connection to server failed: "
+                    << status.error_message().c_str();
     return false;
   }
 
@@ -1591,8 +1618,8 @@ bool GrpcBlazeServer::Connect() {
 
   std::shared_ptr<grpc::Channel> channel(
       grpc::CreateChannel(port, grpc::InsecureChannelCredentials()));
-  std::unique_ptr<command_server::CommandServer::Stub> client(
-      command_server::CommandServer::NewStub(channel));
+  std::unique_ptr<CommandServer::Stub> client(
+      CommandServer::NewStub(channel));
 
   if (!TryConnect(client.get())) {
     return false;
@@ -1646,8 +1673,8 @@ void GrpcBlazeServer::CancelThread() {
     if (bytes_read < 0 && error == blaze_util::IPipe::INTERRUPTED) {
       continue;
     } else if (bytes_read != 1) {
-      pdie(blaze_exit_code::INTERNAL_ERROR,
-           "Cannot communicate with cancel thread");
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "Cannot communicate with cancel thread: " << GetLastErrorString();
     }
 
     switch (buf) {
@@ -1690,8 +1717,8 @@ void GrpcBlazeServer::SendCancelMessage() {
   // There isn't a lot we can do if this request fails
   grpc::Status status = client_->Cancel(&context, request, &response);
   if (!status.ok()) {
-    fprintf(stderr, "\nCould not interrupt server (%s)\n\n",
-            status.error_message().c_str());
+    BAZEL_LOG(USER) << "\nCould not interrupt server ("
+                    << status.error_message().c_str() << ")\n";
   }
 }
 
@@ -1786,12 +1813,12 @@ unsigned int GrpcBlazeServer::Communicate() {
 
   while (reader->Read(&response)) {
     if (finished && !finished_warning_emitted) {
-      fprintf(stderr, "\nServer returned messages after reporting exit code\n");
+      BAZEL_LOG(USER) << "\nServer returned messages after reporting exit code";
       finished_warning_emitted = true;
     }
 
     if (response.cookie() != response_cookie_) {
-      fprintf(stderr, "\nServer response cookie invalid, exiting\n");
+      BAZEL_LOG(USER) << "\nServer response cookie invalid, exiting";
       return blaze_exit_code::INTERNAL_ERROR;
     }
 
@@ -1822,7 +1849,8 @@ unsigned int GrpcBlazeServer::Communicate() {
 
     if (broken_pipe_name != nullptr && !pipe_broken) {
       pipe_broken = true;
-      fprintf(stderr, "\nCannot write to %s; exiting...\n\n", broken_pipe_name);
+      BAZEL_LOG(USER) << "\nCannot write to " << broken_pipe_name
+                      << "; exiting...\n";
       Cancel();
     }
 
@@ -1848,23 +1876,21 @@ unsigned int GrpcBlazeServer::Communicate() {
 
   grpc::Status status = reader->Finish();
   if (!status.ok()) {
-    fprintf(stderr,
-            "\nServer terminated abruptly "
-            "(error code: %d, error message: '%s', log file: '%s')\n\n",
-            status.error_code(), status.error_message().c_str(),
-            globals->jvm_log_file.c_str());
+    BAZEL_LOG(USER) << "\nServer terminated abruptly (error code: "
+                    << status.error_code() << ", error message: '"
+                    << status.error_message() << "', log file: '"
+                    << globals->jvm_log_file << "')\n";
     return GetExitCodeForAbruptExit(*globals);
   } else if (!finished) {
-    fprintf(stderr,
-            "\nServer finished RPC without an explicit exit code "
-            "(log file: '%s')\n\n",
-            globals->jvm_log_file.c_str());
+    BAZEL_LOG(USER)
+        << "\nServer finished RPC without an explicit exit code (log file: '"
+        << globals->jvm_log_file << "')\n";
     return GetExitCodeForAbruptExit(*globals);
   } else if (final_response.has_exec_request()) {
     const command_server::ExecRequest& request = final_response.exec_request();
     if (request.argv_size() < 1) {
-      fprintf(stderr,
-          "\nServer requested exec() but did not pass a binary to execute\n\n");
+      BAZEL_LOG(USER)
+          << "\nServer requested exec() but did not pass a binary to execute\n";
       return blaze_exit_code::INTERNAL_ERROR;
     }
 
@@ -1875,8 +1901,9 @@ unsigned int GrpcBlazeServer::Communicate() {
     }
 
     if (!blaze_util::ChangeDirectory(request.working_directory())) {
-      pdie(blaze_exit_code::INTERNAL_ERROR, "changing directory into %s failed",
-           request.working_directory().c_str());
+      BAZEL_DIE(blaze_exit_code::INTERNAL_ERROR)
+          << "changing directory into " << request.working_directory()
+          << " failed: " << GetLastErrorString();
     }
     ExecuteProgram(request.argv(0), argv);
   }

@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.skyframe;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.base.Objects;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -30,8 +29,10 @@ import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Executor;
+import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.DummyExecutor;
+import com.google.devtools.build.lib.testutil.TimestampGranularityUtils;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -49,6 +50,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import javax.annotation.Nullable;
 import org.junit.Before;
 import org.junit.Test;
@@ -98,14 +100,14 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
       }
     }
 
-    public static final class EvaluatedEntry {
+    private static final class EvaluatedEntry {
       public final SkyKey skyKey;
-      public final SkyValue value;
+      final EvaluationSuccessState successState;
       public final EvaluationState state;
 
-      EvaluatedEntry(SkyKey skyKey, SkyValue value, EvaluationState state) {
+      EvaluatedEntry(SkyKey skyKey, EvaluationSuccessState successState, EvaluationState state) {
         this.skyKey = skyKey;
-        this.value = value;
+        this.successState = successState;
         this.state = state;
       }
 
@@ -113,13 +115,13 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
       public boolean equals(Object obj) {
         return obj instanceof EvaluatedEntry
             && this.skyKey.equals(((EvaluatedEntry) obj).skyKey)
-            && this.value.equals(((EvaluatedEntry) obj).value)
+            && this.successState.equals(((EvaluatedEntry) obj).successState)
             && this.state.equals(((EvaluatedEntry) obj).state);
       }
 
       @Override
       public int hashCode() {
-        return Objects.hashCode(skyKey, value, state);
+        return Objects.hashCode(skyKey, successState, state);
       }
     }
 
@@ -163,8 +165,11 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
 
     @Override
     public void evaluated(
-        SkyKey skyKey, Supplier<SkyValue> skyValueSupplier, EvaluationState state) {
-      evaluated.add(new EvaluatedEntry(skyKey, skyValueSupplier.get(), state));
+        SkyKey skyKey,
+        @Nullable SkyValue value,
+        Supplier<EvaluationSuccessState> evaluationSuccessState,
+        EvaluationState state) {
+      evaluated.add(new EvaluatedEntry(skyKey, evaluationSuccessState.get(), state));
     }
   }
 
@@ -209,8 +214,9 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
     }
 
     @Override
-    protected String computeKey(ActionKeyContext actionKeyContext) {
-      return getPrimaryOutput().getExecPathString() + executionCounter.get();
+    protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+      fp.addString(getPrimaryOutput().getExecPathString());
+      fp.addInt(executionCounter.get());
     }
   }
 
@@ -333,19 +339,39 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
     }
   }
 
+  /** Sanity check: ensure that a file's ctime was updated from an older value. */
+  private void checkCtimeUpdated(Path path, long oldCtime) throws IOException {
+    if (oldCtime >= path.stat().getLastChangeTime()) {
+      throw new IllegalStateException(String.format("path=(%s), ctime=(%d)", path, oldCtime));
+    }
+  }
+
   private void maybeChangeFile(Artifact file, ChangeArtifact changeRequest) throws Exception {
     if (changeRequest == ChangeArtifact.DONT_CHANGE) {
       return;
     }
 
+    Path path = file.getPath();
+
     if (changeRequest.changeMtime()) {
-      // 1000000 should be larger than the filesystem timestamp granularity.
-      file.getPath().setLastModifiedTime(file.getPath().getLastModifiedTime() + 1000000);
-      tsgm.waitForTimestampGranularity(reporter.getOutErr());
+      long ctime = path.stat().getLastChangeTime();
+      // Ensure enough time elapsed for file updates to have a visible effect on the file's ctime.
+      TimestampGranularityUtils.waitForTimestampGranularity(ctime, reporter.getOutErr());
+      // waitForTimestampGranularity waits long enough for System.currentTimeMillis() to be greater
+      // than the time at the setCommandStartTime() call. Therefore setting
+      // System.currentTimeMillis() is guaranteed to advance the file's ctime.
+      path.setLastModifiedTime(System.currentTimeMillis());
+      // Sanity check: ensure that updating the file's mtime indeed advanced its ctime.
+      checkCtimeUpdated(path, ctime);
     }
 
     if (changeRequest.changeContent()) {
-      appendToFile(file.getPath());
+      long ctime = path.stat().getLastChangeTime();
+      // Ensure enough time elapsed for file updates to have a visible effect on the file's ctime.
+      TimestampGranularityUtils.waitForTimestampGranularity(ctime, reporter.getOutErr());
+      appendToFile(path);
+      // Sanity check: ensure that appending to the file indeed advanced its ctime.
+      checkCtimeUpdated(path, ctime);
     }
 
     // Invalidate the file state value to inform Skyframe that the file may have changed.
@@ -385,6 +411,7 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
         null,
         executor,
         null,
+        null,
         false,
         null,
         null);
@@ -394,7 +421,6 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
     TrackingEvaluationProgressReceiver.EvaluatedEntry evaluatedAction =
         progressReceiver.getEvalutedEntry(actionKey);
     assertThat(evaluatedAction).isNotNull();
-    SkyValue actionValue = evaluatedAction.value;
 
     // Mutate the action input if requested.
     maybeChangeFile(actionInput, changeActionInput);
@@ -414,6 +440,7 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
         null,
         executor,
         null,
+        null,
         false,
         null,
         null);
@@ -427,12 +454,10 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
       if (expectActionIs.actuallyClean()) {
         // Action was dirtied but verified clean.
         assertThat(newEntry.state).isEqualTo(EvaluationState.CLEAN);
-        assertThat(newEntry.value).isEqualTo(actionValue);
       } else {
         // Action was dirtied and rebuilt. It was either reexecuted or was an action cache hit,
         // doesn't matter here.
         assertThat(newEntry.state).isEqualTo(EvaluationState.BUILT);
-        assertThat(newEntry.value).isNotEqualTo(actionValue);
       }
     } else {
       // Action was not dirtied.
@@ -655,8 +680,8 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
     }
 
     @Override
-    protected String computeKey(ActionKeyContext actionKeyContext) {
-      return new Fingerprint().addInt(42).hexDigestAndReset();
+    protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+      fp.addInt(42);
     }
   }
 
@@ -793,6 +818,7 @@ public class SkyframeAwareActionTest extends TimestampBuilderTestCase {
         null,
         null,
         executor,
+        null,
         null,
         false,
         null,

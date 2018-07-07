@@ -13,7 +13,6 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
@@ -28,13 +27,14 @@ import com.google.devtools.build.lib.actions.ActionLookupValue.ActionLookupKey;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactOwner;
+import com.google.devtools.build.lib.actions.ArtifactSkyKey;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.MissingInputFileException;
-import com.google.devtools.build.lib.analysis.actions.ActionTemplate;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.util.Pair;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionException;
@@ -66,7 +66,7 @@ class ArtifactFunction implements SkyFunction {
       }
     }
 
-    SkyKey actionLookupKey = getActionLookupKey(artifact);
+    ActionLookupKey actionLookupKey = getActionLookupKey(artifact);
     ActionLookupValue actionLookupValue = getActionLookupValue(actionLookupKey, env, artifact);
     if (actionLookupValue == null) {
       return null;
@@ -84,26 +84,21 @@ class ArtifactFunction implements SkyFunction {
 
     // If the action is an ActionTemplate, we need to expand the ActionTemplate into concrete
     // actions, execute those actions in parallel and then aggregate the action execution results.
-    if (artifact.isTreeArtifact()) {
-      ActionAnalysisMetadata actionMetadata =
-          actionLookupValue.getIfPresentAndNotAction(actionIndex);
-      if (actionMetadata instanceof ActionTemplate) {
-        // Create the directory structures for the output TreeArtifact first.
-        try {
-          FileSystemUtils.createDirectoryAndParents(artifact.getPath());
-        } catch (IOException e) {
-          env.getListener()
-              .handle(
-                  Event.error(
-                      String.format(
-                          "Failed to create output directory for TreeArtifact %s: %s",
-                          artifact, e.getMessage())));
-          throw new ArtifactFunctionException(e, Transience.TRANSIENT);
-        }
-
-        return createTreeArtifactValueFromActionTemplate(
-            (ActionTemplate<?>) actionMetadata, artifact, env);
+    if (artifact.isTreeArtifact() && actionLookupValue.isActionTemplate(actionIndex)) {
+      // Create the directory structures for the output TreeArtifact first.
+      try {
+        artifact.getPath().createDirectoryAndParents();
+      } catch (IOException e) {
+        env.getListener()
+            .handle(
+                Event.error(
+                    String.format(
+                        "Failed to create output directory for TreeArtifact %s: %s",
+                        artifact, e.getMessage())));
+        throw new ArtifactFunctionException(e, Transience.TRANSIENT);
       }
+
+      return createTreeArtifactValueFromActionKey(actionLookupKey, actionIndex, artifact, env);
     }
     ActionExecutionValue actionValue =
         (ActionExecutionValue) env.getValue(ActionExecutionValue.key(actionLookupKey, actionIndex));
@@ -133,11 +128,15 @@ class ArtifactFunction implements SkyFunction {
     return createSimpleFileArtifactValue(artifact, actionValue);
   }
 
-  private static TreeArtifactValue createTreeArtifactValueFromActionTemplate(
-      final ActionTemplate<?> actionTemplate, final Artifact treeArtifact, Environment env)
-          throws InterruptedException {
+  private static TreeArtifactValue createTreeArtifactValueFromActionKey(
+      ActionLookupKey actionLookupKey,
+      int actionIndex,
+      final Artifact treeArtifact,
+      Environment env)
+      throws InterruptedException {
     // Request the list of expanded actions from the ActionTemplate.
-    SkyKey templateKey = ActionTemplateExpansionValue.key(actionTemplate);
+    ActionTemplateExpansionValue.ActionTemplateExpansionKey templateKey =
+        ActionTemplateExpansionValue.key(actionLookupKey, actionIndex);
     ActionTemplateExpansionValue expansionValue =
         (ActionTemplateExpansionValue) env.getValue(templateKey);
 
@@ -165,9 +164,10 @@ class ArtifactFunction implements SkyFunction {
           (ActionExecutionValue)
               Preconditions.checkNotNull(
                   expandedActionValueMap.get(expandedActionExecutionKeys.get(i)),
-                  "Missing tree value: %s %s %s %s",
+                  "Missing tree value: %s %s %s %s %s",
                   treeArtifact,
-                  actionTemplate,
+                  actionLookupKey,
+                  actionIndex,
                   expansionValue,
                   expandedActionValueMap);
       Iterable<TreeFileArtifact> treeFileArtifacts =
@@ -179,11 +179,12 @@ class ArtifactFunction implements SkyFunction {
                     public boolean apply(Artifact artifact) {
                       Preconditions.checkState(
                           artifact.hasParent(),
-                          "No parent: %s %s %s %s",
+                          "No parent: %s %s %s %s %s",
                           artifact,
                           treeArtifact,
                           actionExecutionValue,
-                          actionTemplate);
+                          actionLookupKey,
+                          actionIndex);
                       return artifact.getParent().equals(treeArtifact);
                     }
                   }),
@@ -270,6 +271,7 @@ class ArtifactFunction implements SkyFunction {
     return FileArtifactValue.createNormalFile(data);
   }
 
+  @Nullable
   private static AggregatingArtifactValue createAggregatingValue(
       Artifact artifact,
       ActionAnalysisMetadata action,
@@ -282,25 +284,37 @@ class ArtifactFunction implements SkyFunction {
         env.getValues(ArtifactSkyKey.mandatoryKeys(action.getInputs())).entrySet()) {
       Artifact input = ArtifactSkyKey.artifact(entry.getKey());
       SkyValue inputValue = entry.getValue();
-      Preconditions.checkNotNull(inputValue, "%s has null dep %s", artifact, input);
-      if (!(inputValue instanceof FileArtifactValue)) {
+      if (inputValue == null) {
+        return null;
+      }
+      if (inputValue instanceof FileArtifactValue) {
+        inputs.add(Pair.of(input, (FileArtifactValue) inputValue));
+      } else if (inputValue instanceof TreeArtifactValue) {
+        inputs.add(Pair.of(input, ((TreeArtifactValue) inputValue).getSelfData()));
+      } else {
         // We do not recurse in aggregating middleman artifacts.
         Preconditions.checkState(!(inputValue instanceof AggregatingArtifactValue),
             "%s %s %s", artifact, action, inputValue);
-        continue;
       }
-      inputs.add(Pair.of(input, (FileArtifactValue) inputValue));
     }
-    return new AggregatingArtifactValue(inputs.build(), value);
+    return (action.getActionType() == MiddlemanType.AGGREGATING_MIDDLEMAN)
+        ? new AggregatingArtifactValue(inputs.build(), value)
+        : new RunfilesArtifactValue(inputs.build(), value);
   }
 
   /**
    * Returns whether this value needs to contain the data of all its inputs. Currently only tests to
-   * see if the action is an aggregating middleman action. However, may include runfiles middleman
-   * actions and Fileset artifacts in the future.
+   * see if the action is an aggregating or runfiles middleman action. However, may include Fileset
+   * artifacts in the future.
    */
   private static boolean isAggregatingValue(ActionAnalysisMetadata action) {
-    return action.getActionType() == MiddlemanType.AGGREGATING_MIDDLEMAN;
+    switch (action.getActionType()) {
+      case AGGREGATING_MIDDLEMAN:
+      case RUNFILES_MIDDLEMAN:
+        return true;
+      default:
+        return false;
+    }
   }
 
   @Override
@@ -308,8 +322,7 @@ class ArtifactFunction implements SkyFunction {
     return Label.print(((ArtifactSkyKey) skyKey.argument()).getArtifact().getOwner());
   }
 
-  @VisibleForTesting
-  static SkyKey getActionLookupKey(Artifact artifact) {
+  static ActionLookupKey getActionLookupKey(Artifact artifact) {
     ArtifactOwner artifactOwner = artifact.getArtifactOwner();
 
     Preconditions.checkState(artifactOwner instanceof ActionLookupKey, "", artifact, artifactOwner);
@@ -317,7 +330,7 @@ class ArtifactFunction implements SkyFunction {
   }
 
   @Nullable
-  private static ActionLookupValue getActionLookupValue(
+  static ActionLookupValue getActionLookupValue(
       SkyKey actionLookupKey, SkyFunction.Environment env, Artifact artifact)
       throws InterruptedException {
     ActionLookupValue value = (ActionLookupValue) env.getValue(actionLookupKey);

@@ -18,7 +18,8 @@ import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
-import com.google.devtools.build.lib.buildeventstream.BuildEventConverters;
+import com.google.devtools.build.lib.buildeventstream.BuildEvent.LocalFile.LocalFileType;
+import com.google.devtools.build.lib.buildeventstream.BuildEventContext;
 import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventWithConfiguration;
@@ -117,7 +118,22 @@ public class ActionExecutedEvent implements BuildEventWithConfiguration, Progres
   }
 
   @Override
-  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventConverters converters) {
+  public Collection<LocalFile> referencedLocalFiles() {
+    ImmutableList.Builder<LocalFile> localFiles = ImmutableList.builder();
+    if (stdout != null) {
+      localFiles.add(new LocalFile(stdout, LocalFileType.STDOUT));
+    }
+    if (stderr != null) {
+      localFiles.add(new LocalFile(stderr, LocalFileType.STDERR));
+    }
+    if (exception == null) {
+      localFiles.add(new LocalFile(action.getPrimaryOutput().getPath(), LocalFileType.OUTPUT));
+    }
+    return localFiles.build();
+  }
+
+  @Override
+  public BuildEventStreamProtos.BuildEvent asStreamProto(BuildEventContext converters) {
     PathConverter pathConverter = converters.pathConverter();
     BuildEventStreamProtos.ActionExecuted.Builder actionBuilder =
         BuildEventStreamProtos.ActionExecuted.newBuilder()

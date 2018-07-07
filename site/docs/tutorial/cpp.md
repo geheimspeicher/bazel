@@ -59,16 +59,16 @@ and is structured as follows:
 examples
 └── cpp-tutorial
     ├──stage1
-    │  └── main
-    │      ├── BUILD
-    │      ├── hello-world.cc
+    │  ├── main
+    │  │   ├── BUILD
+    │  │   └── hello-world.cc
     │  └── WORKSPACE
     ├──stage2
     │  ├── main
     │  │   ├── BUILD
     │  │   ├── hello-world.cc
     │  │   ├── hello-greet.cc
-    │  │   ├── hello-greet.h
+    │  │   └── hello-greet.h
     │  └── WORKSPACE
     └──stage3
        ├── main
@@ -191,6 +191,21 @@ The above command tells Bazel to look for all dependencies for the target
 output as a graph.
 
 Then, paste the text into [GraphViz](http://www.webgraphviz.com/).
+
+On Ubuntu, you can view the graph locally by installing GraphViz and the xdot
+Dot Viewer:
+
+```
+sudo apt update && sudo apt install graphviz xdot
+```
+
+Then you can generate and view the graph by piping the text output above
+straight to xdot:
+
+```
+xdot <(bazel query --nohost_deps --noimplicit_deps 'deps(//main:hello-world)' \
+  --output graph)
+```
 
 As you can see, the first stage of the sample project has a single target
 that builds a single source file with no additional dependencies:
@@ -393,7 +408,10 @@ Then, check out the following:
 *  The [Java build tutorial](java.md) to get started with
    building Java applications with Bazel.
 
-*  The [mobile application tutorial](app.md) to get started with
-   building mobile applications for Android and iOS with Bazel.
+*  The [Android application tutorial](android-app.md) to get started with
+   building mobile applications for Android with Bazel.
+
+*  The [iOS application tutorial](ios-app.md) to get started with
+   building mobile applications for iOS with Bazel.
 
 Happy building!

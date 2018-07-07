@@ -22,6 +22,7 @@ import static org.junit.Assert.fail;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
@@ -30,7 +31,6 @@ import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.FailAction;
-import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
@@ -40,12 +40,14 @@ import com.google.devtools.build.lib.analysis.util.BuildViewTestBase;
 import com.google.devtools.build.lib.analysis.util.ExpectedTrimmedConfigurationErrors;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.events.OutputFilter.RegexOutputFilter;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.pkgcache.LoadingFailureEvent;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.testutil.Suite;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.TestSpec;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
@@ -72,11 +74,12 @@ import org.junit.runners.JUnit4;
 @RunWith(JUnit4.class)
 public class BuildViewTest extends BuildViewTestBase {
   private static final Function<AnalysisFailureEvent, Pair<String, String>>
-      ANALYSIS_EVENT_TO_STRING_PAIR = new Function<AnalysisFailureEvent, Pair<String, String>>() {
+      ANALYSIS_EVENT_TO_STRING_PAIR =
+          new Function<AnalysisFailureEvent, Pair<String, String>>() {
     @Override
     public Pair<String, String> apply(AnalysisFailureEvent event) {
       return Pair.of(
-          event.getFailedTarget().getLabel().toString(), event.getFailureReason().toString());
+          event.getFailedTarget().getLabel().toString(), event.getLegacyFailureReason().toString());
     }
   };
 
@@ -91,9 +94,9 @@ public class BuildViewTest extends BuildViewTestBase {
     Rule ruleTarget = (Rule) getTarget("//pkg:foo");
     assertThat(ruleTarget.getRuleClass()).isEqualTo("genrule");
 
-    ConfiguredTarget ruleCT = getConfiguredTarget("//pkg:foo");
+    ConfiguredTargetAndData ruleCTAT = getConfiguredTargetAndTarget("//pkg:foo");
 
-    assertThat(ruleCT.getTarget()).isSameAs(ruleTarget);
+    assertThat(ruleCTAT.getTarget()).isSameAs(ruleTarget);
   }
 
   @Test
@@ -115,22 +118,22 @@ public class BuildViewTest extends BuildViewTestBase {
     //scratch.file("tests/small_test_1.py");
 
     update("//tests:smallTests");
+    ConfiguredTargetAndData test1 = getConfiguredTargetAndTarget("//tests:small_test_1");
+    ConfiguredTargetAndData test2 = getConfiguredTargetAndTarget("//tests:small_test_2");
+    ConfiguredTargetAndData suite = getConfiguredTargetAndTarget("//tests:smallTests");
 
-    ConfiguredTarget test1 = getConfiguredTarget("//tests:small_test_1");
-    ConfiguredTarget test2 = getConfiguredTarget("//tests:small_test_2");
-    ConfiguredTarget suite = getConfiguredTarget("//tests:smallTests");
+    ConfiguredTarget test1CT = test1.getConfiguredTarget();
+    ConfiguredTarget test2CT = test2.getConfiguredTarget();
+    ConfiguredTarget suiteCT = suite.getConfiguredTarget();
     assertNoEvents(); // start from a clean slate
 
     Collection<ConfiguredTarget> targets =
-        new LinkedHashSet<>(ImmutableList.of(test1, test2, suite));
+        new LinkedHashSet<>(ImmutableList.of(test1CT, test2CT, suiteCT));
     targets =
         Lists.<ConfiguredTarget>newArrayList(
             BuildView.filterTestsByTargets(
-                targets,
-                Sets.newHashSet(test1.getTarget(), suite.getTarget()),
-                NullEventHandler.INSTANCE,
-                skyframeExecutor.getPackageManager()));
-    assertThat(targets).containsExactlyElementsIn(Sets.newHashSet(test1, suite));
+                targets, Sets.newHashSet(test1.getTarget(), suite.getTarget())));
+    assertThat(targets).containsExactlyElementsIn(Sets.newHashSet(test1CT, suiteCT));
   }
 
   @Test
@@ -147,17 +150,15 @@ public class BuildViewTest extends BuildViewTestBase {
   public void testGeneratedArtifact() throws Exception {
     setupDummyRule();
     update("//pkg:a.out");
-    OutputFileConfiguredTarget outputCT = (OutputFileConfiguredTarget)
-        getConfiguredTarget("//pkg:a.out");
-    Artifact outputArtifact = outputCT.getArtifact();
+    ConfiguredTargetAndData ctad = getConfiguredTargetAndData("//pkg:a.out");
+    OutputFileConfiguredTarget output = (OutputFileConfiguredTarget) ctad.getConfiguredTarget();
+    Artifact outputArtifact = output.getArtifact();
     assertThat(outputArtifact.getRoot())
         .isEqualTo(
-            outputCT
-                .getConfiguration()
-                .getBinDirectory(
-                    outputCT.getTarget().getLabel().getPackageIdentifier().getRepository()));
+            ctad.getConfiguration()
+                .getBinDirectory(output.getLabel().getPackageIdentifier().getRepository()));
     assertThat(outputArtifact.getExecPath())
-        .isEqualTo(outputCT.getConfiguration().getBinFragment().getRelative("pkg/a.out"));
+        .isEqualTo(ctad.getConfiguration().getBinFragment().getRelative("pkg/a.out"));
     assertThat(outputArtifact.getRootRelativePath()).isEqualTo(PathFragment.create("pkg/a.out"));
 
     Action action = getGeneratingAction(outputArtifact);
@@ -216,7 +217,7 @@ public class BuildViewTest extends BuildViewTestBase {
     assertThat(result.hasError()).isTrue();
     assertThat(recorder.events).hasSize(1);
     AnalysisFailureEvent event = recorder.events.get(0);
-    assertThat(event.getFailureReason().toString()).isEqualTo("//foo:bar");
+    assertThat(event.getLegacyFailureReason().toString()).isEqualTo("//foo:bar");
     assertThat(event.getFailedTarget().getLabel().toString()).isEqualTo("//foo:foo");
   }
 
@@ -239,14 +240,19 @@ public class BuildViewTest extends BuildViewTestBase {
     assertThat(result.hasError()).isTrue();
     assertThat(recorder.events)
         .contains(
-            Pair.of(Label.parseAbsolute("//pkg:foo"), Label.parseAbsolute("//nopackage:missing")));
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//pkg:foo", ImmutableMap.of()),
+                Label.parseAbsolute("//nopackage:missing", ImmutableMap.of())));
     assertContainsEvent("missing value for mandatory attribute 'outs'");
     assertContainsEvent("no such package 'nopackage'");
     // Skyframe correctly reports the other root cause as the genrule itself (since it is
     // missing attributes).
     assertThat(recorder.events).hasSize(2);
     assertThat(recorder.events)
-        .contains(Pair.of(Label.parseAbsolute("//pkg:foo"), Label.parseAbsolute("//pkg:foo")));
+        .contains(
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//pkg:foo", ImmutableMap.of()),
+                Label.parseAbsolute("//pkg:foo", ImmutableMap.of())));
   }
 
   @Test
@@ -275,14 +281,15 @@ public class BuildViewTest extends BuildViewTestBase {
     assertWithMessage(recorder.events.toString())
         .that(
             recorder.events.contains(
-                Pair.of(
-                    Label.parseAbsolute("//third_party/first"),
-                    Label.parseAbsolute("//third_party/fourth"))))
+                new LoadingFailureEvent(
+                    Label.parseAbsolute("//third_party/first", ImmutableMap.of()),
+                    Label.parseAbsolute("//third_party/fourth", ImmutableMap.of()))))
         .isTrue();
     assertThat(recorder.events)
-        .contains(Pair.of(
-            Label.parseAbsolute("//third_party/third"),
-            Label.parseAbsolute("//third_party/fourth")));
+        .contains(
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//third_party/third", ImmutableMap.of()),
+                Label.parseAbsolute("//third_party/fourth", ImmutableMap.of())));
   }
 
   @Test
@@ -300,13 +307,16 @@ public class BuildViewTest extends BuildViewTestBase {
     AnalysisResult result = update(eventBus, defaultFlags().with(Flag.KEEP_GOING), "//gp");
     assertThat(result.hasError()).isTrue();
     assertThat(recorder.events).hasSize(2);
-    assertWithMessage(recorder.events.toString())
-        .that(
-            recorder.events.contains(
-                Pair.of(Label.parseAbsolute("//gp"), Label.parseAbsolute("//c1:not"))))
-        .isTrue();
     assertThat(recorder.events)
-        .contains(Pair.of(Label.parseAbsolute("//gp"), Label.parseAbsolute("//c2:not")));
+        .contains(
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//gp", ImmutableMap.of()),
+                Label.parseAbsolute("//c1:not", ImmutableMap.of())));
+    assertThat(recorder.events)
+        .contains(
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//gp", ImmutableMap.of()),
+                Label.parseAbsolute("//c2:not", ImmutableMap.of())));
   }
 
   /**
@@ -334,32 +344,6 @@ public class BuildViewTest extends BuildViewTestBase {
   }
 
   @Test
-  public void topLevelConfigurationHook() throws Exception {
-    setConfigFragmentsAvailableInTests(TestConfigFragments.FragmentWithTopLevelConfigHook1Factory);
-    scratch.file(
-        "package/BUILD",
-        "sh_binary(name = 'binary', srcs = ['binary.sh'])");
-    ConfiguredTarget ct = Iterables.getOnlyElement(update("//package:binary").getTargetsToBuild());
-    BuildConfiguration.Options options =
-        ct.getConfiguration().getOptions().get(BuildConfiguration.Options.class);
-    assertThat(options.hostCpu).isEqualTo("$CONFIG HOOK 1");
-  }
-
-  @Test
-  public void topLevelComposedConfigurationHooks() throws Exception {
-    setConfigFragmentsAvailableInTests(
-        TestConfigFragments.FragmentWithTopLevelConfigHook1Factory,
-        TestConfigFragments.FragmentWithTopLevelConfigHook2Factory);
-    scratch.file(
-        "package/BUILD",
-        "sh_binary(name = 'binary', srcs = ['binary.sh'])");
-    ConfiguredTarget ct = Iterables.getOnlyElement(update("//package:binary").getTargetsToBuild());
-    BuildConfiguration.Options options =
-        ct.getConfiguration().getOptions().get(BuildConfiguration.Options.class);
-    assertThat(options.hostCpu).isEqualTo("$CONFIG HOOK 1$CONFIG HOOK 2");
-  }
-
-  @Test
   public void testGetDirectPrerequisites() throws Exception {
     scratch.file(
         "package/BUILD",
@@ -369,39 +353,39 @@ public class BuildViewTest extends BuildViewTestBase {
     ConfiguredTarget top = getConfiguredTarget("//package:top", getTargetConfiguration());
     Iterable<ConfiguredTarget> targets = getView().getDirectPrerequisitesForTesting(
         reporter, top, getBuildConfigurationCollection());
-    Iterable<Label> labels =
-        Iterables.transform(
-            targets,
-            new Function<ConfiguredTarget, Label>() {
-              @Override
-              public Label apply(ConfiguredTarget target) {
-                return target.getLabel();
-              }
-            });
+    Iterable<Label> labels = Iterables.transform(targets, target -> target.getLabel());
     assertThat(labels)
         .containsExactly(
-            Label.parseAbsolute("//package:inner"), Label.parseAbsolute("//package:file"));
+            Label.parseAbsolute("//package:inner", ImmutableMap.of()),
+            Label.parseAbsolute("//package:file", ImmutableMap.of()));
   }
 
   @Test
   public void testGetDirectPrerequisiteDependencies() throws Exception {
+    // Override the trimming transition to not distort the results.
+    ConfiguredRuleClassProvider.Builder builder =
+        new ConfiguredRuleClassProvider.Builder();
+    TestRuleClassProvider.addStandardRules(builder);
+    builder.overrideTrimmingTransitionFactoryForTesting((rule) -> NoTransition.INSTANCE);
+    useRuleClassProvider(builder.build());
+
+    update();
+
     scratch.file(
         "package/BUILD",
         "filegroup(name='top', srcs=[':inner', 'file'])",
         "sh_binary(name='inner', srcs=['script.sh'])");
-    update("//package:top");
-    ConfiguredTarget top = getConfiguredTarget("//package:top", getTargetConfiguration());
+    ConfiguredTarget top = Iterables.getOnlyElement(update("//package:top").getTargetsToBuild());
     Iterable<Dependency> targets = getView().getDirectPrerequisiteDependenciesForTesting(
         reporter, top, getBuildConfigurationCollection(), /*toolchainContext=*/ null).values();
 
     Dependency innerDependency =
         Dependency.withTransitionAndAspects(
-            Label.parseAbsolute("//package:inner"),
+            Label.parseAbsolute("//package:inner", ImmutableMap.of()),
             NoTransition.INSTANCE,
             AspectCollection.EMPTY);
     Dependency fileDependency =
-        Dependency.withNullConfiguration(
-            Label.parseAbsolute("//package:file"));
+        Dependency.withNullConfiguration(Label.parseAbsolute("//package:file", ImmutableMap.of()));
 
     assertThat(targets).containsExactly(innerDependency, fileDependency);
   }
@@ -480,37 +464,8 @@ public class BuildViewTest extends BuildViewTestBase {
         "java_library(name = 'b', srcs = [':src'])");
     reporter.setOutputFilter(RegexOutputFilter.forPattern(Pattern.compile("^//java/a")));
 
-    useConfiguration("--incompatible_show_all_print_messages=true");
     update("//java/a:a");
     assertContainsEvent("DEBUG /workspace/java/b/rules.bzl:2:3: debug in b");
-  }
-
-  @Test
-  public void testOutputFilterWithWarning() throws Exception {
-    scratch.file(
-        "java/a/BUILD",
-        "java_library(name = 'a',",
-        "  srcs = ['A.java'],",
-        "  deps = ['//java/b'])");
-    scratch.file(
-        "java/b/rules.bzl",
-        "def _impl(ctx):",
-        "  print('debug in b')",
-        "  ctx.file_action(",
-        "    output = ctx.outputs.my_output,",
-        "    content = 'foo',",
-        "  )",
-        "gen = rule(implementation = _impl, outputs = {'my_output': 'B.java'})");
-    scratch.file(
-        "java/b/BUILD",
-        "load(':rules.bzl', 'gen')",
-        "gen(name='src')",
-        "java_library(name = 'b', srcs = [':src'])");
-    reporter.setOutputFilter(RegexOutputFilter.forPattern(Pattern.compile("^//java/a")));
-
-    useConfiguration("--incompatible_show_all_print_messages=false");
-    update("//java/a:a");
-    assertDoesNotContainEvent("rules.bzl:2:3: debug in b");
   }
 
   @Test
@@ -644,9 +599,8 @@ public class BuildViewTest extends BuildViewTestBase {
         "genrule(name='a', ",
         "        cmd='',",
         "        outs=['a.out'])");
-    update("//pkg:a.out");
     OutputFileConfiguredTarget outputCT = (OutputFileConfiguredTarget)
-        getConfiguredTarget("//pkg:a.out");
+        Iterables.getOnlyElement(update("//pkg:a.out").getTargetsToBuild());
     Artifact outputArtifact = outputCT.getArtifact();
     Action action = getGeneratingAction(outputArtifact);
     assertThat(action).isNotNull();
@@ -683,8 +637,7 @@ public class BuildViewTest extends BuildViewTestBase {
         "          srcs = glob(['A*.java']))",
         "java_test(name = 'B',",
         "          srcs = ['B.java'])");
-    update("//java/a:A");
-    ConfiguredTarget ct = getConfiguredTarget("//java/a:A");
+    ConfiguredTarget ct = Iterables.getOnlyElement(update("//java/a:A").getTargetsToBuild());
     scratch.deleteFile("java/a/C.java");
     update("//java/a:B");
     update("//java/a:A");
@@ -799,10 +752,10 @@ public class BuildViewTest extends BuildViewTestBase {
     // Then update the BUILD file and re-analyze.
     scratch.file("actions_not_registered/BUILD",
         "cc_binary(name = 'foo', srcs = ['foo.cc'])");
-    update("//actions_not_registered:foo");
-    Artifact fooOut = Iterables.getOnlyElement(
-        getConfiguredTarget("//actions_not_registered:foo")
-            .getProvider(FileProvider.class).getFilesToBuild());
+    ConfiguredTarget foo =
+        Iterables.getOnlyElement(update("//actions_not_registered:foo").getTargetsToBuild());
+    Artifact fooOut =
+        Iterables.getOnlyElement(foo.getProvider(FileProvider.class).getFilesToBuild());
     assertThat(getActionGraph().getGeneratingAction(fooOut)).isNotNull();
     clearAnalysisResult();
 
@@ -884,17 +837,14 @@ public class BuildViewTest extends BuildViewTestBase {
     eventBus.register(recorder);
     AnalysisResult result = update(eventBus, defaultFlags().with(Flag.KEEP_GOING), "//gp");
     assertThat(result.hasError()).isTrue();
-    assertThat(recorder.events).hasSize(2);
-    assertWithMessage(recorder.events.toString())
-        .that(
-            recorder.events.contains(
-                Pair.of(Label.parseAbsolute("//gp"), Label.parseAbsolute("//cycles1"))))
-        .isTrue();
-    assertWithMessage(recorder.events.toString())
-        .that(
-            recorder.events.contains(
-                Pair.of(Label.parseAbsolute("//gp"), Label.parseAbsolute("//cycles2"))))
-        .isTrue();
+    assertThat(recorder.events)
+        .containsExactly(
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//gp", ImmutableMap.of()),
+                Label.parseAbsolute("//cycles1", ImmutableMap.of())),
+            new LoadingFailureEvent(
+                Label.parseAbsolute("//gp", ImmutableMap.of()),
+                Label.parseAbsolute("//cycles2", ImmutableMap.of())));
   }
 
   /**
@@ -955,18 +905,18 @@ public class BuildViewTest extends BuildViewTestBase {
     }
     useConfiguration("--cpu=k8");
     reporter.removeHandler(failFastHandler); // Expect errors from action conflicts.
-    scratch.file("conflict/BUILD",
+    scratch.file(
+        "conflict/BUILD",
         "config_setting(name = 'a', values = {'test_arg': 'a'})",
         "cc_library(name='x', srcs=select({':a': ['a.cc'], '//conditions:default': ['foo.cc']}))",
-        "cc_binary(name='_objs/x/conflict/foo.pic.o', srcs=['bar.cc'])");
-    AnalysisResult result = update(
-        defaultFlags().with(Flag.KEEP_GOING),
-        "//conflict:_objs/x/conflict/foo.pic.o",
-        "//conflict:x");
+        "cc_binary(name='_objs/x/foo.pic.o', srcs=['bar.cc'])");
+    AnalysisResult result =
+        update(
+            defaultFlags().with(Flag.KEEP_GOING), "//conflict:_objs/x/foo.pic.o", "//conflict:x");
     assertThat(result.hasError()).isTrue();
     // Expect to reach this line without a Precondition-triggered NullPointerException.
     assertContainsEvent(
-        "file 'conflict/_objs/x/conflict/foo.pic.o' is generated by these conflicting actions");
+        "file 'conflict/_objs/x/foo.pic.o' is generated by these conflicting actions");
   }
 
   @Test
@@ -1137,20 +1087,6 @@ public class BuildViewTest extends BuildViewTestBase {
   }
 
   @Test
-  public void testMissingFdoOptimize() throws Exception {
-    // The fdo_optimize flag uses a different code path, because it also accepts paths.
-    useConfiguration("--fdo_optimize=//does/not/exist");
-    reporter.removeHandler(failFastHandler);
-    try {
-      update(defaultFlags().with(Flag.KEEP_GOING));
-      fail();
-    } catch (InvalidConfigurationException e) {
-      assertContainsEvent(
-          "no such package 'does/not/exist': BUILD file not found on package path");
-    }
-  }
-
-  @Test
   public void testVisibilityReferencesNonexistentPackage() throws Exception {
     scratch.file("z/a/BUILD",
         "py_library(name='a', visibility=['//nonexistent:nothing'])");
@@ -1281,8 +1217,8 @@ public class BuildViewTest extends BuildViewTestBase {
     useConfiguration("--experimental_dynamic_configs=on");
     AnalysisResult res = update("//foo:x");
     ConfiguredTarget topLevelTarget = Iterables.getOnlyElement(res.getTargetsToBuild());
-    assertThat(topLevelTarget.getConfiguration().getAllFragments().keySet())
-        .containsExactly(ruleClassProvider.getUniversalFragment());
+    assertThat(getConfiguration(topLevelTarget).getFragmentsMap().keySet())
+        .containsExactlyElementsIn(ruleClassProvider.getUniversalFragments());
   }
 
   /**
@@ -1324,7 +1260,7 @@ public class BuildViewTest extends BuildViewTestBase {
         "extra_action(name='xa', cmd='echo dont-care')",
         "action_listener(name='listener', mnemonics=['Mnemonic'], extra_actions=[':xa'])");
 
-    BuildView.AnalysisResult analysisResult = update("//x:a");
+    AnalysisResult analysisResult = update("//x:a");
 
     List<String> owners = new ArrayList<>();
     for (Artifact artifact : analysisResult.getAdditionalArtifactsToBuild()) {
@@ -1398,16 +1334,6 @@ public class BuildViewTest extends BuildViewTestBase {
     update("//foo");
     assertContainsEvent("WARNING /workspace/foo/BUILD:8:12: in deps attribute of custom_rule rule "
         + "//foo:foo: genrule rule '//foo:genlib' is unexpected here; continuing anyway");
-  }
-
-  /** Runs the same test with the reduced loading phase. */
-  @TestSpec(size = Suite.SMALL_TESTS)
-  @RunWith(JUnit4.class)
-  public static class WithSkyframeLoadingPhase extends BuildViewTest {
-    @Override
-    protected FlagBuilder defaultFlags() {
-      return super.defaultFlags().with(Flag.SKYFRAME_LOADING_PHASE);
-    }
   }
 
   /** Runs the same test with trimmed configurations. */

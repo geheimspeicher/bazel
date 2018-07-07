@@ -20,6 +20,8 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.FragmentClassSet;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
+import com.google.devtools.build.lib.causes.Cause;
+import com.google.devtools.build.lib.causes.LoadingFailedCause;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.events.Event;
@@ -86,14 +88,14 @@ public final class SkyframeDependencyResolver extends DependencyResolver {
 
   @Nullable
   @Override
-  protected Target getTarget(Target from, Label label, NestedSetBuilder<Label> rootCauses)
+  protected Target getTarget(Target from, Label label, NestedSetBuilder<Cause> rootCauses)
       throws InterruptedException {
     SkyKey key = PackageValue.key(label.getPackageIdentifier());
     PackageValue packageValue;
     try {
       packageValue = (PackageValue) env.getValueOrThrow(key, NoSuchPackageException.class);
     } catch (NoSuchPackageException e) {
-      rootCauses.add(label);
+      rootCauses.add(new LoadingFailedCause(label, e.getMessage()));
       missingEdgeHook(from, label, e);
       return null;
     }
@@ -107,7 +109,7 @@ public final class SkyframeDependencyResolver extends DependencyResolver {
         NoSuchTargetException e = new NoSuchTargetException(target);
         missingEdgeHook(from, label, e);
         if (target != null) {
-          rootCauses.add(label);
+          rootCauses.add(new LoadingFailedCause(label, e.getMessage()));
           return target;
         } else {
           return null;
@@ -115,7 +117,7 @@ public final class SkyframeDependencyResolver extends DependencyResolver {
       }
       return target;
     } catch (NoSuchTargetException e) {
-      rootCauses.add(label);
+      rootCauses.add(new LoadingFailedCause(label, e.getMessage()));
       missingEdgeHook(from, label, e);
       return null;
     }
@@ -124,11 +126,15 @@ public final class SkyframeDependencyResolver extends DependencyResolver {
   @Nullable
   @Override
   protected List<BuildConfiguration> getConfigurations(
-      FragmentClassSet fragments, Iterable<BuildOptions> buildOptions)
+      FragmentClassSet fragments,
+      Iterable<BuildOptions> buildOptions,
+      BuildOptions defaultBuildOptions)
       throws InvalidConfigurationException, InterruptedException {
     List<SkyKey> keys = new ArrayList<>();
     for (BuildOptions options : buildOptions) {
-      keys.add(BuildConfigurationValue.key(fragments, options));
+      keys.add(
+          BuildConfigurationValue.key(
+              fragments, BuildOptions.diffForReconstruction(defaultBuildOptions, options)));
     }
     Map<SkyKey, ValueOrException<InvalidConfigurationException>> configValues =
         env.getValuesOrThrow(keys, InvalidConfigurationException.class);

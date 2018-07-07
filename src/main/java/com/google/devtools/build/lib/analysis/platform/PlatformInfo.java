@@ -29,13 +29,10 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.FunctionSignature;
-import com.google.devtools.build.lib.syntax.SkylarkList;
-import com.google.devtools.build.lib.syntax.SkylarkType;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformInfoApi;
+import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -43,103 +40,57 @@ import java.util.Map;
 import javax.annotation.Nullable;
 
 /** Provider for a platform, which is a group of constraints and values. */
-@SkylarkModule(
-  name = "PlatformInfo",
-  doc = "Provides access to data about a specific platform.",
-  category = SkylarkModuleCategory.PROVIDER
-)
 @Immutable
-public class PlatformInfo extends NativeInfo {
-
+@AutoCodec
+public class PlatformInfo extends NativeInfo implements PlatformInfoApi<ConstraintValueInfo> {
   /** Name used in Skylark for accessing this provider. */
   public static final String SKYLARK_NAME = "PlatformInfo";
 
-  private static final FunctionSignature.WithValues<Object, SkylarkType> SIGNATURE =
-      FunctionSignature.WithValues.create(
-          FunctionSignature.of(
-              /*numMandatoryPositionals=*/ 2,
-              /*numOptionalPositionals=*/ 0,
-              /*numMandatoryNamedOnly*/ 0,
-              /*starArg=*/ false,
-              /*kwArg=*/ false,
-              /*names=*/ "label",
-              "constraint_values"),
-          /*defaultValues=*/ null,
-          /*types=*/ ImmutableList.<SkylarkType>of(
-              SkylarkType.of(Label.class),
-              SkylarkType.Combination.of(
-                  SkylarkType.LIST, SkylarkType.of(ConstraintValueInfo.class))));
-
   /** Skylark constructor and identifier for this provider. */
   public static final NativeProvider<PlatformInfo> SKYLARK_CONSTRUCTOR =
-      new NativeProvider<PlatformInfo>(PlatformInfo.class, SKYLARK_NAME, SIGNATURE) {
-        @Override
-        protected PlatformInfo createInstanceFromSkylark(Object[] args, Location loc)
-            throws EvalException {
-          // Based on SIGNATURE above, the args are label, constraint_values.
-
-          Label label = (Label) args[0];
-          List<ConstraintValueInfo> constraintValues =
-              SkylarkList.castSkylarkListOrNoneToList(
-                  args[1], ConstraintValueInfo.class, "constraint_values");
-          try {
-            return builder()
-                .setLabel(label)
-                .addConstraints(constraintValues)
-                .setLocation(loc)
-                .build();
-          } catch (DuplicateConstraintException dce) {
-            throw new EvalException(
-                loc, String.format("Cannot create PlatformInfo: %s", dce.getMessage()));
-          }
-        }
-      };
+      new NativeProvider<PlatformInfo>(PlatformInfo.class, SKYLARK_NAME) {};
 
   private final Label label;
   private final ImmutableMap<ConstraintSettingInfo, ConstraintValueInfo> constraints;
   private final String remoteExecutionProperties;
 
-  private PlatformInfo(
+  @AutoCodec.Instantiator
+  @VisibleForSerialization
+  PlatformInfo(
       Label label,
-      ImmutableList<ConstraintValueInfo> constraints,
+      ImmutableMap<ConstraintSettingInfo, ConstraintValueInfo> constraints,
       String remoteExecutionProperties,
       Location location) {
     super(
         SKYLARK_CONSTRUCTOR,
-        ImmutableMap.<String, Object>of(
-            "label", label,
-            "constraints", constraints),
         location);
 
     this.label = label;
+    this.constraints = constraints;
     this.remoteExecutionProperties = remoteExecutionProperties;
+  }
 
+  static PlatformInfo create(
+      Label label,
+      ImmutableList<ConstraintValueInfo> constraints,
+      String remoteExecutionProperties,
+      Location location) {
     ImmutableMap.Builder<ConstraintSettingInfo, ConstraintValueInfo> constraintsBuilder =
         new ImmutableMap.Builder<>();
     for (ConstraintValueInfo constraint : constraints) {
       constraintsBuilder.put(constraint.constraint(), constraint);
     }
-    this.constraints = constraintsBuilder.build();
+    return new PlatformInfo(label, constraintsBuilder.build(), remoteExecutionProperties, location);
   }
 
-  @SkylarkCallable(
-    name = "label",
-    doc = "The label of the target that created this platform.",
-    structField = true
-  )
+  @Override
   public Label label() {
     return label;
   }
 
-  @SkylarkCallable(
-    name = "constraints",
-    doc =
-        "The <a href=\"ConstraintValueInfo.html\">ConstraintValueInfo</a> instances that define "
-            + "this platform.",
-    structField = true
-  )
+  @Override
   public Iterable<ConstraintValueInfo> constraints() {
-    return constraints.values();
+    return constraints.values().asList();
   }
 
   /**
@@ -151,11 +102,7 @@ public class PlatformInfo extends NativeInfo {
     return constraints.get(constraint);
   }
 
-  @SkylarkCallable(
-    name = "remoteExecutionProperties",
-    doc = "Properties that are available for the use of remote execution.",
-    structField = true
-  )
+  @Override
   public String remoteExecutionProperties() {
     return remoteExecutionProperties;
   }
@@ -163,6 +110,14 @@ public class PlatformInfo extends NativeInfo {
   /** Returns a new {@link Builder} for creating a fresh {@link PlatformInfo} instance. */
   public static Builder builder() {
     return new Builder();
+  }
+
+  /** Add this platform to the given fingerprint. */
+  public void addTo(Fingerprint fp) {
+    fp.addString(label.toString());
+    fp.addNullableString(remoteExecutionProperties);
+    fp.addInt(constraints.size());
+    constraints.values().forEach(constraintValue -> constraintValue.addTo(fp));
   }
 
   /** Builder class to facilitate creating valid {@link PlatformInfo} instances. */
@@ -243,7 +198,7 @@ public class PlatformInfo extends NativeInfo {
      */
     public PlatformInfo build() throws DuplicateConstraintException {
       ImmutableList<ConstraintValueInfo> validatedConstraints = validateConstraints(constraints);
-      return new PlatformInfo(label, validatedConstraints, remoteExecutionProperties, location);
+      return PlatformInfo.create(label, validatedConstraints, remoteExecutionProperties, location);
     }
 
     public static ImmutableList<ConstraintValueInfo> validateConstraints(

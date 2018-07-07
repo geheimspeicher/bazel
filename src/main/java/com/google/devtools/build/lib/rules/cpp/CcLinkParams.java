@@ -27,6 +27,9 @@ import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.skylarkbuildapi.cpp.CcLinkParamsApi;
 import java.util.Collection;
 import java.util.Objects;
 import javax.annotation.Nullable;
@@ -40,20 +43,22 @@ import javax.annotation.Nullable;
  * <p>Items in the collections are stored in nested sets. Link options and libraries are stored in
  * link order (preorder) and linkstamps are sorted.
  */
-public final class CcLinkParams {
-
+@AutoCodec
+public final class CcLinkParams implements CcLinkParamsApi {
   /**
    * A list of link options contributed by a single configured target.
    *
-   * <b>WARNING:</b> Do not implement {@code #equals()} in the obvious way. This class must be
+   * <p><b>WARNING:</b> Do not implement {@code #equals()} in the obvious way. This class must be
    * checked for equality by object identity because otherwise if two configured targets contribute
    * the same link options, they will be de-duplicated, which is not the desirable behavior.
    */
+  @AutoCodec
   @Immutable
   public static final class LinkOptions {
     private final ImmutableList<String> linkOptions;
 
-    private LinkOptions(Iterable<String> linkOptions) {
+    @VisibleForSerialization
+    LinkOptions(Iterable<String> linkOptions) {
       this.linkOptions = ImmutableList.copyOf(linkOptions);
     }
 
@@ -69,21 +74,23 @@ public final class CcLinkParams {
   private final NestedSet<LinkOptions> linkOpts;
   private final NestedSet<Linkstamp> linkstamps;
   private final NestedSet<LibraryToLink> libraries;
-  private final NestedSet<Artifact> executionDynamicLibraries;
+  private final NestedSet<Artifact> dynamicLibrariesForRuntime;
   private final ExtraLinkTimeLibraries extraLinkTimeLibraries;
   private final NestedSet<Artifact> nonCodeInputs;
 
-  private CcLinkParams(
+  @AutoCodec.Instantiator
+  @VisibleForSerialization
+  CcLinkParams(
       NestedSet<LinkOptions> linkOpts,
       NestedSet<Linkstamp> linkstamps,
       NestedSet<LibraryToLink> libraries,
-      NestedSet<Artifact> executionDynamicLibraries,
+      NestedSet<Artifact> dynamicLibrariesForRuntime,
       ExtraLinkTimeLibraries extraLinkTimeLibraries,
       NestedSet<Artifact> nonCodeInputs) {
     this.linkOpts = linkOpts;
     this.linkstamps = linkstamps;
     this.libraries = libraries;
-    this.executionDynamicLibraries = executionDynamicLibraries;
+    this.dynamicLibrariesForRuntime = dynamicLibrariesForRuntime;
     this.extraLinkTimeLibraries = extraLinkTimeLibraries;
     this.nonCodeInputs = nonCodeInputs;
   }
@@ -113,11 +120,9 @@ public final class CcLinkParams {
     return libraries;
   }
 
-  /**
-   * Returns the executionDynamicLibraries.
-   */
-  public NestedSet<Artifact> getExecutionDynamicLibraries() {
-    return executionDynamicLibraries;
+  /** Returns the dynamicLibrariesForRuntime. */
+  public NestedSet<Artifact> getDynamicLibrariesForRuntime() {
+    return dynamicLibrariesForRuntime;
   }
 
   /**
@@ -138,6 +143,10 @@ public final class CcLinkParams {
     return new Builder(linkingStatically, linkShared);
   }
 
+  public static final Builder builder() {
+    return new Builder();
+  }
+
   /**
    * Builder for {@link CcLinkParams}.
    */
@@ -150,12 +159,16 @@ public final class CcLinkParams {
      * libraries, which are not handled by CcLinkParams). When this is false, we want to use dynamic
      * versions of any libraries that this target depends on.
      */
-    private final boolean linkingStatically;
+    private boolean linkingStatically;
 
-    /**
-     * linkShared is true when we're linking with "-shared" (linkshared=1).
-     */
-    private final boolean linkShared;
+    /** linkShared is true when we're linking with "-shared" (linkshared=1). */
+    private boolean linkShared;
+
+    // TODO(plf): Ideally the two booleans above are removed from this Builder. We would pass the
+    // specific instances of CcLinkParams that are needed from transitive dependencies instead of
+    // calling the convenience methods that dig them out from the CcLinkParamsStore using these
+    // booleans.
+    private boolean linkingStaticallyLinkSharedSet;
 
     private ImmutableList.Builder<String> localLinkoptsBuilder = ImmutableList.builder();
 
@@ -165,7 +178,7 @@ public final class CcLinkParams {
         NestedSetBuilder.compileOrder();
     private final NestedSetBuilder<LibraryToLink> librariesBuilder =
         NestedSetBuilder.linkOrder();
-    private final NestedSetBuilder<Artifact> executionDynamicLibrariesBuilder =
+    private final NestedSetBuilder<Artifact> dynamicLibrariesForRuntimeBuilder =
         NestedSetBuilder.stableOrder();
 
     /**
@@ -179,10 +192,14 @@ public final class CcLinkParams {
 
     private boolean built = false;
 
+    /** The static builder methods of {@link CcLinkParams} should be used for instantiation. */
     private Builder(boolean linkingStatically, boolean linkShared) {
       this.linkingStatically = linkingStatically;
       this.linkShared = linkShared;
+      this.linkingStaticallyLinkSharedSet = true;
     }
+
+    private Builder() {}
 
     /**
      * Builds a {@link CcLinkParams} object.
@@ -207,12 +224,13 @@ public final class CcLinkParams {
           linkOptsBuilder.build(),
           linkstampsBuilder.build(),
           librariesBuilder.build(),
-          executionDynamicLibrariesBuilder.build(),
+          dynamicLibrariesForRuntimeBuilder.build(),
           extraLinkTimeLibraries,
           nonCodeInputs);
     }
 
-    public boolean add(CcLinkParamsStore store) {
+    public boolean add(AbstractCcLinkParamsStore store) {
+      Preconditions.checkState(linkingStaticallyLinkSharedSet);
       if (store != null) {
         CcLinkParams args = store.get(linkingStatically, linkShared);
         addTransitiveArgs(args);
@@ -233,11 +251,17 @@ public final class CcLinkParams {
     /**
      * Includes link parameters from a dependency target.
      *
-     * <p>The target should implement {@link CcLinkParamsInfo}. If it does not,
-     * the method does not do anything.
+     * <p>The target should implement {@link CcLinkParamsStore}. If it does not, the method does not
+     * do anything.
      */
     public Builder addTransitiveTarget(TransitiveInfoCollection target) {
-      return addTransitiveProvider(target.get(CcLinkParamsInfo.PROVIDER));
+      CcLinkingInfo ccLinkingInfo = target.get(CcLinkingInfo.PROVIDER);
+      CcLinkParamsStore ccLinkParamsStore =
+          ccLinkingInfo == null ? null : ccLinkingInfo.getCcLinkParamsStore();
+      if (ccLinkParamsStore != null) {
+        add(ccLinkParamsStore);
+      }
+      return this;
     }
 
     /**
@@ -246,27 +270,19 @@ public final class CcLinkParams {
      * added.
      */
     @SafeVarargs
-    public final Builder addTransitiveTarget(TransitiveInfoCollection target,
-        Function<TransitiveInfoCollection, CcLinkParamsStore> firstMapping,
+    public final Builder addTransitiveTarget(
+        TransitiveInfoCollection target,
+        Function<TransitiveInfoCollection, AbstractCcLinkParamsStore> firstMapping,
         @SuppressWarnings("unchecked") // Java arrays don't preserve generic arguments.
-        Function<TransitiveInfoCollection, CcLinkParamsStore>... remainingMappings) {
+            Function<TransitiveInfoCollection, AbstractCcLinkParamsStore>... remainingMappings) {
       if (add(firstMapping.apply(target))) {
         return this;
       }
-      for (Function<TransitiveInfoCollection, CcLinkParamsStore> mapping : remainingMappings) {
+      for (Function<TransitiveInfoCollection, AbstractCcLinkParamsStore> mapping :
+          remainingMappings) {
         if (add(mapping.apply(target))) {
           return this;
         }
-      }
-      return this;
-    }
-
-    /**
-     * Includes link parameters from a CcLinkParamsInfo provider.
-     */
-    public Builder addTransitiveProvider(CcLinkParamsInfo provider) {
-      if (provider != null) {
-        add(provider.getCcLinkParamsStore());
       }
       return this;
     }
@@ -279,9 +295,9 @@ public final class CcLinkParams {
     @SafeVarargs
     public final Builder addTransitiveTargets(
         Iterable<? extends TransitiveInfoCollection> targets,
-        Function<TransitiveInfoCollection, CcLinkParamsStore> firstMapping,
-        @SuppressWarnings("unchecked")  // Java arrays don't preserve generic arguments.
-        Function<TransitiveInfoCollection, CcLinkParamsStore>... remainingMappings) {
+        Function<TransitiveInfoCollection, AbstractCcLinkParamsStore> firstMapping,
+        @SuppressWarnings("unchecked") // Java arrays don't preserve generic arguments.
+            Function<TransitiveInfoCollection, AbstractCcLinkParamsStore>... remainingMappings) {
       for (TransitiveInfoCollection target : targets) {
         addTransitiveTarget(target, firstMapping, remainingMappings);
       }
@@ -295,7 +311,7 @@ public final class CcLinkParams {
       linkOptsBuilder.addTransitive(args.getLinkopts());
       linkstampsBuilder.addTransitive(args.getLinkstamps());
       librariesBuilder.addTransitive(args.getLibraries());
-      executionDynamicLibrariesBuilder.addTransitive(args.getExecutionDynamicLibraries());
+      dynamicLibrariesForRuntimeBuilder.addTransitive(args.getDynamicLibrariesForRuntime());
       if (args.getExtraLinkTimeLibraries() != null) {
         if (extraLinkTimeLibrariesBuilder == null) {
           extraLinkTimeLibrariesBuilder = ExtraLinkTimeLibraries.builder();
@@ -319,12 +335,12 @@ public final class CcLinkParams {
       return this;
     }
 
-    /**
-     * Adds a collection of linkstamps.
-     */
-    public Builder addLinkstamps(NestedSet<Artifact> linkstamps, CppCompilationContext context) {
+    /** Adds a collection of linkstamps. */
+    public Builder addLinkstamps(
+        NestedSet<Artifact> linkstamps, CcCompilationContext ccCompilationContext) {
       for (Artifact linkstamp : linkstamps) {
-        linkstampsBuilder.add(new Linkstamp(linkstamp, context.getDeclaredIncludeSrcs()));
+        linkstampsBuilder.add(
+            new Linkstamp(linkstamp, ccCompilationContext.getDeclaredIncludeSrcs()));
       }
       return this;
     }
@@ -346,8 +362,8 @@ public final class CcLinkParams {
     }
 
     /** Adds a collection of library artifacts. */
-    public Builder addExecutionDynamicLibraries(Iterable<Artifact> libraries) {
-      executionDynamicLibrariesBuilder.addAll(libraries);
+    public Builder addDynamicLibrariesForRuntime(Iterable<Artifact> libraries) {
+      dynamicLibrariesForRuntimeBuilder.addAll(libraries);
       return this;
     }
 
@@ -377,9 +393,7 @@ public final class CcLinkParams {
     /** Processes typical dependencies of a C/C++ library. */
     public Builder addCcLibrary(RuleContext context) {
       addTransitiveTargets(
-          context.getPrerequisites("deps", Mode.TARGET),
-          CcLinkParamsInfo.TO_LINK_PARAMS,
-          CcSpecificLinkParamsProvider.TO_LINK_PARAMS);
+          context.getPrerequisites("deps", Mode.TARGET), CcLinkParamsStore.TO_LINK_PARAMS);
       return this;
     }
   }
@@ -387,14 +401,16 @@ public final class CcLinkParams {
   /**
    * A linkstamp that also knows about its declared includes.
    *
-   * <p>This object is required because linkstamp files may include other headers which
-   * will have to be provided during compilation.
+   * <p>This object is required because linkstamp files may include other headers which will have to
+   * be provided during compilation.
    */
+  @AutoCodec
   public static final class Linkstamp {
     private final Artifact artifact;
     private final NestedSet<Artifact> declaredIncludeSrcs;
 
-    private Linkstamp(Artifact artifact, NestedSet<Artifact> declaredIncludeSrcs) {
+    @VisibleForSerialization
+    Linkstamp(Artifact artifact, NestedSet<Artifact> declaredIncludeSrcs) {
       this.artifact = Preconditions.checkNotNull(artifact);
       this.declaredIncludeSrcs = Preconditions.checkNotNull(declaredIncludeSrcs);
     }

@@ -29,7 +29,7 @@ import java.util.Set;
  */
 final class Crosstool {
   private static final ImmutableList<String> CROSSTOOL_BINARIES =
-      ImmutableList.of("compile", "dwp", "link", "objcopy");
+      ImmutableList.of("ar", "as", "compile", "dwp", "link", "objcopy");
 
   private final MockToolsConfig config;
 
@@ -140,7 +140,8 @@ final class Crosstool {
                   addModuleMap ? "    module_map = 'crosstool.cppmap'," : "",
                   "    cpu = '" + arch + "',",
                   "    compiler = 'gcc-4.4.0',",
-                  "    libc = 'glibc-2.3.6-grte',",
+                  "    ar_files = 'ar-" + arch + "',",
+                  "    as_files = 'as-" + arch + "',",
                   "    compiler_files = 'compile-" + arch + "',",
                   "    dwp_files = 'dwp-" + arch + "',",
                   "    linker_files = 'link-" + arch + "',",

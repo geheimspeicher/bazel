@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
@@ -57,7 +58,7 @@ public final class TargetMarkerFunction implements SkyFunction {
     if (label.getName().contains("/")) {
       // This target is in a subdirectory, therefore it could potentially be invalidated by
       // a new BUILD file appearing in the hierarchy.
-      PathFragment containingDirectory = label.toPathFragment().getParentDirectory();
+      PathFragment containingDirectory = getContainingDirectory(label);
       ContainingPackageLookupValue containingPackageLookupValue;
       try {
         PackageIdentifier newPkgId = PackageIdentifier.create(
@@ -107,6 +108,12 @@ public final class TargetMarkerFunction implements SkyFunction {
       throw new NoSuchTargetException(target);
     }
     return TargetMarkerValue.TARGET_MARKER_INSTANCE;
+  }
+
+  private static PathFragment getContainingDirectory(Label label) {
+    PathFragment pkg = label.getPackageFragment();
+    String name = label.getName();
+    return name.equals(".") ? pkg : pkg.getRelative(name).getParentDirectory();
   }
 
   @Override

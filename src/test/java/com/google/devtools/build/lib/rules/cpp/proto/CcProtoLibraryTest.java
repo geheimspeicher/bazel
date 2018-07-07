@@ -21,10 +21,17 @@ import static com.google.devtools.build.lib.actions.util.ActionsTestUtil.prettyA
 import com.google.common.collect.ImmutableList;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
-import com.google.devtools.build.lib.rules.cpp.CppCompilationContext;
+import com.google.devtools.build.lib.bazel.rules.cpp.proto.BazelCcProtoAspect;
+import com.google.devtools.build.lib.packages.AspectParameters;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationInfo;
+import com.google.devtools.build.lib.rules.cpp.CppCompileAction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.build.lib.vfs.PathFragment;
+import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -106,22 +113,27 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
         "proto_library(name = 'alias_proto', deps = [':foo_proto'])",
         "proto_library(name = 'foo_proto', srcs = ['foo.proto'])");
 
-    CppCompilationContext context =
-        getConfiguredTarget("//x:foo_cc_proto").getProvider(CppCompilationContext.class);
-    assertThat(prettyArtifactNames(context.getDeclaredIncludeSrcs())).containsExactly("x/foo.pb.h");
+    CcCompilationContext ccCompilationContext =
+        getConfiguredTarget("//x:foo_cc_proto")
+            .get(CcCompilationInfo.PROVIDER)
+            .getCcCompilationContext();
+    assertThat(prettyArtifactNames(ccCompilationContext.getDeclaredIncludeSrcs()))
+        .containsExactly("x/foo.pb.h");
   }
 
   @Test
-  public void cppCompilationContext() throws Exception {
+  public void ccCompilationContext() throws Exception {
     scratch.file(
         "x/BUILD",
         "cc_proto_library(name = 'foo_cc_proto', deps = ['foo_proto'])",
         "proto_library(name = 'foo_proto', srcs = ['foo.proto'], deps = [':bar_proto'])",
         "proto_library(name = 'bar_proto', srcs = ['bar.proto'])");
 
-    CppCompilationContext context =
-        getConfiguredTarget("//x:foo_cc_proto").getProvider(CppCompilationContext.class);
-    assertThat(prettyArtifactNames(context.getDeclaredIncludeSrcs()))
+    CcCompilationContext ccCompilationContext =
+        getConfiguredTarget("//x:foo_cc_proto")
+            .get(CcCompilationInfo.PROVIDER)
+            .getCcCompilationContext();
+    assertThat(prettyArtifactNames(ccCompilationContext.getDeclaredIncludeSrcs()))
         .containsExactly("x/foo.pb.h", "x/bar.pb.h");
   }
 
@@ -160,9 +172,8 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
         "WORKSPACE", "local_repository(name = 'bla', path = '/bla/')", existingWorkspace);
     invalidatePackages(); // A dash of magic to re-evaluate the WORKSPACE file.
 
-    Artifact hFile =
-        getFirstArtifactEndingWith(
-            getFilesToBuild(getConfiguredTarget("//x:foo_cc_proto")), "bar.pb.h");
+    ConfiguredTarget target = getConfiguredTarget("//x:foo_cc_proto");
+    Artifact hFile = getFirstArtifactEndingWith(getFilesToBuild(target), "bar.pb.h");
     SpawnAction protoCompileAction = getGeneratingSpawnAction(hFile);
 
     assertThat(protoCompileAction.getArguments())
@@ -170,6 +181,18 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
             String.format(
                 "--cpp_out=%s/external/bla",
                 getTargetConfiguration().getGenfilesFragment().toString()));
+
+    Artifact headerFile =
+        getDerivedArtifact(
+            PathFragment.create("external/bla/foo/bar.pb.h"),
+            targetConfig.getGenfilesDirectory(),
+            getOwnerForAspect(
+                getConfiguredTarget("@bla//foo:bar_proto"),
+                ruleClassProvider.getNativeAspectClass(BazelCcProtoAspect.class.getSimpleName()),
+                AspectParameters.EMPTY));
+    CcCompilationContext ccCompilationContext =
+        target.get(CcCompilationInfo.PROVIDER).getCcCompilationContext();
+    assertThat(ccCompilationContext.getDeclaredIncludeSrcs()).containsExactly(headerFile);
   }
 
   @Test
@@ -188,4 +211,21 @@ public class CcProtoLibraryTest extends BuildViewTestCase {
   }
 
   // TODO(carmi): test blacklisted protos. I don't currently understand what's the wanted behavior.
+
+  @Test
+  public void generatedSourcesNotCoverageInstrumented() throws Exception {
+    useConfiguration("--collect_code_coverage", "--instrumentation_filter=.");
+    scratch.file(
+        "x/BUILD",
+        "cc_proto_library(name = 'foo_cc_proto', deps = ['foo_proto'])",
+        "proto_library(name = 'foo_proto', srcs = ['foo.proto'])");
+    ConfiguredTarget target = getConfiguredTarget("//x:foo_cc_proto");
+    List<CppCompileAction> compilationSteps =
+        actionsTestUtil()
+            .findTransitivePrerequisitesOf(
+                getFirstArtifactEndingWith(getFilesToBuild(target), ".a"), CppCompileAction.class);
+    List<String> options = compilationSteps.get(0).getCompilerOptions();
+    assertThat(options).doesNotContain("-fprofile-arcs");
+    assertThat(options).doesNotContain("-ftest-coverage");
+  }
 }

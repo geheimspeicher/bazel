@@ -17,28 +17,47 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidResourcesInfoApi;
+import com.google.devtools.build.lib.syntax.EvalException;
+import com.google.devtools.build.lib.syntax.SkylarkDict;
 
 /** A provider that supplies ResourceContainers from its transitive closure. */
-@SkylarkModule(
-  name = "AndroidResourcesInfo",
-  doc = "Android resources provided by a rule",
-  category = SkylarkModuleCategory.PROVIDER
-)
 @Immutable
-public class AndroidResourcesInfo extends NativeInfo {
+public class AndroidResourcesInfo extends NativeInfo implements AndroidResourcesInfoApi {
 
   private static final String SKYLARK_NAME = "AndroidResourcesInfo";
-  public static final NativeProvider<AndroidResourcesInfo> PROVIDER =
-      new NativeProvider<AndroidResourcesInfo>(AndroidResourcesInfo.class, SKYLARK_NAME) {};
 
+  /**
+   * Provider instance for {@link AndroidResourcesInfo}.
+   */
+  public static final AndroidResourcesInfoProvider PROVIDER =
+      new AndroidResourcesInfoProvider();
+
+  /*
+   * Local information about the target that produced this provider, for tooling. These values will
+   * be made available even if they should not be inherited (for example, if this target has
+   * "neverlink" set) - do not inherit them directly.
+   */
+
+  // Lets us know where the provider came from
   private final Label label;
-  private final NestedSet<ResourceContainer> transitiveAndroidResources;
-  private final NestedSet<ResourceContainer> directAndroidResources;
+
+  // An updated manifest - resource processing sometimes does additional manifest processing
+  // TODO(b/30817309): Remove this once resource processing no longer does manifest processing
+  private final ProcessedAndroidManifest manifest;
+
+  // An R.txt file containing a list of all transitive resources this target expected
+  private final Artifact rTxt;
+
+  /*
+   * Transitive information used for resource processing
+   */
+
+  private final NestedSet<ValidatedAndroidData> transitiveAndroidResources;
+  private final NestedSet<ValidatedAndroidData> directAndroidResources;
   private final NestedSet<Artifact> transitiveResources;
   private final NestedSet<Artifact> transitiveAssets;
   private final NestedSet<Artifact> transitiveManifests;
@@ -50,8 +69,10 @@ public class AndroidResourcesInfo extends NativeInfo {
 
   AndroidResourcesInfo(
       Label label,
-      NestedSet<ResourceContainer> transitiveAndroidResources,
-      NestedSet<ResourceContainer> directAndroidResources,
+      ProcessedAndroidManifest manifest,
+      Artifact rTxt,
+      NestedSet<ValidatedAndroidData> transitiveAndroidResources,
+      NestedSet<ValidatedAndroidData> directAndroidResources,
       NestedSet<Artifact> transitiveResources,
       NestedSet<Artifact> transitiveAssets,
       NestedSet<Artifact> transitiveManifests,
@@ -62,6 +83,8 @@ public class AndroidResourcesInfo extends NativeInfo {
       NestedSet<Artifact> transitiveRTxt) {
     super(PROVIDER);
     this.label = label;
+    this.manifest = manifest;
+    this.rTxt = rTxt;
     this.transitiveAndroidResources = transitiveAndroidResources;
     this.directAndroidResources = directAndroidResources;
     this.transitiveResources = transitiveResources;
@@ -75,28 +98,26 @@ public class AndroidResourcesInfo extends NativeInfo {
   }
 
   /** Returns the label that is associated with this piece of information. */
-  @SkylarkCallable(name = "label", doc = "Returns the label for this target.", structField = true)
   public Label getLabel() {
     return label;
   }
 
+  public ProcessedAndroidManifest getManifest() {
+    return manifest;
+  }
+
+  @Override
+  public Artifact getRTxt() {
+    return rTxt;
+  }
+
   /** Returns the transitive ResourceContainers for the label. */
-  @SkylarkCallable(
-    name = "transitive_android_resources",
-    doc = "Returns the transitive android resources for the label.",
-    structField = true
-  )
-  public NestedSet<ResourceContainer> getTransitiveAndroidResources() {
+  public NestedSet<ValidatedAndroidData> getTransitiveAndroidResources() {
     return transitiveAndroidResources;
   }
 
   /** Returns the immediate ResourceContainers for the label. */
-  @SkylarkCallable(
-    name = "direct_android_resources",
-    doc = "Returns the immediate android resources for the label.",
-    structField = true
-  )
-  public NestedSet<ResourceContainer> getDirectAndroidResources() {
+  public NestedSet<ValidatedAndroidData> getDirectAndroidResources() {
     return directAndroidResources;
   }
 
@@ -104,6 +125,8 @@ public class AndroidResourcesInfo extends NativeInfo {
     return transitiveResources;
   }
 
+  /** @deprecated Assets are being decoupled from resources */
+  @Deprecated
   public NestedSet<Artifact> getTransitiveAssets() {
     return transitiveAssets;
   }
@@ -130,5 +153,20 @@ public class AndroidResourcesInfo extends NativeInfo {
 
   public NestedSet<Artifact> getTransitiveRTxt() {
     return transitiveRTxt;
+  }
+
+  /** Provider for {@link AndroidResourcesInfo}. */
+  public static class AndroidResourcesInfoProvider extends BuiltinProvider<AndroidResourcesInfo>
+      implements AndroidResourcesInfoApiProvider {
+
+    private AndroidResourcesInfoProvider() {
+      super(SKYLARK_NAME, AndroidResourcesInfo.class);
+    }
+
+    @Override
+    public AndroidResourcesInfo createInfo(SkylarkDict<?, ?> kwargs, Location loc)
+        throws EvalException {
+      return throwUnsupportedConstructorException(loc);
+    }
   }
 }

@@ -13,7 +13,11 @@
 // limitations under the License.
 package com.google.devtools.build.lib.remote.blobstore;
 
+import static com.google.devtools.build.lib.remote.util.Utils.getFromFuture;
+
 import com.google.common.io.ByteStreams;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -35,25 +39,35 @@ public final class OnDiskBlobStore implements SimpleBlobStore {
   }
 
   @Override
-  public boolean get(String key, OutputStream out) throws IOException {
-    Path f = toPath(key);
-    if (!f.exists()) {
-      return false;
+  public ListenableFuture<Boolean> get(String key, OutputStream out) {
+    SettableFuture<Boolean> f = SettableFuture.create();
+    Path p = toPath(key);
+    if (!p.exists()) {
+      f.set(false);
+    } else {
+      try (InputStream in = p.getInputStream()) {
+        ByteStreams.copy(in, out);
+        f.set(true);
+      } catch (IOException e) {
+        f.setException(e);
+      }
     }
-    try (InputStream in = f.getInputStream()) {
-      ByteStreams.copy(in, out);
-    }
-    return true;
+    return f;
   }
 
   @Override
   public boolean getActionResult(String key, OutputStream out)
       throws IOException, InterruptedException {
-    return get(key, out);
+    return getFromFuture(get(key, out));
   }
 
   @Override
   public void put(String key, long length, InputStream in) throws IOException {
+    Path target = toPath(key);
+    if (target.exists()) {
+      return;
+    }
+
     // Write a temporary file first, and then rename, to avoid data corruption in case of a crash.
     Path temp = toPath(UUID.randomUUID().toString());
     try (OutputStream out = temp.getOutputStream()) {
@@ -61,8 +75,7 @@ public final class OnDiskBlobStore implements SimpleBlobStore {
     }
     // TODO(ulfjack): Fsync temp here before we rename it to avoid data loss in the case of machine
     // crashes (the OS may reorder the writes and the rename).
-    Path f = toPath(key);
-    temp.renameTo(f);
+    temp.renameTo(target);
   }
 
   @Override

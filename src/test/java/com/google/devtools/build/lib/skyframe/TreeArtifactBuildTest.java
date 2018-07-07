@@ -22,38 +22,37 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Collections2;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Multimap;
 import com.google.common.hash.Hashing;
 import com.google.common.util.concurrent.Runnables;
 import com.google.devtools.build.lib.actions.Action;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionInput;
-import com.google.devtools.build.lib.actions.ActionInputFileCache;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionResult;
+import com.google.devtools.build.lib.actions.Actions;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.actions.BuildFailedException;
+import com.google.devtools.build.lib.actions.MetadataProvider;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
+import com.google.devtools.build.lib.actions.OutputBaseSupplier;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.actions.util.TestAction;
 import com.google.devtools.build.lib.actions.util.TestAction.DummyAction;
-import com.google.devtools.build.lib.analysis.actions.ActionTemplate;
 import com.google.devtools.build.lib.analysis.actions.SpawnActionTemplate;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.StoredEventHandler;
-import com.google.devtools.build.lib.skyframe.ActionTemplateExpansionValue.ActionTemplateExpansionKey;
-import com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodecAdapter;
-import com.google.devtools.build.lib.skyframe.serialization.testutils.ObjectCodecTester;
+import com.google.devtools.build.lib.skyframe.serialization.testutils.SerializationTester;
 import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
@@ -118,10 +117,11 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
   @Test
   public void testCodec() throws Exception {
-    ObjectCodecTester.newBuilder(
-            new InjectingObjectCodecAdapter<>(Artifact.CODEC, () -> scratch.getFileSystem()))
-        .addSubjects(outOne, outOneFileOne)
-        .buildAndRunTests();
+    new SerializationTester(outOne, outOneFileOne)
+        .addDependency(FileSystem.class, scratch.getFileSystem())
+        .addDependency(
+            OutputBaseSupplier.class, () -> scratch.getFileSystem().getPath(TestUtils.tmpDir()))
+        .runTests();
   }
 
   /** Simple smoke test. If this isn't passing, something is very wrong... */
@@ -167,7 +167,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
           public ActionResult execute(ActionExecutionContext actionExecutionContext) {
             try {
               // Check the file cache for input TreeFileArtifacts.
-              ActionInputFileCache fileCache = actionExecutionContext.getActionInputFileCache();
+              MetadataProvider fileCache = actionExecutionContext.getMetadataProvider();
               assertThat(fileCache.getMetadata(outOneFileOne).getType().isFile()).isTrue();
               assertThat(fileCache.getMetadata(outOneFileTwo).getType().isFile()).isTrue();
 
@@ -755,10 +755,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     actionTemplateExpansionFunction =
         new DummyActionTemplateExpansionFunction(
-            actionKeyContext,
-            ImmutableMultimap.<ActionTemplate<?>, Action>of(
-                actionTemplate, generateOutputAction,
-                actionTemplate, noGenerateOutputAction));
+            actionKeyContext, ImmutableList.of(generateOutputAction, noGenerateOutputAction));
 
     buildArtifact(artifact2);
   }
@@ -797,10 +794,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     actionTemplateExpansionFunction =
         new DummyActionTemplateExpansionFunction(
-            actionKeyContext,
-            ImmutableMultimap.<ActionTemplate<?>, Action>of(
-                actionTemplate, generateOutputAction,
-                actionTemplate, noGenerateOutputAction));
+            actionKeyContext, ImmutableList.of(generateOutputAction, noGenerateOutputAction));
 
     try {
       buildArtifact(artifact2);
@@ -844,10 +838,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     actionTemplateExpansionFunction =
         new DummyActionTemplateExpansionFunction(
-            actionKeyContext,
-            ImmutableMultimap.<ActionTemplate<?>, Action>of(
-                actionTemplate, generateOutputAction,
-                actionTemplate, throwingAction));
+            actionKeyContext, ImmutableList.of(generateOutputAction, throwingAction));
 
     try {
       buildArtifact(artifact2);
@@ -890,10 +881,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
 
     actionTemplateExpansionFunction =
         new DummyActionTemplateExpansionFunction(
-            actionKeyContext,
-            ImmutableMultimap.<ActionTemplate<?>, Action>of(
-                actionTemplate, throwingAction,
-                actionTemplate, anotherThrowingAction));
+            actionKeyContext, ImmutableList.of(throwingAction, anotherThrowingAction));
 
     try {
       buildArtifact(artifact2);
@@ -1192,9 +1180,7 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
     FileSystem fs = scratch.getFileSystem();
     Path execRoot = fs.getPath(TestUtils.tmpDir());
     PathFragment execPath = PathFragment.create("out").getRelative(name);
-    Path path = execRoot.getRelative(execPath);
     return new SpecialArtifact(
-        path,
         ArtifactRoot.asDerivedRoot(execRoot, execRoot.getRelative("out")),
         execPath,
         ACTION_LOOKUP_KEY,
@@ -1242,23 +1228,22 @@ public class TreeArtifactBuildTest extends TimestampBuilderTestCase {
   /** A dummy action template expansion function that just returns the injected actions */
   private static class DummyActionTemplateExpansionFunction implements SkyFunction {
     private final ActionKeyContext actionKeyContext;
-    private final Multimap<ActionTemplate<?>, Action> actionTemplateToActionMap;
+    private final ImmutableList<ActionAnalysisMetadata> actions;
 
     DummyActionTemplateExpansionFunction(
-        ActionKeyContext actionKeyContext,
-        Multimap<ActionTemplate<?>, Action> actionTemplateToActionMap) {
+        ActionKeyContext actionKeyContext, ImmutableList<ActionAnalysisMetadata> actions) {
       this.actionKeyContext = actionKeyContext;
-      this.actionTemplateToActionMap = actionTemplateToActionMap;
+      this.actions = actions;
     }
 
     @Override
     public SkyValue compute(SkyKey skyKey, Environment env) {
-      ActionTemplateExpansionKey key = (ActionTemplateExpansionKey) skyKey.argument();
-      ActionTemplate<?> actionTemplate = key.getActionTemplate();
-      return new ActionTemplateExpansionValue(
-          actionKeyContext,
-          Preconditions.checkNotNull(actionTemplateToActionMap.get(actionTemplate)),
-          false);
+      try {
+        return new ActionTemplateExpansionValue(
+            Actions.filterSharedActionsAndThrowActionConflict(actionKeyContext, actions));
+      } catch (ActionConflictException e) {
+        throw new IllegalStateException(e);
+      }
     }
 
     @Override

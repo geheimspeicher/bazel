@@ -19,14 +19,17 @@ make builds significantly faster.
     * [Bazel Remote Cache](#bazel-remote-cache)
     * [Google Cloud Storage](#google-cloud-storage)
     * [Other servers](#other-servers)
+* [Authentication](#authentication)
 * [HTTP Caching Protocol](#http-caching-protocol)
 * [Run Bazel using the remote cache](#run-bazel-using-the-remote-cache)
     * [Read from and write to the remote cache](#read-from-and-write-to-the-remote-cache)
     * [Read only from the remote cache](#read-only-from-the-remote-cache)
     * [Exclude specific targets from using the remote cache](#exclude-specific-targets-from-using-the-remote-cache)
     * [Delete content from the remote cache](#delete-content-from-the-remote-cache)
+* [Disk cache](#disk-cache)
 * [Known Issues](#known-issues)
-* [Bazel remote execution (in development)](#remote-execution-in-development)
+* [External Links](#external-links)
+* [Bazel remote execution (in development)](#bazel-remote-execution-in-development)
 
 ## Remote caching overview
 
@@ -174,6 +177,14 @@ You can set up any HTTP/1.1 server that supports PUT and GET as the cache's
 backend. Users have reported success with caching backends such as [Hazelcast],
 [Apache httpd], and [AWS S3].
 
+## Authentication
+
+As of version 0.11.0 support for HTTP Basic Authentication was added to Bazel.
+You can pass a username and password to Bazel via the remote cache URL. The
+syntax is `https://username:password@hostname.com:port/path`. Please note that
+HTTP Basic Authentication transmits username and password in plaintext over the
+network and it's thus critical to always use it with HTTPS.
+
 ## HTTP Caching Protocol
 
 Bazel supports remote caching via HTTP/1.1. The protocol is conceptually simple:
@@ -296,14 +307,36 @@ You may want to delete content from the cache to:
 * Create a clean cache after a cache was poisoned
 * Reduce the amount of storage used by deleting old outputs
 
+## Disk cache
+
+Bazel can use a directory on the file system as a remote cache. This is
+useful for sharing build artifacts when switching branches and/or working
+on multiple workspaces of the same project, such as multiple checkouts. Since
+Bazel does not garbage-collect the directory, you might want to automate a
+periodic cleanup of this directory. Enable the disk cache as follows:
+
+```
+build --disk_cache=/path/to/build/cache
+```
+
+You can pass a user-specific path to the `--disk_cache` flag using the `~` alias
+(Bazel will substitute the current user's home directory). This comes in handy
+when enabling the disk cache for all developers of a project via the project's
+checked in `.bazelrc` file.
+
+To enable cache hits across different workspaces, use the following flag:
+
+```
+build --experimental_strict_action_env
+```
+
 ## Known issues
 
-**Input file modification during a Build**
+**Input file modification during a build**
 
 When an input file is modified during a build, Bazel might upload invalid
 results to the remote cache. We are working on a solution for this problem.
-See [issue #3360] for updates. Avoid this problem by not editing source
-files during a build.
+See [issue #3360] for updates. Avoid modifying source files during a build.
 
 
 **Environment variables leaking into an action**
@@ -327,6 +360,11 @@ two users with different compilers installed will wrongly share cache hits
 because the outputs are different but they have the same action hash. Please
 watch [issue #4558] for updates.
 
+## External Links
+
+* **Your Build in a Datacenter:** The Bazel team gave a [talk](https://fosdem.org/2018/schedule/event/datacenter_build/) about remote caching and execution at FOSDEM 2018.
+
+* **Faster Bazel builds with remote caching: a benchmark:** Nicolò Valigi wrote a [blog post](https://nicolovaligi.com/faster-bazel-remote-caching-benchmark.html) in which he benchmarks remote caching in Bazel.
 
 ## Bazel remote execution (in development)
 
@@ -336,6 +374,8 @@ separate platform, such as a datacenter.  You can try remote execution with
 [Buildfarm], an open source project that aims to provide a distributed remote
 execution platform.
 
+[Adapting Rules for Remote Execution](https://docs.bazel.build/versions/master/remote-execution-rules.html)
+[Troubleshooting Remote Execution](https://docs.bazel.build/versions/master/remote-execution-sandbox.html)
 [WebDAV module]: http://nginx.org/en/docs/http/ngx_http_dav_module.html
 [docker image]: https://hub.docker.com/r/buchgr/bazel-remote-cache/
 [GitHub]: https://github.com/buchgr/bazel-remote/

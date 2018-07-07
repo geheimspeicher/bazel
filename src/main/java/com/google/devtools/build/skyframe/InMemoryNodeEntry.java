@@ -18,7 +18,6 @@ import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.lib.util.GroupedList.GroupedListHelper;
 import com.google.devtools.build.skyframe.KeyToConsolidate.Op;
@@ -195,8 +194,8 @@ public class InMemoryNodeEntry implements NodeEntry {
   }
 
   @Override
+  @Nullable
   public SkyValue getValueMaybeWithMetadata() {
-    Preconditions.checkState(isDone(), "no value until done: %s", this);
     return value;
   }
 
@@ -220,7 +219,7 @@ public class InMemoryNodeEntry implements NodeEntry {
 
   @Override
   public synchronized Iterable<SkyKey> getDirectDeps() {
-    return getGroupedDirectDeps().toSet();
+    return getGroupedDirectDeps().getAllElementsAsIterable();
   }
 
   /**
@@ -274,6 +273,22 @@ public class InMemoryNodeEntry implements NodeEntry {
   public synchronized Set<SkyKey> getInProgressReverseDeps() {
     Preconditions.checkState(!isDone(), this);
     return ReverseDepsUtility.returnNewElements(this, getOpToStoreBare());
+  }
+
+  /**
+   * Highly dangerous method. Used only for testing/debugging. Can only be called on an in-progress
+   * entry that is not dirty and that will not keep edges. Returns all the entry's reverse deps,
+   * which must all be {@link SkyKey}s representing {@link Op#ADD} operations, since that is the
+   * operation that is stored bare. Used for speed, since it avoids making any copies, so should be
+   * much faster than {@link #getInProgressReverseDeps}.
+   */
+  @SuppressWarnings("unchecked")
+  public synchronized Iterable<SkyKey> unsafeGetUnconsolidatedRdeps() {
+    Preconditions.checkState(!isDone(), this);
+    Preconditions.checkState(!isDirty(), this);
+    Preconditions.checkState(keepEdges().equals(KeepEdgesPolicy.NONE), this);
+    Preconditions.checkState(getOpToStoreBare() == OpToStoreBare.ADD, this);
+    return (Iterable<SkyKey>) (List<?>) reverseDepsDataToConsolidate;
   }
 
   @Override
@@ -460,21 +475,19 @@ public class InMemoryNodeEntry implements NodeEntry {
           DirtyBuildingState.create(isChanged, GroupedList.<SkyKey>create(directDeps), value);
       value = null;
       directDeps = null;
-      return new MarkedDirtyResult(ReverseDepsUtility.getReverseDeps(this));
+      return new FromCleanMarkedDirtyResult(ReverseDepsUtility.getReverseDeps(this));
     }
-    // The caller may be simultaneously trying to mark this node dirty and changed, and the dirty
-    // thread may have lost the race, but it is the caller's responsibility not to try to mark
-    // this node changed twice. The end result of racing markers must be a changed node, since one
-    // of the markers is trying to mark the node changed.
-    Preconditions.checkState(isChanged != isChanged(),
-        "Cannot mark node dirty twice or changed twice: %s", this);
+
     Preconditions.checkState(value == null, "Value should have been reset already %s", this);
-    if (isChanged) {
-      // If the changed marker lost the race, we just need to mark changed in this method -- all
-      // other work was done by the dirty marker.
-      getDirtyBuildingState().markChanged();
+    if (isChanged != isChanged()) {
+      if (isChanged) {
+        getDirtyBuildingState().markChanged();
+      }
+      // If !isChanged, then this call made no changes to the node, but redundancy is a property of
+      // the sequence of markDirty calls, not their effects.
+      return FromDirtyMarkedDirtyResult.NOT_REDUNDANT;
     }
-    return null;
+    return FromDirtyMarkedDirtyResult.REDUNDANT;
   }
 
   @Override
@@ -492,7 +505,7 @@ public class InMemoryNodeEntry implements NodeEntry {
 
   @Override
   public synchronized void forceRebuild() {
-    Preconditions.checkState(getTemporaryDirectDeps().numElements() == signaledDeps, this);
+    Preconditions.checkState(getNumTemporaryDirectDeps() == signaledDeps, this);
     getDirtyBuildingState().forceChanged();
   }
 
@@ -520,7 +533,7 @@ public class InMemoryNodeEntry implements NodeEntry {
       throws InterruptedException {
     Preconditions.checkState(!isDone(), this);
     if (!isDirty()) {
-      return Iterables.concat(getTemporaryDirectDeps());
+      return getTemporaryDirectDeps().getAllElementsAsIterable();
     } else {
       // There may be duplicates here. Make sure everything is unique.
       ImmutableSet.Builder<SkyKey> result = ImmutableSet.builder();
@@ -561,6 +574,10 @@ public class InMemoryNodeEntry implements NodeEntry {
     return (GroupedList<SkyKey>) directDeps;
   }
 
+  private synchronized int getNumTemporaryDirectDeps() {
+    return directDeps == null ? 0 : getTemporaryDirectDeps().numElements();
+  }
+
   @Override
   public synchronized boolean noDepsLastBuild() {
     return getDirtyBuildingState().noDepsLastBuild();
@@ -579,6 +596,16 @@ public class InMemoryNodeEntry implements NodeEntry {
   }
 
   @Override
+  public synchronized void resetForRestartFromScratch() {
+    Preconditions.checkState(!isDone(), "Reset entry can't be done: %s", this);
+    directDeps = null;
+    signaledDeps = 0;
+    if (dirtyBuildingState != null) {
+      dirtyBuildingState.resetForRestartFromScratch();
+    }
+  }
+
+  @Override
   public synchronized Set<SkyKey> addTemporaryDirectDeps(GroupedListHelper<SkyKey> helper) {
     Preconditions.checkState(!isDone(), "add temp shouldn't be done: %s %s", helper, this);
     return getTemporaryDirectDeps().append(helper);
@@ -593,7 +620,7 @@ public class InMemoryNodeEntry implements NodeEntry {
   @Override
   public synchronized boolean isReady() {
     Preconditions.checkState(!isDone(), "can't be ready if done: %s", this);
-    return isReady(getTemporaryDirectDeps().numElements());
+    return isReady(getNumTemporaryDirectDeps());
   }
 
   /** Returns whether all known children of this node have signaled that they are done. */

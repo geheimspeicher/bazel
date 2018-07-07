@@ -25,7 +25,7 @@ sh_library(
 
 sh_test(
     name = "android_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["android_integration_test.sh"],
     data = [
         ":android_helper",
@@ -36,7 +36,7 @@ sh_test(
 
 sh_test(
     name = "aar_integration_test",
-    size = "medium",
+    size = "large",
     srcs = ["aar_integration_test.sh"],
     data = [
         ":android_helper",
@@ -71,6 +71,7 @@ sh_test(
 sh_test(
     name = "android_ndk_integration_test",
     size = "medium",
+    timeout = "long",
     srcs = ["android_ndk_integration_test.sh"],
     data = [
         ":android_helper",
@@ -115,4 +116,16 @@ sh_test(
         "//src/test/shell/bazel:test-deps",
     ],
     shard_count = 4,
+)
+
+sh_test(
+    name = "resource_processing_integration_test",
+    size = "medium",
+    srcs = ["resource_processing_integration_test.sh"],
+    data = [
+        ":android_helper",
+        ":testdata/roboto.ttf",
+        "//external:android_sdk_for_testing",
+        "//src/test/shell/bazel:test-deps",
+    ],
 )

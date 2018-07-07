@@ -13,146 +13,89 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.java;
 
-import static com.google.devtools.build.lib.syntax.SkylarkType.BOOL;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMap;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMapBuilder;
-import com.google.devtools.build.lib.analysis.skylark.SkylarkActionFactory;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.skylarkbuildapi.FileApi;
+import com.google.devtools.build.lib.skylarkbuildapi.java.JavaInfoApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
-import com.google.devtools.build.lib.syntax.FunctionSignature;
 import com.google.devtools.build.lib.syntax.Runtime;
 import com.google.devtools.build.lib.syntax.SkylarkList;
+import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.syntax.SkylarkNestedSet;
-import com.google.devtools.build.lib.syntax.SkylarkType;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 import javax.annotation.Nullable;
 
 /** A Skylark declared provider that encapsulates all providers that are needed by Java rules. */
-@SkylarkModule(
-    name = "JavaInfo",
-    doc = "Encapsulates all information provided by Java rules",
-    category = SkylarkModuleCategory.PROVIDER
-)
 @Immutable
-public final class JavaInfo extends NativeInfo {
+@AutoCodec
+public final class JavaInfo extends NativeInfo implements JavaInfoApi<Artifact> {
 
   public static final String SKYLARK_NAME = "JavaInfo";
 
-  private static final SkylarkType SEQUENCE_OF_ARTIFACTS =
-      SkylarkType.Combination.of(SkylarkType.SEQUENCE, SkylarkType.of(Artifact.class));
-  private static final SkylarkType SEQUENCE_OF_JAVA_INFO =
-      SkylarkType.Combination.of(SkylarkType.SEQUENCE, SkylarkType.of(JavaInfo.class));
-  private static final SkylarkType LIST_OF_ARTIFACTS =
-      SkylarkType.Combination.of(SkylarkType.SEQUENCE, SkylarkType.of(Artifact.class));
+  public static final JavaInfoProvider PROVIDER = new JavaInfoProvider();
 
-  private static final FunctionSignature.WithValues<Object, SkylarkType> SIGNATURE =
-      FunctionSignature.WithValues.create(
-          FunctionSignature.of(
-              /*numMandatoryPositionals=*/ 0,
-              /*numOptionalPositionals=*/ 0,
-              /*numMandatoryNamedOnly=*/ 1,
-              /*starArg=*/ false,
-              /*kwArg=*/ false,
-              "output_jar",
-              "sources",
-              "source_jars",
-              "use_ijar",
-              "neverlink",
-              "deps",
-              "runtime_deps",
-              "exports",
-              "actions",
-              "java_toolchain"),
+  @Nullable
+  private static <T> T nullIfNone(Object object, Class<T> type) {
+    return object != Runtime.NONE ? type.cast(object) : null;
+  }
 
-          /*defaultValues=*/ Arrays.asList(
-              SkylarkList.createImmutable(Collections.emptyList()), // sources
-              SkylarkList.createImmutable(Collections.emptyList()), // source_jars
-              Boolean.TRUE, // use_ijar
-              Boolean.FALSE, // neverlink
-              SkylarkList.createImmutable(Collections.emptyList()), // deps
-              SkylarkList.createImmutable(Collections.emptyList()), // runtime_deps
-              SkylarkList.createImmutable(Collections.emptyList()), // exports
-              Runtime.NONE, // actions
-              Runtime.NONE), // java_toolchain
-          /*types=*/ ImmutableList.of(
-              SkylarkType.of(Artifact.class), // output_jar
-              SkylarkType.Union.of(SEQUENCE_OF_ARTIFACTS, LIST_OF_ARTIFACTS), // sources
-              SkylarkType.Union.of(SEQUENCE_OF_ARTIFACTS, LIST_OF_ARTIFACTS), // source_jars
-              BOOL, // use_ijar
-              BOOL, // neverlink
-              SEQUENCE_OF_JAVA_INFO, // deps
-              SEQUENCE_OF_JAVA_INFO, // runtime_deps
-              SEQUENCE_OF_JAVA_INFO, // exports
-              SkylarkType.of(SkylarkActionFactory.class), // actions
-              SkylarkType.of(ConfiguredTarget.class))); // java_toolchain
-
-  public static final NativeProvider<JavaInfo> PROVIDER =
-      new NativeProvider<JavaInfo>(JavaInfo.class, SKYLARK_NAME, SIGNATURE) {
-
-        @Override
-        @SuppressWarnings("unchecked")
-        protected JavaInfo createInstanceFromSkylark(Object[] args, Location loc)
-            throws EvalException {
-
-          JavaInfo javaInfo =
-              JavaInfoBuildHelper.getInstance()
-                  .createJavaInfo(
-                      (Artifact) args[0],
-                      (SkylarkList<Artifact>) args[1],
-                      (SkylarkList<Artifact>) args[2],
-                      (Boolean) args[3],
-                      (Boolean) args[4],
-                      (SkylarkList<JavaInfo>) args[5],
-                      (SkylarkList<JavaInfo>) args[6],
-                      (SkylarkList<JavaInfo>) args[7],
-                      args[8],
-                      args[9],
-                      loc);
-
-          return javaInfo;
-        }
-      };
+  @Nullable
+  private static Object nullIfNone(Object object) {
+    return nullIfNone(object, Object.class);
+  }
 
   public static final JavaInfo EMPTY = JavaInfo.Builder.create().build();
 
   private static final ImmutableSet<Class<? extends TransitiveInfoProvider>> ALLOWED_PROVIDERS =
       ImmutableSet.of(
-        JavaCompilationArgsProvider.class,
-        JavaSourceJarsProvider.class,
-        ProtoJavaApiInfoAspectProvider.class,
-        JavaRuleOutputJarsProvider.class,
-        JavaRunfilesProvider.class,
-        JavaPluginInfoProvider.class,
-        JavaGenJarsProvider.class,
-        JavaExportsProvider.class,
-        JavaCompilationInfoProvider.class
-      );
+          JavaCompilationArgsProvider.class,
+          JavaSourceJarsProvider.class,
+          JavaRuleOutputJarsProvider.class,
+          JavaRunfilesProvider.class,
+          JavaPluginInfoProvider.class,
+          JavaGenJarsProvider.class,
+          JavaExportsProvider.class,
+          JavaCompilationInfoProvider.class,
+          JavaStrictCompilationArgsProvider.class);
 
   private final TransitiveInfoProviderMap providers;
+
+  /*
+   * Contains the .jar files to be put on the runtime classpath by the configured target.
+   * <p>Unlike {@link JavaCompilationArgs#getRuntimeJars()}, it does not contain transitive runtime
+   * jars, only those produced by the configured target itself.
+   *
+   * <p>The reason why this field exists is that neverlink libraries do not contain the compiled jar
+   * in {@link JavaCompilationArgs#getRuntimeJars()} and those are sometimes needed, for example,
+   * for Proguarding (the compile time classpath is not enough because that contains only ijars)
+  */
+  private final ImmutableList<Artifact> directRuntimeJars;
+
+  /**
+   * Java constraints (e.g. "android") that are present on the target.
+   */
+  private final ImmutableList<String> javaConstraints;
 
   // Whether or not this library should be used only for compilation and not at runtime.
   private final boolean neverlink;
@@ -175,10 +118,10 @@ public final class JavaInfo extends NativeInfo {
   public static JavaInfo merge(List<JavaInfo> providers) {
     List<JavaCompilationArgsProvider> javaCompilationArgsProviders =
         JavaInfo.fetchProvidersFromList(providers, JavaCompilationArgsProvider.class);
+    List<JavaStrictCompilationArgsProvider> javaStrictCompilationArgsProviders =
+        JavaInfo.fetchProvidersFromList(providers, JavaStrictCompilationArgsProvider.class);
     List<JavaSourceJarsProvider> javaSourceJarsProviders =
         JavaInfo.fetchProvidersFromList(providers, JavaSourceJarsProvider.class);
-    List<ProtoJavaApiInfoAspectProvider> protoJavaApiInfoAspectProviders =
-        JavaInfo.fetchProvidersFromList(providers, ProtoJavaApiInfoAspectProvider.class);
     List<JavaRunfilesProvider> javaRunfilesProviders =
         JavaInfo.fetchProvidersFromList(providers, JavaRunfilesProvider.class);
     List<JavaPluginInfoProvider> javaPluginInfoProviders =
@@ -198,10 +141,10 @@ public final class JavaInfo extends NativeInfo {
             JavaCompilationArgsProvider.class,
             JavaCompilationArgsProvider.merge(javaCompilationArgsProviders))
         .addProvider(
-          JavaSourceJarsProvider.class, JavaSourceJarsProvider.merge(javaSourceJarsProviders))
+            JavaStrictCompilationArgsProvider.class,
+            JavaStrictCompilationArgsProvider.merge(javaStrictCompilationArgsProviders))
         .addProvider(
-            ProtoJavaApiInfoAspectProvider.class,
-            ProtoJavaApiInfoAspectProvider.merge(protoJavaApiInfoAspectProviders))
+            JavaSourceJarsProvider.class, JavaSourceJarsProvider.merge(javaSourceJarsProviders))
         // When a rule merges multiple JavaProviders, its purpose is to pass on information, so
         // it doesn't have any output jars.
         .addProvider(JavaRuleOutputJarsProvider.class, JavaRuleOutputJarsProvider.builder().build())
@@ -255,6 +198,10 @@ public final class JavaInfo extends NativeInfo {
     return javaInfo.getProvider(providerClass);
   }
 
+  public static JavaInfo getJavaInfo(TransitiveInfoCollection target) {
+    return (JavaInfo) target.get(JavaInfo.PROVIDER.getKey());
+  }
+
   public static <T extends TransitiveInfoProvider> T getProvider(
       Class<T> providerClass, TransitiveInfoProviderMap providerMap) {
     T provider = providerMap.getProvider(providerClass);
@@ -297,81 +244,54 @@ public final class JavaInfo extends NativeInfo {
     return providersList.build();
   }
 
-  private JavaInfo(TransitiveInfoProviderMap providers, boolean neverlink, Location location) {
-    super(PROVIDER, ImmutableMap.of(), location);
+  @VisibleForSerialization
+  @AutoCodec.Instantiator
+  JavaInfo(
+      TransitiveInfoProviderMap providers,
+      ImmutableList<Artifact> directRuntimeJars,
+      boolean neverlink,
+      ImmutableList<String> javaConstraints,
+      Location location) {
+    super(PROVIDER, location);
+    this.directRuntimeJars = directRuntimeJars;
     this.providers = providers;
     this.neverlink = neverlink;
+    this.javaConstraints = javaConstraints;
   }
 
   public Boolean isNeverlink() {
     return neverlink;
   }
 
-  @SkylarkCallable(
-      name = "transitive_runtime_jars",
-      doc = "Depset of runtime jars required by this target",
-      structField = true
-  )
+  @Override
   public SkylarkNestedSet getTransitiveRuntimeJars() {
     return SkylarkNestedSet.of(Artifact.class, getTransitiveRuntimeDeps());
   }
 
-  @SkylarkCallable(
-      name = "transitive_compile_time_jars",
-      doc = "Depset of compile time jars recusrively required by this target. See `compile_jars` "
-          + "for more details.",
-      structField = true
-  )
+  @Override
   public SkylarkNestedSet getTransitiveCompileTimeJars() {
     return SkylarkNestedSet.of(Artifact.class, getTransitiveDeps());
   }
 
-  @SkylarkCallable(
-      name = "compile_jars",
-      doc = "Returns the compile time jars required by this target directly. They can be: <ul>"
-          + "<li> interface jars (ijars), if an ijar tool was used, either by calling "
-          + "java_common.create_provider(use_ijar=True, ...) or by passing --use_ijars on the "
-          + "command line for native Java rules and `java_common.compile`</li>"
-          + "<li> normal full jars, if no ijar action was requested</li>"
-          + "<li> both ijars and normal full jars, if this provider was created by merging two or "
-          + "more providers created with different ijar requests </li> </ul>",
-      structField = true
-  )
+  @Override
   public SkylarkNestedSet getCompileTimeJars() {
     NestedSet<Artifact> compileTimeJars =
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class,
-            JavaCompilationArgsProvider::getJavaCompilationArgs,
-            JavaCompilationArgs::getCompileTimeJars);
+            JavaCompilationArgsProvider::getDirectCompileTimeJars);
     return SkylarkNestedSet.of(Artifact.class, compileTimeJars);
   }
 
-  @SkylarkCallable(
-      name = "full_compile_jars",
-      doc = "Returns the full compile time jars required by this target directly. They can be <ul>"
-          + "<li> the corresponding normal full jars of the ijars returned by `compile_jars`</li>"
-          + "<li> the normal full jars returned by `compile_jars`</li></ul>"
-          + "Note: `compile_jars` can return a mix of ijars and normal full jars. In that case, "
-          + "`full_compile_jars` returns the corresponding full jars of the ijars and the remaining"
-          + "normal full jars in `compile_jars`.",
-      structField = true
-  )
+  @Override
   public SkylarkNestedSet getFullCompileTimeJars() {
     NestedSet<Artifact> fullCompileTimeJars =
         getProviderAsNestedSet(
             JavaCompilationArgsProvider.class,
-            JavaCompilationArgsProvider::getJavaCompilationArgs,
-            JavaCompilationArgs::getFullCompileTimeJars);
+            JavaCompilationArgsProvider::getDirectFullCompileTimeJars);
     return SkylarkNestedSet.of(Artifact.class, fullCompileTimeJars);
   }
 
-  @SkylarkCallable(
-      name = "source_jars",
-      doc = "Returns a list of jar files containing all the uncompiled source files (including "
-      + "those generated by annotations) from the target itself, i.e. NOT including the sources of "
-      + "the transitive dependencies",
-      structField = true
-  )
+  @Override
   public SkylarkList<Artifact> getSourceJars() {
     //TODO(#4221) change return type to NestedSet<Artifact>
     JavaSourceJarsProvider provider = providers.getProvider(JavaSourceJarsProvider.class);
@@ -380,82 +300,63 @@ public final class JavaInfo extends NativeInfo {
     return SkylarkList.createImmutable(sourceJars);
   }
 
-  @SkylarkCallable(
-    name = "outputs",
-    doc = "Returns information about outputs of this Java target.",
-    structField = true,
-    allowReturnNones = true
-  )
+  @Override
   public JavaRuleOutputJarsProvider getOutputJars() {
     return getProvider(JavaRuleOutputJarsProvider.class);
   }
 
 
-  @SkylarkCallable(
-      name = "annotation_processing",
-      structField = true,
-      allowReturnNones = true,
-      doc = "Returns information about annotation processing for this Java target."
-  )
+  @Override
   public JavaGenJarsProvider getGenJarsProvider() {
     return getProvider(JavaGenJarsProvider.class);
   }
 
-  @SkylarkCallable(
-    name = "compilation_info",
-    structField = true,
-    allowReturnNones = true,
-    doc = "Returns compilation information for this Java target."
-  )
+  @Override
   public JavaCompilationInfoProvider getCompilationInfoProvider() {
     return getProvider(JavaCompilationInfoProvider.class);
   }
 
-  @SkylarkCallable(
-    name = "transitive_deps",
-    doc = "Returns the transitive set of Jars required to build the target.",
-    structField = true
-  )
+  @Override
+  public SkylarkList<Artifact> getRuntimeOutputJars() {
+    return SkylarkList.createImmutable(getDirectRuntimeJars());
+  }
+
+  public ImmutableList<Artifact> getDirectRuntimeJars() {
+    return directRuntimeJars;
+  }
+
+  @Override
   public NestedSet<Artifact> getTransitiveDeps() {
     return getProviderAsNestedSet(
         JavaCompilationArgsProvider.class,
-        JavaCompilationArgsProvider::getRecursiveJavaCompilationArgs,
-        JavaCompilationArgs::getCompileTimeJars);
+        JavaCompilationArgsProvider::getTransitiveCompileTimeJars);
   }
 
-  @SkylarkCallable(
-    name = "transitive_runtime_deps",
-    doc = "Returns the transitive set of Jars required on the target's runtime classpath.",
-    structField = true
-  )
+  @Override
   public NestedSet<Artifact> getTransitiveRuntimeDeps() {
     return getProviderAsNestedSet(
-        JavaCompilationArgsProvider.class,
-        JavaCompilationArgsProvider::getRecursiveJavaCompilationArgs,
-        JavaCompilationArgs::getRuntimeJars);
+        JavaCompilationArgsProvider.class, JavaCompilationArgsProvider::getRuntimeJars);
   }
 
-  @SkylarkCallable(
-    name = "transitive_source_jars",
-    doc = "Returns the Jars containing Java source files for the target "
-            + "and all of its transitive dependencies.",
-    structField = true
-  )
+  @Override
   public NestedSet<Artifact> getTransitiveSourceJars() {
     return getProviderAsNestedSet(
         JavaSourceJarsProvider.class,
         JavaSourceJarsProvider::getTransitiveSourceJars);
   }
 
-  @SkylarkCallable(
-      name = "transitive_exports",
-      structField = true,
-      doc = "Returns transitive set of labels that are being exported from this rule."
-  )
+  @Override
   public NestedSet<Label> getTransitiveExports() {
     return getProviderAsNestedSet(
         JavaExportsProvider.class,
         JavaExportsProvider::getTransitiveExports);
+  }
+
+  /**
+   * Returns all constraints set on the associated target.
+   */
+  public ImmutableList<String> getJavaConstraints() {
+    return javaConstraints;
   }
 
   /**
@@ -482,21 +383,6 @@ public final class JavaInfo extends NativeInfo {
     return mapper.apply(provider);
   }
 
-  /**
-   * The same as {@link JavaInfo#getProviderAsNestedSet(Class, Function)}, but uses
-   * sequence of two mappers.
-   *
-   * @see JavaInfo#getProviderAsNestedSet(Class, Function)
-   */
-  private <P extends TransitiveInfoProvider, S extends SkylarkValue, V>
-      NestedSet<S> getProviderAsNestedSet(
-          Class<P> providerClass,
-          Function<P, V> firstMapper,
-          Function<V, NestedSet<S>> secondMapper) {
-    return getProviderAsNestedSet(providerClass, firstMapper.andThen(secondMapper));
-  }
-
-
   @Override
   public boolean equals(Object otherObject) {
     if (this == otherObject) {
@@ -515,11 +401,108 @@ public final class JavaInfo extends NativeInfo {
     return providers.hashCode();
   }
 
+  /** Provider class for {@link JavaInfo} objects. */
+  public static class JavaInfoProvider extends BuiltinProvider<JavaInfo>
+      implements JavaInfoProviderApi {
+    private JavaInfoProvider() {
+      super(SKYLARK_NAME, JavaInfo.class);
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked"})
+    public JavaInfo javaInfo(
+        FileApi outputJarApi,
+        Object compileJarApi,
+        Object sourceJarApi,
+        Boolean neverlink,
+        SkylarkList<?> deps,
+        SkylarkList<?> runtimeDeps,
+        SkylarkList<?> exports,
+        Object actionsApi,
+        Object sourcesApi,
+        Object sourceJarsApi,
+        Object useIjarApi,
+        Object javaToolchainApi,
+        Object hostJavabaseApi,
+        Object jdepsApi,
+        Location loc,
+        Environment env) throws EvalException {
+      Artifact outputJar = (Artifact) outputJarApi;
+      @Nullable Artifact compileJar = nullIfNone(compileJarApi, Artifact.class);
+      @Nullable Artifact sourceJar = nullIfNone(sourceJarApi, Artifact.class);
+
+      @Nullable Object actions = nullIfNone(actionsApi);
+      @Nullable SkylarkList<Artifact> sources =
+          (SkylarkList<Artifact>) nullIfNone(sourcesApi, SkylarkList.class);
+      @Nullable
+      SkylarkList<Artifact> sourceJars =
+          (SkylarkList<Artifact>) nullIfNone(sourceJarsApi, SkylarkList.class);
+
+      @Nullable Boolean useIjar = nullIfNone(useIjarApi, Boolean.class);
+      @Nullable Object javaToolchain = nullIfNone(javaToolchainApi);
+      @Nullable Object hostJavabase = nullIfNone(hostJavabaseApi);
+      @Nullable Artifact jdeps = nullIfNone(jdepsApi, Artifact.class);
+
+      boolean hasLegacyArg =
+          actions != null
+              || sources != null
+              || sourceJars != null
+              || useIjar != null
+              || javaToolchain != null
+              || hostJavabase != null;
+      if (hasLegacyArg) {
+        if (env.getSemantics().incompatibleDisallowLegacyJavaInfo()) {
+          throw new EvalException(
+              loc,
+              "Cannot use deprecated argument when "
+                  + "--incompatible_disallow_legacy_javainfo is set. "
+                  + "Deprecated arguments are 'actions', 'sources', 'source_jars', "
+                  + "'use_ijar', 'java_toolchain', 'host_javabase'.");
+        }
+        boolean hasNewArg = compileJar != null || sourceJar != null;
+        if (hasNewArg) {
+          throw new EvalException(
+              loc,
+              "Cannot use deprecated arguments at the same time as "
+                  + "'compile_jar' or 'source_jar'. "
+                  + "Deprecated arguments are 'actions', 'sources', 'source_jars', "
+                  + "'use_ijar', 'java_toolchain', 'host_javabase'.");
+        }
+        return JavaInfoBuildHelper.getInstance()
+            .createJavaInfoLegacy(
+                outputJar,
+                sources != null ? sources : MutableList.empty(),
+                sourceJars != null ? sourceJars : MutableList.empty(),
+                useIjar != null ? useIjar : true,
+                neverlink,
+                (SkylarkList<JavaInfo>) deps,
+                (SkylarkList<JavaInfo>) runtimeDeps,
+                (SkylarkList<JavaInfo>) exports,
+                actions,
+                javaToolchain,
+                hostJavabase,
+                jdeps,
+                loc);
+      }
+      if (compileJar == null) {
+        throw new EvalException(loc, "Expected 'File' for 'compile_jar', found 'None'");
+      }
+      return JavaInfoBuildHelper.getInstance()
+          .createJavaInfo(
+              outputJar, compileJar, sourceJar, neverlink,
+              (SkylarkList<JavaInfo>) deps,
+              (SkylarkList<JavaInfo>) runtimeDeps,
+              (SkylarkList<JavaInfo>) exports, jdeps, loc);
+    }
+  }
+
   /**
    * A Builder for {@link JavaInfo}.
    */
   public static class Builder {
     TransitiveInfoProviderMapBuilder providerMap;
+    private ImmutableList<Artifact> runtimeJars;
+    private ImmutableList<String> javaConstraints;
     private boolean neverlink;
     private Location location = Location.BUILTIN;
 
@@ -528,16 +511,31 @@ public final class JavaInfo extends NativeInfo {
     }
 
     public static Builder create() {
-      return new Builder(new TransitiveInfoProviderMapBuilder());
+      return new Builder(new TransitiveInfoProviderMapBuilder())
+          .setRuntimeJars(ImmutableList.of())
+          .setJavaConstraints(ImmutableList.of());
     }
 
     public static Builder copyOf(JavaInfo javaInfo) {
-      return new Builder(
-          new TransitiveInfoProviderMapBuilder().addAll(javaInfo.getProviders()));
+      return new Builder(new TransitiveInfoProviderMapBuilder().addAll(javaInfo.getProviders()))
+          .setRuntimeJars(javaInfo.getDirectRuntimeJars())
+          .setNeverlink(javaInfo.isNeverlink())
+          .setJavaConstraints(javaInfo.getJavaConstraints())
+          .setLocation(javaInfo.getCreationLoc());
+    }
+
+    public Builder setRuntimeJars(ImmutableList<Artifact> runtimeJars) {
+      this.runtimeJars = runtimeJars;
+      return this;
     }
 
     public Builder setNeverlink(boolean neverlink) {
       this.neverlink = neverlink;
+      return this;
+    }
+
+    public Builder setJavaConstraints(ImmutableList<String> javaConstraints) {
+      this.javaConstraints = javaConstraints;
       return this;
     }
 
@@ -554,7 +552,8 @@ public final class JavaInfo extends NativeInfo {
     }
 
     public JavaInfo build() {
-      return new JavaInfo(providerMap.build(), neverlink, location);
+      return new JavaInfo(providerMap.build(), runtimeJars, neverlink, javaConstraints, location);
     }
   }
 }
+

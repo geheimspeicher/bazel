@@ -14,123 +14,78 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
-import com.google.common.base.Preconditions;
-import com.google.devtools.build.lib.rules.cpp.CcLinkParams.Builder;
+import com.google.common.base.Function;
+import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
 
-/**
- * A cache of C link parameters.
- *
- * <p>The cache holds instances of {@link CcLinkParams} for combinations of
- * linkingStatically and linkShared. If a requested value is not available in
- * the cache, it is computed and then stored.
- *
- * <p>Typically this class is used on targets that may be linked in as C
- * libraries as in the following example:
- *
- * <pre>
- * class SomeTarget implements CcLinkParamsInfo {
- *   private final CcLinkParamsStore ccLinkParamsStore = new CcLinkParamsStore() {
- *     @Override
- *     protected void collect(CcLinkParams.Builder builder, boolean linkingStatically,
- *                            boolean linkShared) {
- *       builder.add[...]
- *     }
- *   };
- *
- *   @Override
- *   public CcLinkParams getCcLinkParams(boolean linkingStatically, boolean linkShared) {
- *     return ccLinkParamsStore.get(linkingStatically, linkShared);
- *   }
- * }
- * </pre>
- */
-public abstract class CcLinkParamsStore {
+/** An implementation class for the AbstractCcLinkParamsStore. */
+@AutoCodec
+public final class CcLinkParamsStore extends AbstractCcLinkParamsStore {
+  public static final ObjectCodec<com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore> CODEC =
+      new CcLinkParamsStore_AutoCodec();
+  public static final Function<TransitiveInfoCollection, AbstractCcLinkParamsStore> TO_LINK_PARAMS =
+      input -> {
+        // ... then try Skylark.
+        CcLinkingInfo provider = input.get(CcLinkingInfo.PROVIDER);
+        return provider == null ? null : provider.getCcLinkParamsStore();
+      };
 
-  private CcLinkParams staticSharedParams;
-  private CcLinkParams staticNoSharedParams;
-  private CcLinkParams noStaticSharedParams;
-  private CcLinkParams noStaticNoSharedParams;
+  @AutoCodec
+  @VisibleForSerialization
+  static class CcLinkParamsInfoCollection extends AbstractCcLinkParamsStore {
+    private final Iterable<com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore>
+        ccLinkParamStores;
 
-  private CcLinkParams compute(boolean linkingStatically, boolean linkShared) {
-    CcLinkParams.Builder builder = CcLinkParams.builder(linkingStatically, linkShared);
-    collect(builder, linkingStatically, linkShared);
-    return builder.build();
-  }
-
-  /**
-   * Returns {@link CcLinkParams} for a combination of parameters.
-   *
-   * <p>The {@link CcLinkParams} instance is computed lazily and cached.
-   */
-  public synchronized CcLinkParams get(boolean linkingStatically, boolean linkShared) {
-    CcLinkParams result = lookup(linkingStatically, linkShared);
-    if (result == null) {
-      result = compute(linkingStatically, linkShared);
-      put(linkingStatically, linkShared, result);
+    CcLinkParamsInfoCollection(
+        Iterable<com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore> ccLinkParamStores) {
+      this.ccLinkParamStores = ccLinkParamStores;
     }
-    return result;
-  }
 
-  private CcLinkParams lookup(boolean linkingStatically, boolean linkShared) {
-    if (linkingStatically) {
-      return linkShared ? staticSharedParams : staticNoSharedParams;
-    } else {
-      return linkShared ? noStaticSharedParams : noStaticNoSharedParams;
-    }
-  }
-
-  private void put(boolean linkingStatically, boolean linkShared, CcLinkParams params) {
-    Preconditions.checkNotNull(params);
-    if (linkingStatically) {
-      if (linkShared) {
-        staticSharedParams = params;
-      } else {
-        staticNoSharedParams = params;
-      }
-    } else {
-      if (linkShared) {
-        noStaticSharedParams = params;
-      } else {
-        noStaticNoSharedParams = params;
+    @Override
+    protected void collect(
+        CcLinkParams.Builder builder, boolean linkingStatically, boolean linkShared) {
+      for (com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore ccLinkParamsStore :
+          ccLinkParamStores) {
+        builder.add(ccLinkParamsStore);
       }
     }
   }
 
-  /**
-   * Hook for building the actual link params.
-   *
-   * <p>Users should override this method and call methods of the builder to
-   * set up the actual CcLinkParams objects.
-   *
-   * <p>Implementations of this method must not fail or try to report errors on the
-   * configured target.
-   */
-  protected abstract void collect(CcLinkParams.Builder builder, boolean linkingStatically,
-                                  boolean linkShared);
+  public CcLinkParamsStore(AbstractCcLinkParamsStore store) {
+    this(
+        store.get(true, true),
+        store.get(true, false),
+        store.get(false, true),
+        store.get(false, false));
+  }
 
-  /**
-   * An empty CcLinkParamStore.
-   */
-  public static final CcLinkParamsStore EMPTY = new CcLinkParamsStore() {
+  @VisibleForSerialization
+  @AutoCodec.Instantiator
+  public CcLinkParamsStore(
+      CcLinkParams staticSharedParams,
+      CcLinkParams staticNoSharedParams,
+      CcLinkParams noStaticSharedParams,
+      CcLinkParams noStaticNoSharedParams) {
+    super.staticSharedParams = staticSharedParams;
+    super.staticNoSharedParams = staticNoSharedParams;
+    super.noStaticSharedParams = noStaticSharedParams;
+    super.noStaticNoSharedParams = noStaticNoSharedParams;
+  }
 
-    @Override
-    protected void collect(Builder builder, boolean linkingStatically, boolean linkShared) {}
-  };
+  public static com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore merge(
+      final Iterable<com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore> providers) {
+    return new com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore(
+        new CcLinkParamsInfoCollection(providers));
+  }
 
-  /**
-   * An implementation class for the CcLinkParamsStore.
-   */
-  public static final class CcLinkParamsStoreImpl extends CcLinkParamsStore {
+  @Override
+  protected void collect(
+      CcLinkParams.Builder builder, boolean linkingStatically, boolean linkShared) {}
 
-    public CcLinkParamsStoreImpl(CcLinkParamsStore store) {
-      super.staticSharedParams = store.get(true, true);
-      super.staticNoSharedParams = store.get(true, false);
-      super.noStaticSharedParams = store.get(false, true);
-      super.noStaticNoSharedParams = store.get(false, false);
-    }
-
-    @Override
-    protected void collect(Builder builder, boolean linkingStatically, boolean linkShared) {}
+  /** Returns link parameters given static / shared linking settings. */
+  public CcLinkParams getCcLinkParams(boolean linkingStatically, boolean linkShared) {
+    return get(linkingStatically, linkShared);
   }
 }
-

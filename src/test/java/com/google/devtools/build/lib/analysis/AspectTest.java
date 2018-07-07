@@ -25,8 +25,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
-import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestCase;
 import com.google.devtools.build.lib.analysis.util.MockRule;
@@ -45,7 +45,7 @@ import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.Attribute.LateBoundDefault;
 import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.skyframe.AspectValue;
-import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndTarget;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.Root;
@@ -409,16 +409,25 @@ public class AspectTest extends AnalysisTestCase {
    * Rule definitions to be used in emptyAspectAttributesAreAvailableInRuleContext().
    */
   public static class EmptyAspectAttributesAreAvailableInRuleContext {
-    public static final MockRule TEST_RULE = () ->
-        MockRule.ancestor(TestAspects.BASE_RULE.getClass()).factory(DummyRuleFactory.class).define(
-            "testrule",
-            (builder, env) ->
-                builder
-                    .add(attr("foo", LABEL_LIST).legacyAllowAnyFileType()
-                        .aspect(new AspectWithEmptyLateBoundAttribute())));
+    public static final MockRule TEST_RULE =
+        () ->
+            MockRule.ancestor(TestAspects.BASE_RULE.getClass())
+                .factory(DummyRuleFactory.class)
+                .define(
+                    "testrule",
+                    (builder, env) ->
+                        builder.add(
+                            attr("foo", LABEL_LIST)
+                                .legacyAllowAnyFileType()
+                                .aspect(AspectWithEmptyLateBoundAttribute.INSTANCE)));
 
     public static class AspectWithEmptyLateBoundAttribute extends NativeAspectClass
       implements ConfiguredAspectFactory {
+      static final AspectWithEmptyLateBoundAttribute INSTANCE =
+          new AspectWithEmptyLateBoundAttribute();
+
+      private AspectWithEmptyLateBoundAttribute() {}
+
       @Override
       public AspectDefinition getDefinition(AspectParameters params) {
         return new AspectDefinition.Builder(this)
@@ -428,8 +437,8 @@ public class AspectTest extends AnalysisTestCase {
 
       @Override
       public ConfiguredAspect create(
-          ConfiguredTargetAndTarget ctatBase, RuleContext ruleContext, AspectParameters parameters)
-          throws InterruptedException {
+          ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+          throws InterruptedException, ActionConflictException {
         Object lateBoundPrereq = ruleContext.getPrerequisite(":late", TARGET);
         return new ConfiguredAspect.Builder(this, parameters, ruleContext)
             .addProvider(
@@ -449,8 +458,13 @@ public class AspectTest extends AnalysisTestCase {
    */
   @Test
   public void emptyAspectAttributesAreAvailableInRuleContext() throws Exception {
-    setRulesAvailableInTests(TestAspects.BASE_RULE,
-        EmptyAspectAttributesAreAvailableInRuleContext.TEST_RULE);
+    setRulesAndAspectsAvailableInTests(
+        ImmutableList.of(
+            TestAspects.SIMPLE_ASPECT,
+            EmptyAspectAttributesAreAvailableInRuleContext.AspectWithEmptyLateBoundAttribute
+                .INSTANCE),
+        ImmutableList.of(
+            TestAspects.BASE_RULE, EmptyAspectAttributesAreAvailableInRuleContext.TEST_RULE));
     pkg("a",
         "testrule(name='a', foo=[':b'])",
         "testrule(name='b')");
@@ -462,19 +476,30 @@ public class AspectTest extends AnalysisTestCase {
    * Rule definitions to be used in extraActionsAreEmitted().
    */
   public static class ExtraActionsAreEmitted {
-    public static final MockRule TEST_RULE = () ->
-        MockRule.ancestor(TestAspects.BASE_RULE.getClass()).factory(DummyRuleFactory.class).define(
-            "testrule",
-            (builder, env) ->
-                builder
-                    .add(attr("foo", LABEL_LIST).legacyAllowAnyFileType()
-                        .aspect(new AspectThatRegistersAction()))
-                    .add(attr(":action_listener", LABEL_LIST)
-                        .cfg(HostTransition.INSTANCE)
-                        .value(ACTION_LISTENER)));
+    public static final MockRule TEST_RULE =
+        () ->
+            MockRule.ancestor(TestAspects.BASE_RULE.getClass())
+                .factory(DummyRuleFactory.class)
+                .define(
+                    "testrule",
+                    (builder, env) ->
+                        builder
+                            .add(
+                                attr("foo", LABEL_LIST)
+                                    .legacyAllowAnyFileType()
+                                    .aspect(AspectThatRegistersAction.INSTANCE))
+                            .add(
+                                attr(":action_listener", LABEL_LIST)
+                                    .cfg(HostTransition.INSTANCE)
+                                    .value(ACTION_LISTENER)));
 
     public static class AspectThatRegistersAction extends NativeAspectClass
       implements ConfiguredAspectFactory {
+
+      static final AspectThatRegistersAction INSTANCE = new AspectThatRegistersAction();
+
+      private AspectThatRegistersAction() {}
+
       @Override
       public AspectDefinition getDefinition(AspectParameters params) {
         return new AspectDefinition.Builder(this).build();
@@ -482,8 +507,8 @@ public class AspectTest extends AnalysisTestCase {
 
       @Override
       public ConfiguredAspect create(
-          ConfiguredTargetAndTarget ctatBase, RuleContext ruleContext, AspectParameters parameters)
-          throws InterruptedException {
+          ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+          throws InterruptedException, ActionConflictException {
         ruleContext.registerAction(new NullAction(ruleContext.createOutputArtifact()));
         return new ConfiguredAspect.Builder(this, parameters, ruleContext).build();
       }
@@ -500,7 +525,10 @@ public class AspectTest extends AnalysisTestCase {
    */
   @Test
   public void extraActionsAreEmitted() throws Exception {
-    setRulesAvailableInTests(TestAspects.BASE_RULE, ExtraActionsAreEmitted.TEST_RULE);
+    setRulesAndAspectsAvailableInTests(
+        ImmutableList.of(
+            TestAspects.SIMPLE_ASPECT, ExtraActionsAreEmitted.AspectThatRegistersAction.INSTANCE),
+        ImmutableList.of(TestAspects.BASE_RULE, ExtraActionsAreEmitted.TEST_RULE));
     useConfiguration("--experimental_action_listener=//extra_actions:listener");
     scratch.file(
         "extra_actions/BUILD",
@@ -582,7 +610,7 @@ public class AspectTest extends AnalysisTestCase {
 
     // Sanity check: //x:d injects an aspect which produces some extra-action.
     {
-      BuildView.AnalysisResult analysisResult = update("//x:d");
+      AnalysisResult analysisResult = update("//x:d");
 
       // Get owners of all extra-action artifacts.
       List<Label> extraArtifactOwners = new ArrayList<>();
@@ -596,7 +624,7 @@ public class AspectTest extends AnalysisTestCase {
 
     // Actual test: //x:a reports actions registered by the aspect it injects.
     {
-      BuildView.AnalysisResult analysisResult = update("//x:a");
+      AnalysisResult analysisResult = update("//x:a");
 
       // Get owners of all extra-action artifacts.
       List<Label> extraArtifactOwners = new ArrayList<>();
@@ -809,4 +837,22 @@ public class AspectTest extends AnalysisTestCase {
         .isNull();
   }
 
+  @Test
+  public void duplicateAspectsDeduped() throws Exception {
+    AspectApplyingToFiles aspectApplyingToFiles = new AspectApplyingToFiles();
+    setRulesAndAspectsAvailableInTests(
+        ImmutableList.<NativeAspectClass>of(aspectApplyingToFiles),
+        ImmutableList.<RuleDefinition>of());
+    pkg("a", "java_binary(name = 'x', main_class = 'x.FooBar', srcs = ['x.java'])");
+    AnalysisResult analysisResult =
+        update(
+            new EventBus(),
+            defaultFlags(),
+            ImmutableList.of(aspectApplyingToFiles.getName(), aspectApplyingToFiles.getName()),
+            "//a:x_deploy.jar");
+    AspectValue aspect = Iterables.getOnlyElement(analysisResult.getAspects());
+    AspectApplyingToFiles.Provider provider =
+        aspect.getConfiguredAspect().getProvider(AspectApplyingToFiles.Provider.class);
+    assertThat(provider.getLabel()).isEqualTo(Label.parseAbsoluteUnchecked("//a:x_deploy.jar"));
+  }
 }

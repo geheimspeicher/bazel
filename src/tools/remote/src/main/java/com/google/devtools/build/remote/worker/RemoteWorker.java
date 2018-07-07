@@ -24,23 +24,28 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.ByteStreams;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.devtools.build.lib.remote.DigestUtil;
+import com.google.common.util.concurrent.ListeningScheduledExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.remote.RemoteOptions;
+import com.google.devtools.build.lib.remote.RemoteRetrier;
+import com.google.devtools.build.lib.remote.Retrier;
 import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
 import com.google.devtools.build.lib.remote.SimpleBlobStoreFactory;
-import com.google.devtools.build.lib.remote.TracingMetadataUtils;
 import com.google.devtools.build.lib.remote.blobstore.ConcurrentMapBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.OnDiskBlobStore;
 import com.google.devtools.build.lib.remote.blobstore.SimpleBlobStore;
-import com.google.devtools.build.lib.runtime.LinuxSandboxUtil;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
+import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
+import com.google.devtools.build.lib.sandbox.LinuxSandboxUtil;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.CommandResult;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.util.ProcessUtils;
 import com.google.devtools.build.lib.util.SingleLineFormatter;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
+import com.google.devtools.build.lib.vfs.DigestHashFunction.DigestFunctionConverter;
 import com.google.devtools.build.lib.vfs.FileSystem;
-import com.google.devtools.build.lib.vfs.FileSystem.HashFunction;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.JavaIoFileSystem;
 import com.google.devtools.build.lib.vfs.Path;
@@ -66,6 +71,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -88,11 +94,11 @@ public final class RemoteWorker {
   private final ExecutionImplBase execServer;
 
   static FileSystem getFileSystem() {
-    final HashFunction hashFunction;
+    final DigestHashFunction hashFunction;
     String value = null;
     try {
       value = System.getProperty("bazel.DigestFunction", "SHA256");
-      hashFunction = new HashFunction.Converter().convert(value);
+      hashFunction = new DigestFunctionConverter().convert(value);
     } catch (OptionsParsingException e) {
       throw new Error("The specified hash function '" + value + "' is not supported.");
     }
@@ -203,7 +209,7 @@ public final class RemoteWorker {
         .getMulticastConfig()
         .setEnabled(false);
     HazelcastInstance instance = Hazelcast.newHazelcastInstance(config);
-    return new ConcurrentMapBlobStore(instance.<String, byte[]>getMap("cache"));
+    return new ConcurrentMapBlobStore(instance.getMap("cache"));
   }
 
   public static void main(String[] args) throws Exception {
@@ -267,18 +273,28 @@ public final class RemoteWorker {
       blobStore = new ConcurrentMapBlobStore(new ConcurrentHashMap<String, byte[]>());
     }
 
+    ListeningScheduledExecutorService retryService =
+        MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
+
+    RemoteRetrier retrier =
+        new RemoteRetrier(
+            remoteOptions,
+            RemoteRetrier.RETRIABLE_GRPC_ERRORS,
+            retryService,
+            Retrier.ALLOW_ALL_CALLS);
     DigestUtil digestUtil = new DigestUtil(fs.getDigestFunction());
     RemoteWorker worker =
         new RemoteWorker(
             fs,
             remoteWorkerOptions,
-            new SimpleBlobStoreActionCache(blobStore, digestUtil),
+            new SimpleBlobStoreActionCache(remoteOptions, blobStore, retrier, digestUtil),
             sandboxPath,
             digestUtil);
 
     final Server server = worker.startServer();
     worker.createPidFile();
     server.awaitTermination();
+    retryService.shutdownNow();
   }
 
   private static Path prepareSandboxRunner(FileSystem fs, RemoteWorkerOptions remoteWorkerOptions) {
@@ -315,10 +331,10 @@ public final class RemoteWorker {
     CommandResult cmdResult = null;
     Command cmd =
         new Command(
-            LinuxSandboxUtil.commandLineBuilder(
-                    sandboxPath.getPathString(), ImmutableList.of("true"))
-                .buildAsArray(),
-            ImmutableMap.<String, String>of(),
+            LinuxSandboxUtil.commandLineBuilder(sandboxPath, ImmutableList.of("true"))
+                .build()
+                .toArray(new String[0]),
+            ImmutableMap.of(),
             sandboxPath.getParentDirectory().getPathFile());
     try {
       cmdResult = cmd.execute();

@@ -231,7 +231,7 @@ function test_packages_cleared() {
   package_count="$(extract_histogram_count "$histo_file" \
       'devtools\.build\.lib\..*\.Package$')"
   # A few packages aren't cleared.
-  [[ "$package_count" -le 8 ]] \
+  [[ "$package_count" -le 10 ]] \
       || fail "package count $package_count too high"
   glob_count="$(extract_histogram_count "$histo_file" "GlobValue$")"
   [[ "$glob_count" -le 1 ]] \
@@ -252,10 +252,6 @@ function test_packages_cleared() {
        '\.InMemoryNodeEntry')"
   [[ "$node_entry_count" -le 10 ]] \
       || fail "Too many ($node_entry_count) InMemoryNodeEntry instances found in build discarding edges"
-}
-
-function test_actions_deleted_after_execution() {
-  run_test_actions_deleted_after_execution bazel "$bazel_javabase" '' ''
 }
 
 # Action conflicts can cause deletion of nodes, and deletion is tricky with no edges.
@@ -361,14 +357,22 @@ function test_packages_cleared_implicit_noincrementality_data() {
   BUILD_FLAGS="$old_build_flags"
 }
 
-function test_actions_deleted_after_execution_nobatch_keep_analysis () {
-  readonly local old_startup_flags="$STARTUP_FLAGS"
-  STARTUP_FLAGS="--nobatch"
-  readonly local old_build_flags="$BUILD_FLAGS"
-  BUILD_FLAGS="--notrack_incremental_state"
-  test_actions_deleted_after_execution
-  STARTUP_FLAGS="$old_startup_flags"
-  BUILD_FLAGS="$old_build_flags"
+function test_actions_not_deleted_after_execution() {
+  mkdir -p foo || fail "Couldn't mkdir"
+  cat > foo/BUILD <<'EOF' || fail "Couldn't write file"
+genrule(name = "foo", cmd = "touch $@", outs = ["foo.out"])
+EOF
+
+  bazel build $BUILD_FLAGS //foo:foo \
+      >& "$TEST_log" || fail "Expected success"
+  "${bazel_javabase}/bin/jmap" -histo:live "$(bazel info server_pid)" > histo.txt
+  genrule_action_count="$(extract_histogram_count histo.txt \
+        'GenRuleAction$')"
+  if [[ "$genrule_action_count" -lt 1 ]]; then
+    cat histo.txt >> "$TEST_log"
+    fail "GenRuleAction unexpectedly not found: $genrule_action_count"
+  fi
+
 }
 
 function test_dump_after_discard_incrementality_data() {

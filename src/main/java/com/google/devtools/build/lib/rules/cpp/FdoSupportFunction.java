@@ -57,17 +57,18 @@ public class FdoSupportFunction implements SkyFunction {
 
     Path execRoot = directories.getExecRoot(workspaceNameValue.getName());
     FdoSupportValue.Key key = (FdoSupportValue.Key) skyKey.argument();
+    Path fdoZip =
+        key.getFdoZip() == null ? null : directories.getWorkspace().getRelative(key.getFdoZip());
     FdoSupport fdoSupport;
     try {
       fdoSupport =
           FdoSupport.create(
               env,
               key.getFdoInstrument(),
-              key.getFdoZip(),
-              key.getLipoMode(),
-              key.getLLVMFdo(),
+              fdoZip,
               execRoot,
-              directories.getProductName());
+              directories.getProductName(),
+              key.getFdoMode());
       if (env.valuesMissing()) {
         return null;
       }

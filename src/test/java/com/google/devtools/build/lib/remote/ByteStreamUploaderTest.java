@@ -27,7 +27,9 @@ import com.google.common.util.concurrent.ListeningScheduledExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.remote.Retrier.RetryException;
-import com.google.devtools.build.lib.vfs.FileSystem.HashFunction;
+import com.google.devtools.build.lib.remote.util.DigestUtil;
+import com.google.devtools.build.lib.remote.util.TracingMetadataUtils;
+import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.remoteexecution.v1test.Digest;
 import com.google.devtools.remoteexecution.v1test.RequestMetadata;
 import com.google.protobuf.ByteString;
@@ -63,7 +65,9 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.After;
+import org.junit.AfterClass;
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -77,20 +81,25 @@ import org.mockito.MockitoAnnotations;
 @RunWith(JUnit4.class)
 public class ByteStreamUploaderTest {
 
-  private static final DigestUtil DIGEST_UTIL = new DigestUtil(HashFunction.SHA256);
+  private static final DigestUtil DIGEST_UTIL = new DigestUtil(DigestHashFunction.SHA256);
 
   private static final int CHUNK_SIZE = 10;
   private static final String INSTANCE_NAME = "foo";
 
   private final MutableHandlerRegistry serviceRegistry = new MutableHandlerRegistry();
-  private final ListeningScheduledExecutorService retryService =
-      MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
+  private static ListeningScheduledExecutorService retryService;
 
   private Server server;
   private Channel channel;
   private Context withEmptyMetadata;
+  private Context prevContext;
 
   @Mock private Retrier.Backoff mockBackoff;
+
+  @BeforeClass
+  public static void beforeEverything() {
+    retryService = MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
+  }
 
   @Before
   public final void setUp() throws Exception {
@@ -105,22 +114,30 @@ public class ByteStreamUploaderTest {
             "none", "none", DIGEST_UTIL.asActionKey(Digest.getDefaultInstance()));
     // Needs to be repeated in every test that uses the timeout setting, since the tests run
     // on different threads than the setUp.
-    withEmptyMetadata.attach();
+    prevContext = withEmptyMetadata.attach();
   }
 
   @After
   public void tearDown() throws Exception {
+    // Needs to be repeated in every test that uses the timeout setting, since the tests run
+    // on different threads than the tearDown.
+    withEmptyMetadata.detach(prevContext);
+
     server.shutdownNow();
+    server.awaitTermination();
+  }
+
+  @AfterClass
+  public static void afterEverything() {
     retryService.shutdownNow();
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void singleBlobUploadShouldWork() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> mockBackoff, (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(() -> mockBackoff, (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     byte[] blob = new byte[CHUNK_SIZE * 2 + 1];
     new Random().nextBytes(blob);
@@ -182,17 +199,19 @@ public class ByteStreamUploaderTest {
     Mockito.verifyZeroInteractions(mockBackoff);
 
     blockUntilInternalStateConsistent(uploader);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 20000)
+  @Test
   public void multipleBlobsUploadShouldWork() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> new FixedBackoff(1, 0), (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(
+            () -> new FixedBackoff(1, 0), (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
-    int numUploads = 100;
+    int numUploads = 10;
     Map<String, byte[]> blobsByHash = new HashMap<>();
     List<Chunker> builders = new ArrayList<>(numUploads);
     Random rand = new Random();
@@ -271,17 +290,19 @@ public class ByteStreamUploaderTest {
     uploader.uploadBlobs(builders);
 
     blockUntilInternalStateConsistent(uploader);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 20000)
+  @Test
   public void contextShouldBePreservedUponRetries() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     // We upload blobs with different context, and retry 3 times for each upload.
     // We verify that the correct metadata is passed to the server with every blob.
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> new FixedBackoff(3, 0), (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(
+            () -> new FixedBackoff(5, 0), (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     List<String> toUpload = ImmutableList.of("aaaaaaaaaa", "bbbbbbbbbb", "cccccccccc");
     List<Chunker> builders = new ArrayList<>(toUpload.size());
@@ -361,17 +382,18 @@ public class ByteStreamUploaderTest {
     }
 
     blockUntilInternalStateConsistent(uploader);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void sameBlobShouldNotBeUploadedTwice() throws Exception {
     // Test that uploading the same file concurrently triggers only one file upload.
 
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> mockBackoff, (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(() -> mockBackoff, (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     byte[] blob = new byte[CHUNK_SIZE * 10];
     Chunker chunker = new Chunker(blob, CHUNK_SIZE, DIGEST_UTIL);
@@ -423,15 +445,17 @@ public class ByteStreamUploaderTest {
     upload1.get();
 
     assertThat(numWriteCalls.get()).isEqualTo(1);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void errorsShouldBeReported() throws IOException, InterruptedException {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> new FixedBackoff(1, 10), (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(
+            () -> new FixedBackoff(1, 10), (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     byte[] blob = new byte[CHUNK_SIZE];
     Chunker chunker = new Chunker(blob, CHUNK_SIZE, DIGEST_UTIL);
@@ -451,37 +475,42 @@ public class ByteStreamUploaderTest {
       assertThat(e.getAttempts()).isEqualTo(2);
       assertThat(RemoteRetrierUtils.causedByStatus(e, Code.INTERNAL)).isTrue();
     }
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void shutdownShouldCancelOngoingUploads() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> new FixedBackoff(1, 10), (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(
+            () -> new FixedBackoff(1, 10), (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     CountDownLatch cancellations = new CountDownLatch(2);
 
     ServerServiceDefinition service =
         ServerServiceDefinition.builder(ByteStreamGrpc.SERVICE_NAME)
-        .addMethod(ByteStreamGrpc.METHOD_WRITE,
-            new ServerCallHandler<WriteRequest, WriteResponse>() {
-              @Override
-              public Listener<WriteRequest> startCall(ServerCall<WriteRequest, WriteResponse> call,
-                  Metadata headers) {
-                // Don't request() any messages from the client, so that the client will be blocked
-                // on flow control and thus the call will sit there idle long enough to receive the
-                // cancellation.
-                return new Listener<WriteRequest>() {
+            .addMethod(
+                ByteStreamGrpc.getWriteMethod(),
+                new ServerCallHandler<WriteRequest, WriteResponse>() {
                   @Override
-                  public void onCancel() {
-                    cancellations.countDown();
+                  public Listener<WriteRequest> startCall(
+                      ServerCall<WriteRequest, WriteResponse> call, Metadata headers) {
+                    // Don't request() any messages from the client, so that the client will be
+                    // blocked
+                    // on flow control and thus the call will sit there idle long enough to receive
+                    // the
+                    // cancellation.
+                    return new Listener<WriteRequest>() {
+                      @Override
+                      public void onCancel() {
+                        cancellations.countDown();
+                      }
+                    };
                   }
-                };
-              }
-            })
-        .build();
+                })
+            .build();
 
     serviceRegistry.addService(service);
 
@@ -504,15 +533,19 @@ public class ByteStreamUploaderTest {
     assertThat(f2.isCancelled()).isTrue();
 
     blockUntilInternalStateConsistent(uploader);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void failureInRetryExecutorShouldBeHandled() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
+    ListeningScheduledExecutorService retryService =
+        MoreExecutors.listeningDecorator(Executors.newScheduledThreadPool(1));
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> new FixedBackoff(1, 10), (e) -> true, Retrier.ALLOW_ALL_CALLS);
-    ByteStreamUploader uploader =
-        new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier, retryService);
+        new RemoteRetrier(
+            () -> new FixedBackoff(1, 10), (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
+    ByteStreamUploader uploader = new ByteStreamUploader(INSTANCE_NAME, channel, null, 3, retrier);
 
     serviceRegistry.addService(new ByteStreamImplBase() {
       @Override
@@ -536,15 +569,17 @@ public class ByteStreamUploaderTest {
     } catch (RetryException e) {
       assertThat(e).hasCauseThat().isInstanceOf(RejectedExecutionException.class);
     }
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void resourceNameWithoutInstanceName() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
-        new RemoteRetrier(() -> mockBackoff, (e) -> true, Retrier.ALLOW_ALL_CALLS);
+        new RemoteRetrier(() -> mockBackoff, (e) -> true, retryService, Retrier.ALLOW_ALL_CALLS);
     ByteStreamUploader uploader =
-        new ByteStreamUploader(/* instanceName */ null, channel, null, 3, retrier, retryService);
+        new ByteStreamUploader(/* instanceName */ null, channel, null, 3, retrier);
 
     serviceRegistry.addService(new ByteStreamImplBase() {
       @Override
@@ -574,18 +609,21 @@ public class ByteStreamUploaderTest {
     Chunker chunker = new Chunker(blob, CHUNK_SIZE, DIGEST_UTIL);
 
     uploader.uploadBlob(chunker);
+
+    withEmptyMetadata.detach(prevContext);
   }
 
-  @Test(timeout = 10000)
+  @Test
   public void nonRetryableStatusShouldNotBeRetried() throws Exception {
-    withEmptyMetadata.attach();
+    Context prevContext = withEmptyMetadata.attach();
     RemoteRetrier retrier =
         new RemoteRetrier(
             () -> new FixedBackoff(1, 0),
             /* No Status is retriable. */ (e) -> false,
+            retryService,
             Retrier.ALLOW_ALL_CALLS);
     ByteStreamUploader uploader =
-        new ByteStreamUploader(/* instanceName */ null, channel, null, 3, retrier, retryService);
+        new ByteStreamUploader(/* instanceName */ null, channel, null, 3, retrier);
 
     AtomicInteger numCalls = new AtomicInteger();
 
@@ -607,6 +645,8 @@ public class ByteStreamUploaderTest {
     } catch (RetryException e) {
       assertThat(numCalls.get()).isEqualTo(1);
     }
+
+    withEmptyMetadata.detach(prevContext);
   }
 
   private static class NoopStreamObserver implements StreamObserver<WriteRequest> {

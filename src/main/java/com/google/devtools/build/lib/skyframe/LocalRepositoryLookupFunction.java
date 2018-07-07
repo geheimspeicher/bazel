@@ -16,6 +16,8 @@ package com.google.devtools.build.lib.skyframe;
 import com.google.common.base.Optional;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.FileValue;
+import com.google.devtools.build.lib.actions.InconsistentFilesystemException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
@@ -217,8 +219,7 @@ public class LocalRepositoryLookupFunction implements SkyFunction {
           String path = (String) rule.getAttributeContainer().getAttr("path");
           return Optional.of(
               LocalRepositoryLookupValue.success(
-                  RepositoryName.create("@" + rule.getName()),
-                  PathFragment.create(path).normalize()));
+                  RepositoryName.create("@" + rule.getName()), PathFragment.create(path)));
         } catch (LabelSyntaxException e) {
           // This shouldn't be possible if the rule name is valid, and it should already have been
           // validated.

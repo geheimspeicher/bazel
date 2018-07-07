@@ -16,11 +16,12 @@ package com.google.devtools.build.lib.bazel.rules.android;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
+import com.google.devtools.build.lib.analysis.whitelisting.Whitelist;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaRuleClasses;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.rules.android.AndroidLibraryBaseRule;
 import com.google.devtools.build.lib.rules.android.AndroidRuleClasses;
+import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 
 /**
  * Definition of the {@code android_library} rule for Bazel.
@@ -28,7 +29,7 @@ import com.google.devtools.build.lib.rules.android.AndroidRuleClasses;
 public class BazelAndroidLibraryRule implements RuleDefinition {
 
   @Override
-  public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+  public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
     return builder
         /* <!-- #BLAZE_RULE(android_library).IMPLICIT_OUTPUTS -->
         <ul>
@@ -40,8 +41,13 @@ public class BazelAndroidLibraryRule implements RuleDefinition {
         </ul>
         <!-- #END_BLAZE_RULE.IMPLICIT_OUTPUTS --> */
         .setImplicitOutputsFunction(AndroidRuleClasses.ANDROID_LIBRARY_IMPLICIT_OUTPUTS)
+        .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(env))
+        .add(
+            Whitelist.getAttributeFromWhitelistName("allow_deps_without_srcs")
+                .value(
+                    env.getToolsLabel(
+                        "//tools/android:allow_android_library_deps_without_srcs_whitelist")))
         .build();
-
   }
 
   @Override

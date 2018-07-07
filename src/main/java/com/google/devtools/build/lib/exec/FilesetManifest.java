@@ -15,16 +15,18 @@ package com.google.devtools.build.lib.exec;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
+import com.google.common.io.ByteSource;
 import com.google.common.io.LineProcessor;
-import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.analysis.AnalysisUtils;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -52,27 +54,19 @@ public final class FilesetManifest {
   }
 
   public static FilesetManifest parseManifestFile(
-      Artifact manifest,
-      Path execRoot,
-      String workspaceName,
-      RelativeSymlinkBehavior relSymlinkBehavior)
-          throws IOException {
-    return parseManifestFile(
-        manifest.getExecPath(),
-        execRoot,
-        workspaceName,
-        relSymlinkBehavior);
-  }
-
-  public static FilesetManifest parseManifestFile(
       PathFragment manifest,
       Path execRoot,
       String workspaceName,
       RelativeSymlinkBehavior relSymlinkBehavior)
           throws IOException {
     Path file = execRoot.getRelative(AnalysisUtils.getManifestPathFromFilesetPath(manifest));
-    try {
-      return FileSystemUtils.asByteSource(file).asCharSource(UTF_8)
+    try (InputStream in = file.getInputStream()) {
+      return new ByteSource() {
+        @Override
+        public InputStream openStream() throws IOException {
+          return in;
+        }
+      }.asCharSource(UTF_8)
           .readLines(
               new ManifestLineProcessor(workspaceName, manifest, relSymlinkBehavior));
     } catch (IllegalStateException e) {
@@ -82,14 +76,33 @@ public final class FilesetManifest {
     }
   }
 
+  public static FilesetManifest constructFilesetManifest(
+      List<FilesetOutputSymlink> outputSymlinks,
+      PathFragment targetPrefix,
+      RelativeSymlinkBehavior relSymlinkbehavior)
+      throws IOException {
+    LinkedHashMap<PathFragment, String> entries = new LinkedHashMap<>();
+    Map<PathFragment, String> relativeLinks = new HashMap<>();
+    for (FilesetOutputSymlink outputSymlink : outputSymlinks) {
+      PathFragment fullLocation = targetPrefix.getRelative(outputSymlink.name);
+      String artifact = outputSymlink.target.getPathString();
+      artifact = artifact.isEmpty() ? null : artifact;
+      addSymlinkEntry(artifact, fullLocation, relSymlinkbehavior, entries, relativeLinks);
+    }
+    return constructFilesetManifest(entries, relativeLinks);
+  }
+
   private static final class ManifestLineProcessor implements LineProcessor<FilesetManifest> {
     private final String workspaceName;
     private final PathFragment targetPrefix;
     private final RelativeSymlinkBehavior relSymlinkBehavior;
 
     private int lineNum;
-    private final Map<PathFragment, String> entries = new LinkedHashMap<>();
-    private final Map<PathFragment, String> relativeLinks = new HashMap<>();
+    private final LinkedHashMap<PathFragment, String> entries = new LinkedHashMap<>();
+    // Resolution order of relative links can affect the outcome of the resolution. In particular,
+    // if there's a symlink to a symlink, then resolution fails if the first symlink is resolved
+    // first, but works if the second symlink is resolved first.
+    private final LinkedHashMap<PathFragment, String> relativeLinks = new LinkedHashMap<>();
 
     ManifestLineProcessor(
         String workspaceName,
@@ -134,42 +147,62 @@ public final class FilesetManifest {
       }
 
       PathFragment fullLocation = targetPrefix.getRelative(location);
-      if (!entries.containsKey(fullLocation)) {
-        boolean isRelativeSymlink = artifact != null && !artifact.startsWith("/");
-        if (isRelativeSymlink && relSymlinkBehavior.equals(RelativeSymlinkBehavior.ERROR)) {
-          throw new IOException(String.format("runfiles target is not absolute: %s", artifact));
-        }
-        if (!isRelativeSymlink
-            || relSymlinkBehavior.equals(RelativeSymlinkBehavior.RESOLVE)) {
-          entries.put(fullLocation, artifact);
-          if (artifact != null && !artifact.startsWith("/")) {
-            relativeLinks.put(fullLocation, artifact);
-          }
-        }
-      }
+      addSymlinkEntry(artifact, fullLocation, relSymlinkBehavior, entries, relativeLinks);
       return true;
     }
 
     @Override
     public FilesetManifest getResult() {
-      // Resolve relative symlinks if possible. Note that relativeLinks only contains entries in
-      // RESOLVE mode.
-      for (Map.Entry<PathFragment, String> e : relativeLinks.entrySet()) {
-        PathFragment location = e.getKey();
-        String value = e.getValue();
-        PathFragment actualLocation = location.getParentDirectory().getRelative(value);
-        String actual = entries.get(actualLocation);
-        boolean isActualAcceptable = actual == null || actual.startsWith("/");
-        if (!entries.containsKey(actualLocation) || !isActualAcceptable) {
-          throw new IllegalStateException(
-              String.format(
-                  "runfiles target '%s' is not absolute, and could not be resolved in the same "
-                  + "Fileset", value));
-        }
-        entries.put(location, actual);
-      }
-      return new FilesetManifest(entries);
+      return constructFilesetManifest(entries, relativeLinks);
     }
+  }
+
+  private static void addSymlinkEntry(
+      String artifact,
+      PathFragment fullLocation,
+      RelativeSymlinkBehavior relSymlinkBehavior,
+      LinkedHashMap<PathFragment, String> entries,
+      Map<PathFragment, String> relativeLinks)
+      throws IOException {
+    if (!entries.containsKey(fullLocation)) {
+      boolean isRelativeSymlink = artifact != null && !artifact.startsWith("/");
+      if (isRelativeSymlink && relSymlinkBehavior.equals(RelativeSymlinkBehavior.ERROR)) {
+        throw new IOException(String.format("runfiles target is not absolute: %s", artifact));
+      }
+      if (!isRelativeSymlink || relSymlinkBehavior.equals(RelativeSymlinkBehavior.RESOLVE)) {
+        entries.put(fullLocation, artifact);
+        if (artifact != null && !artifact.startsWith("/")) {
+          relativeLinks.put(fullLocation, artifact);
+        }
+      }
+    }
+  }
+
+  private static FilesetManifest constructFilesetManifest(
+      Map<PathFragment, String> entries, Map<PathFragment, String> relativeLinks) {
+    // Resolve relative symlinks if possible. Note that relativeLinks only contains entries in
+    // RESOLVE mode.
+    for (Map.Entry<PathFragment, String> e : relativeLinks.entrySet()) {
+      PathFragment location = e.getKey();
+      String value = e.getValue();
+      PathFragment actualLocation = location.getParentDirectory().getRelative(value);
+      String actual = entries.get(actualLocation);
+      if (actual == null) {
+        throw new IllegalStateException(
+            String.format(
+                "runfiles target '%s' is a relative symlink, and could not be resolved within the "
+                    + "same Fileset",
+                value));
+      }
+      if (!actual.startsWith("/")) {
+        throw new IllegalStateException(
+            String.format(
+                "runfiles target '%s' is a relative symlink, and points to another symlink",
+                value));
+      }
+      entries.put(location, actual);
+    }
+    return new FilesetManifest(entries);
   }
 
   private final Map<PathFragment, String> entries;

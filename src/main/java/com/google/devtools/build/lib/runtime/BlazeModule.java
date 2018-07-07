@@ -14,10 +14,12 @@
 package com.google.devtools.build.lib.runtime;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
+import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.clock.Clock;
@@ -27,11 +29,11 @@ import com.google.devtools.build.lib.packages.NoSuchThingException;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
-import com.google.devtools.build.lib.skyframe.OutputService;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.build.lib.vfs.FileSystem;
+import com.google.devtools.build.lib.vfs.OutputService;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsClassProvider;
@@ -213,6 +215,15 @@ public abstract class BlazeModule {
   }
 
   /**
+   * Returns an instance of BuildOptions to be used to create {@link
+   * BuildOptions.OptionsDiffForReconstruction} with. Only one installed Module should override
+   * this.
+   */
+  public BuildOptions getDefaultBuildOptions(BlazeRuntime runtime) {
+    return null;
+  }
+
+  /**
    * Called when Bazel initializes the action execution subsystem. This is called once per build if
    * action execution is enabled. Modules can override this method to affect how execution is
    * performed.
@@ -221,8 +232,8 @@ public abstract class BlazeModule {
    * @param request the build request
    * @param builder the builder to add action context providers and consumers to
    */
-  public void executorInit(CommandEnvironment env, BuildRequest request, ExecutorBuilder builder) {
-  }
+  public void executorInit(CommandEnvironment env, BuildRequest request, ExecutorBuilder builder)
+      throws ExecutorInitException {}
 
   /**
    * Called after each command.
@@ -249,18 +260,11 @@ public abstract class BlazeModule {
   public void blazeShutdownOnCrash() {}
 
   /**
-   * Perform module specific check of current command environment.
-   */
-  public void checkEnvironment(CommandEnvironment env) {
-  }
-
-  /**
    * Returns a helper that the {@link PackageFactory} will use during package loading. If the module
    * does not provide any helper, it should return null. Note that only one helper per Bazel/Blaze
    * runtime is allowed.
    */
-  public Package.Builder.Helper getPackageBuilderHelper(RuleClassProvider ruleClassProvider,
-      FileSystem fs) {
+  public Package.Builder.Helper getPackageBuilderHelper(RuleClassProvider ruleClassProvider) {
     return null;
   }
 
@@ -305,5 +309,10 @@ public abstract class BlazeModule {
 
   public ImmutableList<PrecomputedValue.Injected> getPrecomputedValues() {
     return ImmutableList.of();
+  }
+
+  @Override
+  public String toString() {
+    return this.getClass().getSimpleName();
   }
 }

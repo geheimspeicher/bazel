@@ -14,6 +14,7 @@
 
 package com.google.devtools.build.lib.actions;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
 import java.util.List;
 
@@ -28,10 +29,13 @@ public interface CommandAction extends Action, ExecutionInfoSpecifier {
 
   /** 
    * Returns a map of command line variables to their values that constitute the environment
-   * in which this action should be run.
+   * in which this action should be run. This excludes any inherited environment variables, as this
+   * method does not provide access to the client environment.
    */
-  ImmutableMap<String, String> getEnvironment();
+  @VisibleForTesting
+  ImmutableMap<String, String> getIncompleteEnvironmentForTesting();
 
   /** Returns inputs to this action, including inputs that may be pruned. */
+  @VisibleForTesting // productionVisibility = Visibility.PRIVATE
   Iterable<Artifact> getPossibleInputsForTesting();
 }

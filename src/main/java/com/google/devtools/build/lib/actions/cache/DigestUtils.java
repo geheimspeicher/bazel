@@ -13,12 +13,14 @@
 // limitations under the License.
 package com.google.devtools.build.lib.actions.cache;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheStats;
 import com.google.common.io.BaseEncoding;
 import com.google.common.primitives.Longs;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
@@ -57,6 +59,11 @@ public class DigestUtils {
   // Object to synchronize on when serializing large file reads.
   private static final Object DIGEST_LOCK = new Object();
   private static final AtomicBoolean MULTI_THREADED_DIGEST = new AtomicBoolean(false);
+
+  // Files of this size or less are assumed to be readable in one seek.
+  // (This is the default readahead window on Linux.)
+  @VisibleForTesting // the unittest is in a different package!
+  public static final int MULTI_THREADED_DIGEST_MAX_FILE_SIZE = 128 * 1024;
 
   // The time that a digest computation has to take at least in order to be considered a slow-read.
   private static final long SLOW_READ_MILLIS = 5000L;
@@ -237,13 +244,11 @@ public class DigestUtils {
 
     // All right, we have neither a fast nor a cached digest. Let's go through the costly process of
     // computing it from the file contents.
-    if (fileSize > 4096 && !MULTI_THREADED_DIGEST.get()) {
-      // We'll have to read file content in order to calculate the digest. In that case
-      // it would be beneficial to serialize those calculations since there is a high
-      // probability that MD5 will be requested for multiple output files simultaneously.
-      // Exception is made for small (<=4K) files since they will not likely to introduce
-      // significant delays (at worst they will result in two extra disk seeks by
-      // interrupting other reads).
+    if (fileSize > MULTI_THREADED_DIGEST_MAX_FILE_SIZE && !MULTI_THREADED_DIGEST.get()) {
+      // We'll have to read file content in order to calculate the digest.
+      // We avoid overlapping this process for multiple large files, as
+      // seeking back and forth between them will result in an overall loss of
+      // throughput.
       digest = getDigestInExclusiveMode(path);
     } else {
       digest = getDigestInternal(path);
@@ -286,15 +291,15 @@ public class DigestUtils {
   }
 
   /**
-   * @param mdMap A collection of (execPath, Metadata) pairs. Values may be null.
+   * @param mdMap A collection of (execPath, FileArtifactValue) pairs. Values may be null.
    * @return an <b>order-independent</b> digest from the given "set" of (path, metadata) pairs.
    */
-  public static Md5Digest fromMetadata(Map<String, Metadata> mdMap) {
+  public static Md5Digest fromMetadata(Map<String, FileArtifactValue> mdMap) {
     byte[] result = new byte[Md5Digest.MD5_SIZE];
     // Profiling showed that MD5 engine instantiation was a hotspot, so create one instance for
     // this computation to amortize its cost.
     Fingerprint fp = new Fingerprint();
-    for (Map.Entry<String, Metadata> entry : mdMap.entrySet()) {
+    for (Map.Entry<String, FileArtifactValue> entry : mdMap.entrySet()) {
       xorWith(result, getDigest(fp, entry.getKey(), entry.getValue()));
     }
     return new Md5Digest(result);
@@ -315,7 +320,7 @@ public class DigestUtils {
     return new Md5Digest(result);
   }
 
-  private static byte[] getDigest(Fingerprint fp, String execPath, Metadata md) {
+  private static byte[] getDigest(Fingerprint fp, String execPath, FileArtifactValue md) {
     fp.addString(execPath);
 
     if (md == null) {

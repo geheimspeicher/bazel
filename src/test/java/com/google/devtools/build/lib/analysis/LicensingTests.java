@@ -457,6 +457,8 @@ public class LicensingTests extends BuildViewTestCase {
         "    name = 'c',",
         "    output_licenses = ['notice'],",
         "    cpu = 'cherry',",
+        "    ar_files = 'ar-cherry',",
+        "    as_files = 'as-cherry',",
         "    compiler_files = 'compile-cherry',",
         "    dwp_files = 'dwp-cherry',",
         "    coverage_files = 'gcov-cherry',",
@@ -498,7 +500,7 @@ public class LicensingTests extends BuildViewTestCase {
     for (int i = 0; i < strings.length; i += 2) {
       String labelStr = strings[i];
       String licStr = strings[i + 1];
-      Label label = Label.parseAbsolute(labelStr);
+      Label label = Label.parseAbsolute(labelStr, ImmutableMap.of());
       List<String> splitLicenses =
           licStr.isEmpty() ? Arrays.<String>asList() : Arrays.asList(licStr.split(","));
       License license = License.parseLicense(splitLicenses);
@@ -544,7 +546,7 @@ public class LicensingTests extends BuildViewTestCase {
     ConfiguredTarget used = getConfiguredTarget("//used");
     Map<Label, License> usedActual =
         Maps.filterKeys(getTransitiveLicenses(used), AnalysisMock.get().ccSupport().labelFilter());
-    Label usedLabel = Label.parseAbsolute("//used");
+    Label usedLabel = Label.parseAbsolute("//used", ImmutableMap.of());
     License license = usedActual.get(usedLabel);
     license.checkCompatibility(EnumSet.of(DistributionType.CLIENT),
         getTarget("//user"), usedLabel, reporter, false);
@@ -568,7 +570,7 @@ public class LicensingTests extends BuildViewTestCase {
     ConfiguredTarget used = getConfiguredTarget("//used");
     Map<Label, License> usedActual =
         Maps.filterKeys(getTransitiveLicenses(used), AnalysisMock.get().ccSupport().labelFilter());
-    Label usedLabel = Label.parseAbsolute("//used");
+    Label usedLabel = Label.parseAbsolute("//used", ImmutableMap.of());
     License license = usedActual.get(usedLabel);
     license.checkCompatibility(EnumSet.of(DistributionType.CLIENT),
         getTarget("//user"), usedLabel, reporter, false);
@@ -650,8 +652,8 @@ public class LicensingTests extends BuildViewTestCase {
 
   @Test
   public void testTargetLicenseEquality() throws Exception {
-    Label label1 = Label.parseAbsolute("//foo");
-    Label label2 = Label.parseAbsolute("//bar");
+    Label label1 = Label.parseAbsolute("//foo", ImmutableMap.of());
+    Label label2 = Label.parseAbsolute("//bar", ImmutableMap.of());
     License restricted = License.parseLicense(ImmutableList.of("restricted"));
     License unencumbered = License.parseLicense(ImmutableList.of("unencumbered"));
     new EqualsTester()

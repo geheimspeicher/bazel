@@ -189,10 +189,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -203,10 +201,33 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
@@ -226,11 +247,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -238,7 +256,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -252,6 +270,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -262,6 +281,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -272,6 +292,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -284,6 +305,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -292,27 +314,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -325,12 +329,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -338,10 +340,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -351,10 +351,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -367,10 +365,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -380,10 +376,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -393,10 +387,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -406,10 +398,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -419,10 +409,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -610,7 +598,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -631,7 +618,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -663,12 +649,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -686,7 +671,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -730,7 +714,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -744,7 +727,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -773,8 +755,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -849,8 +831,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -878,11 +860,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -907,7 +889,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -915,7 +896,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -932,7 +914,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -950,7 +931,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -968,7 +948,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -976,11 +955,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -999,10 +975,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -1019,11 +1012,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -1036,6 +1029,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -1056,7 +1050,8 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
+        flag: "-framework"
+        flag: "Foundation"
       }
     }
   }
@@ -1066,7 +1061,8 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Cocoa"
+        flag: "-framework"
+        flag: "Cocoa"
       }
     }
   }
@@ -1084,11 +1080,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -1106,11 +1100,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -1125,6 +1117,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -1132,13 +1125,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -1179,6 +1217,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -1197,6 +1237,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -1215,6 +1257,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -1233,6 +1277,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -1251,24 +1297,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -1283,6 +1313,8 @@ toolchain {
         flag: "x86_64"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -1313,6 +1345,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -1342,6 +1376,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -1360,6 +1396,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -1408,11 +1446,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -1420,13 +1460,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -1475,11 +1518,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -1487,13 +1532,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -1524,7 +1572,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -1548,7 +1595,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -1565,64 +1633,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -1792,10 +1806,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -1806,18 +1818,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -1838,11 +1873,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -1850,7 +1882,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -1864,6 +1896,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -1874,6 +1907,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -1884,6 +1918,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -1896,6 +1931,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -1904,27 +1940,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -1937,12 +1955,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -1950,10 +1966,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -1963,10 +1977,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -1979,10 +1991,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -1992,10 +2002,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -2005,10 +2013,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -2018,10 +2024,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -2031,10 +2035,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -2222,7 +2224,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -2243,7 +2244,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -2275,12 +2275,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -2298,7 +2297,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -2342,7 +2340,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -2356,7 +2353,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -2385,8 +2381,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -2461,8 +2457,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -2490,11 +2486,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -2519,7 +2515,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -2527,7 +2522,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -2544,7 +2540,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -2562,7 +2557,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -2580,7 +2574,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -2588,11 +2581,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -2611,10 +2601,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -2631,11 +2638,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -2649,6 +2656,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -2669,8 +2677,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -2701,11 +2711,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -2723,11 +2731,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -2742,6 +2748,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -2749,13 +2756,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -2796,6 +2848,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -2814,6 +2868,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -2832,6 +2888,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -2850,6 +2908,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -2868,24 +2928,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -2900,6 +2944,8 @@ toolchain {
         flag: "x86_64"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -2931,6 +2977,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -2961,6 +3009,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -2979,6 +3029,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -3027,11 +3079,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -3039,13 +3093,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -3094,11 +3151,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -3106,13 +3165,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -3143,7 +3205,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -3167,7 +3228,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -3184,64 +3266,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -3345,7 +3373,7 @@ toolchain {
   linker_flag: "-lc++"
   linker_flag: "-no-canonical-prefixes"
   linker_flag: "-target"
-  linker_flag: "i386-apple-ios"
+  linker_flag: "i386-apple-watchos"
   objcopy_embed_flag: "-I"
   objcopy_embed_flag: "binary"
   compilation_mode_flags {
@@ -3411,10 +3439,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -3425,18 +3451,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -3457,11 +3506,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -3469,7 +3515,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -3483,6 +3529,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -3493,6 +3540,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -3503,6 +3551,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -3515,6 +3564,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -3523,27 +3573,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -3556,12 +3588,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -3569,10 +3599,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -3582,10 +3610,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -3598,10 +3624,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -3611,10 +3635,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -3624,10 +3646,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -3637,10 +3657,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -3650,10 +3668,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -3841,7 +3857,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -3862,7 +3877,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -3894,12 +3908,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -3917,7 +3930,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -3961,7 +3973,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -3975,7 +3986,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -4004,8 +4014,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -4080,8 +4090,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -4109,11 +4119,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -4138,7 +4148,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -4146,7 +4155,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
         flag: "-F%{sdk_framework_dir}"
         flag: "-F%{platform_developer_framework_dir}"
       }
@@ -4165,7 +4175,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -4183,7 +4192,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -4201,7 +4209,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -4209,11 +4216,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -4232,10 +4236,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -4252,11 +4273,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -4270,6 +4291,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -4290,8 +4312,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -4322,11 +4346,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -4344,11 +4366,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -4363,6 +4383,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -4370,13 +4391,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -4417,6 +4483,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -4435,6 +4503,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -4453,6 +4523,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -4471,6 +4543,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -4489,24 +4563,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -4521,6 +4579,8 @@ toolchain {
         flag: "i386"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -4552,6 +4612,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -4582,6 +4644,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -4600,6 +4664,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -4648,11 +4714,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -4660,13 +4728,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -4715,11 +4786,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -4727,13 +4800,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -4764,7 +4840,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -4788,7 +4863,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -4805,64 +4901,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -5033,10 +5075,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -5047,18 +5087,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -5079,11 +5142,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -5091,7 +5151,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -5105,6 +5165,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -5115,6 +5176,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -5125,6 +5187,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -5137,6 +5200,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -5145,27 +5209,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -5178,12 +5224,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -5191,10 +5235,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -5204,10 +5246,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -5220,10 +5260,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -5233,10 +5271,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -5246,10 +5282,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -5259,10 +5293,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -5272,10 +5304,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -5463,7 +5493,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -5484,7 +5513,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -5516,12 +5544,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -5539,7 +5566,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -5583,7 +5609,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -5597,7 +5622,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -5626,8 +5650,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -5702,8 +5726,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -5731,11 +5755,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -5760,7 +5784,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -5768,7 +5791,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -5785,7 +5809,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -5803,7 +5826,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -5821,7 +5843,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -5829,11 +5850,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -5852,10 +5870,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -5872,11 +5907,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -5890,6 +5925,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -5919,8 +5955,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -5963,11 +6001,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -5985,11 +6021,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -6004,6 +6038,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -6011,13 +6046,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -6058,6 +6138,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6077,6 +6159,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6096,6 +6180,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -6114,6 +6200,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6133,25 +6221,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-    implies: "unfiltered_cxx_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6167,6 +6238,8 @@ toolchain {
         flag: "x86_64"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -6198,6 +6271,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -6228,6 +6303,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6247,6 +6324,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -6296,11 +6375,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -6308,13 +6389,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -6363,11 +6447,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -6375,13 +6461,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -6412,7 +6501,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -6437,7 +6525,29 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+    implies: "cpp_linker_flags"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -6455,64 +6565,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -6682,10 +6738,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -6696,18 +6750,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -6728,11 +6805,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -6740,7 +6814,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -6754,6 +6828,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -6764,6 +6839,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -6774,6 +6850,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -6786,6 +6863,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -6794,27 +6872,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -6827,12 +6887,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -6840,10 +6898,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -6853,10 +6909,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -6869,10 +6923,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -6882,10 +6934,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -6895,10 +6945,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -6908,10 +6956,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -6921,10 +6967,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -7112,7 +7156,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -7133,7 +7176,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -7165,12 +7207,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -7188,7 +7229,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -7232,7 +7272,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -7246,7 +7285,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -7275,8 +7313,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -7351,8 +7389,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -7380,11 +7418,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -7409,7 +7447,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -7417,7 +7454,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -7434,7 +7472,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -7452,7 +7489,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -7470,7 +7506,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -7478,11 +7513,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -7501,10 +7533,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -7521,11 +7570,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -7539,6 +7588,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -7559,8 +7609,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -7591,11 +7643,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -7613,11 +7663,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -7632,6 +7680,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -7639,13 +7688,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -7686,6 +7780,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -7704,6 +7800,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -7722,6 +7820,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -7740,6 +7840,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -7758,24 +7860,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -7790,6 +7876,8 @@ toolchain {
         flag: "i386"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -7821,6 +7909,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -7851,6 +7941,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -7869,6 +7961,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -7917,11 +8011,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -7929,13 +8025,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -7984,11 +8083,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -7996,13 +8097,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -8033,7 +8137,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -8057,7 +8160,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -8074,64 +8198,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -8301,10 +8371,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -8315,18 +8383,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -8347,11 +8438,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -8359,7 +8447,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -8373,6 +8461,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -8383,6 +8472,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -8393,6 +8483,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -8405,6 +8496,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -8413,27 +8505,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -8446,12 +8520,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -8459,10 +8531,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -8472,10 +8542,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -8488,10 +8556,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -8501,10 +8567,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -8514,10 +8578,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -8527,10 +8589,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -8540,10 +8600,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -8731,7 +8789,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -8752,7 +8809,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -8784,12 +8840,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -8807,7 +8862,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -8851,7 +8905,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -8865,7 +8918,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -8894,8 +8946,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -8970,8 +9022,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -8999,11 +9051,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -9028,7 +9080,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -9036,7 +9087,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -9053,7 +9105,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -9071,7 +9122,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -9089,7 +9139,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -9097,11 +9146,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -9120,10 +9166,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -9140,11 +9203,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -9158,6 +9221,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -9178,8 +9242,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -9200,11 +9266,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -9222,11 +9286,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -9241,6 +9303,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -9248,13 +9311,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -9295,6 +9403,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -9313,6 +9423,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -9331,6 +9443,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -9349,6 +9463,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -9367,24 +9483,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -9399,6 +9499,8 @@ toolchain {
         flag: "armv7"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -9429,6 +9531,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -9458,6 +9562,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -9476,6 +9582,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -9524,11 +9632,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -9536,13 +9646,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -9591,11 +9704,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -9603,13 +9718,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -9640,7 +9758,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -9664,7 +9781,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -9681,64 +9819,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -9908,10 +9992,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -9922,18 +10004,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -9954,11 +10059,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -9966,7 +10068,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -9980,6 +10082,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -9990,6 +10093,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -10000,6 +10104,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -10012,6 +10117,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -10020,27 +10126,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -10053,12 +10141,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -10066,10 +10152,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -10079,10 +10163,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -10095,10 +10177,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -10108,10 +10188,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -10121,10 +10199,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -10134,10 +10210,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -10147,10 +10221,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -10338,7 +10410,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -10359,7 +10430,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -10391,12 +10461,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -10414,7 +10483,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -10458,7 +10526,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -10472,7 +10539,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -10501,8 +10567,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -10577,8 +10643,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -10606,11 +10672,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -10635,7 +10701,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -10643,7 +10708,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
         flag: "-F%{sdk_framework_dir}"
         flag: "-F%{platform_developer_framework_dir}"
       }
@@ -10662,7 +10728,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -10680,7 +10745,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -10698,7 +10762,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -10706,11 +10769,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -10729,10 +10789,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -10749,11 +10826,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -10767,6 +10844,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -10787,8 +10865,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -10809,11 +10889,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -10831,11 +10909,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -10850,6 +10926,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -10857,13 +10934,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -10904,6 +11026,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -10922,6 +11046,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -10940,6 +11066,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -10958,6 +11086,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -10976,24 +11106,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -11008,6 +11122,8 @@ toolchain {
         flag: "armv7k"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -11038,6 +11154,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -11067,6 +11185,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -11085,6 +11205,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -11133,11 +11255,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -11145,13 +11269,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -11200,11 +11327,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -11212,13 +11341,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -11249,7 +11381,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -11273,7 +11404,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -11290,64 +11442,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -11518,10 +11616,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -11532,18 +11628,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -11564,11 +11683,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -11576,7 +11692,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -11590,6 +11706,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -11600,6 +11717,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -11610,6 +11728,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -11622,6 +11741,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -11630,27 +11750,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -11663,12 +11765,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -11676,10 +11776,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -11689,10 +11787,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -11705,10 +11801,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -11718,10 +11812,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -11731,10 +11823,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -11744,10 +11834,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -11757,10 +11845,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -11948,7 +12034,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -11969,7 +12054,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -12001,12 +12085,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -12024,7 +12107,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -12068,7 +12150,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -12082,7 +12163,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -12111,8 +12191,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -12187,8 +12267,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -12216,11 +12296,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -12245,7 +12325,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -12253,7 +12332,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -12270,7 +12350,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -12288,7 +12367,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -12306,7 +12384,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -12314,11 +12391,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -12337,10 +12411,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -12357,11 +12448,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -12375,6 +12466,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -12404,8 +12496,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -12438,11 +12532,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -12460,11 +12552,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -12479,6 +12569,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -12486,13 +12577,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -12533,6 +12669,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12552,6 +12690,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12571,6 +12711,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -12589,6 +12731,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12608,25 +12752,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-    implies: "unfiltered_cxx_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12642,6 +12769,8 @@ toolchain {
         flag: "arm64"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -12672,6 +12801,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -12701,6 +12832,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12720,6 +12853,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "unfiltered_cxx_flags"
   }
   action_config {
@@ -12769,11 +12904,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -12781,13 +12918,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -12836,11 +12976,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -12848,13 +12990,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -12885,7 +13030,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -12910,7 +13054,29 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+    implies: "cpp_linker_flags"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -12928,64 +13094,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -13155,10 +13267,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -13169,18 +13279,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -13201,11 +13334,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -13213,7 +13343,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -13227,6 +13357,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -13237,6 +13368,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -13247,6 +13379,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -13259,6 +13392,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -13267,27 +13401,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -13300,12 +13416,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -13313,10 +13427,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -13326,10 +13438,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -13342,10 +13452,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -13355,10 +13463,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -13368,10 +13474,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -13381,10 +13485,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -13394,10 +13496,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -13585,7 +13685,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -13606,7 +13705,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -13638,12 +13736,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -13661,7 +13758,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -13705,7 +13801,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -13719,7 +13814,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -13748,8 +13842,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -13824,8 +13918,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -13853,11 +13947,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -13882,7 +13976,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -13890,7 +13983,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -13907,7 +14001,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -13925,7 +14018,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -13943,7 +14035,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -13951,11 +14042,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -13974,10 +14062,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -13994,11 +14099,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -14012,6 +14117,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -14032,8 +14138,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -14054,11 +14162,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -14076,11 +14182,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -14095,6 +14199,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -14102,13 +14207,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -14149,6 +14299,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -14167,6 +14319,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -14185,6 +14339,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -14203,6 +14359,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -14221,24 +14379,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -14253,6 +14395,8 @@ toolchain {
         flag: "arm64"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -14283,6 +14427,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -14312,6 +14458,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -14330,6 +14478,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -14378,11 +14528,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -14390,13 +14542,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -14445,11 +14600,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -14457,13 +14614,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -14494,7 +14654,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -14518,7 +14677,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -14535,64 +14715,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {
@@ -14727,11 +14853,9 @@ toolchain {
   unfiltered_cxx_flag: "-D__DATE__=\"redacted\""
   unfiltered_cxx_flag: "-D__TIMESTAMP__=\"redacted\""
   unfiltered_cxx_flag: "-D__TIME__=\"redacted\""
-  supports_normalizing_ar: false
   supports_start_end_lib: false
   default_python_version: "python2.7"
   supports_interface_shared_objects: false
-  supports_incremental_linker: false
   supports_fission: false
   feature {
     name: "fastbuild"
@@ -14765,10 +14889,8 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -14779,18 +14901,41 @@ toolchain {
     }
   }
   feature {
+    name: "generate_dsym_file"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "objc-compile"
+      action: "objc++-compile"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "-g"
+      }
+    }
+    flag_set {
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "DSYM_HINT_LINKED_BINARY=%{linked_binary}"
+        flag: "DSYM_HINT_DSYM_PATH=%{dsym_path}"
+        flag: "DSYM_HINT_DSYM_BUNDLE_ZIP=%{dsym_bundle_zip}"
+      }
+    }
+  }
+  feature {
     name: "contains_objc_source"
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fobjc-link-runtime"
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-framework"
@@ -14811,11 +14956,8 @@ toolchain {
     implies: "c-compile"
     implies: "c++-compile"
     implies: "c++-link-static-library"
-    implies: "c++-link-pic-static-library"
-    implies: "c++-link-interface-dynamic-library"
     implies: "c++-link-dynamic-library"
-    implies: "c++-link-alwayslink-static-library"
-    implies: "c++-link-alwayslink-pic-static-library"
+    implies: "c++-link-nodeps-dynamic-library"
     implies: "c++-link-executable"
   }
   feature {
@@ -14823,7 +14965,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
-      action: "c++-link-interface-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -14837,6 +14979,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,--print-symbol-counts=%{symbol_counts_output}"
       }
@@ -14847,6 +14990,7 @@ toolchain {
     name: "shared_flag"
     flag_set {
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-shared"
       }
@@ -14857,6 +15001,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "%{linkstamp_paths}"
         iterate_over: "linkstamp_paths"
@@ -14869,6 +15014,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-o"
         flag: "%{output_execpath}"
@@ -14877,27 +15023,9 @@ toolchain {
     }
   }
   feature {
-    name: "global_whole_archive_open"
-    flag_set {
-      action: "c++-link-executable"
-      action: "c++-link-dynamic-library"
-      action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      flag_group {
-        flag: "-Wl,-all_load"
-      }
-      expand_if_all_available: "global_whole_archive"
-    }
-  }
-  feature {
     name: "archiver_flags"
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "rcs"
         flag: "%{output_execpath}"
@@ -14910,12 +15038,10 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
-        flag: "-Wl,-rpath,$ORIGIN/%{runtime_library_search_directories}"
+        flag: "-Wl,-rpath,@loader_path/%{runtime_library_search_directories}"
         iterate_over: "runtime_library_search_directories"
       }
       expand_if_all_available: "runtime_library_search_directories"
@@ -14923,10 +15049,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_flags}"
         iterate_over: "runtime_root_flags"
@@ -14936,10 +15060,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{runtime_root_entries}"
         iterate_over: "runtime_root_entries"
@@ -14952,10 +15074,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-L%{library_search_directories}"
         iterate_over: "library_search_directories"
@@ -14965,10 +15085,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{libopts}"
         iterate_over: "libopts"
@@ -14978,10 +15096,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "-Wl,-force_load,%{whole_archive_linker_params}"
         iterate_over: "whole_archive_linker_params"
@@ -14991,10 +15107,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "%{linker_input_params}"
         iterate_over: "linker_input_params"
@@ -15004,10 +15118,8 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag_group {
           flag: "-Wl,--start-lib"
@@ -15195,7 +15307,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -15216,7 +15327,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "clif-match"
@@ -15248,12 +15358,11 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "clif-match"
       flag_group {
         flag: "--sysroot=%{sysroot}"
@@ -15271,7 +15380,6 @@ toolchain {
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
-      action: "c++-header-preprocessing"
       action: "c++-header-parsing"
       flag_group {
         flag: "-MD"
@@ -15315,7 +15423,6 @@ toolchain {
       action: "c++-module-codegen"
       action: "assemble"
       action: "preprocess-assemble"
-      action: "lto-backend"
       flag_group {
         flag: "-gsplit-dwarf"
       }
@@ -15329,7 +15436,6 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "linkstamp-compile"
       action: "objc-compile"
@@ -15358,8 +15464,8 @@ toolchain {
     flag_set {
       action: "c-compile"
       action: "c++-compile"
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
         flag: "-fprofile-generate=%{fdo_instrument_path}"
@@ -15434,8 +15540,8 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       action: "objc-executable"
       action: "objc++-executable"
@@ -15463,11 +15569,11 @@ toolchain {
       }
     }
     flag_set {
-      action: "c++-link-interface-dynamic-library"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-executable"
       flag_group {
-        flag: "-lgcov"
+        flag: "--coverage"
       }
     }
     requires {
@@ -15492,7 +15598,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "objc-compile"
       action: "objc++-compile"
       action: "objc-executable"
@@ -15500,7 +15605,8 @@ toolchain {
       action: "assemble"
       action: "preprocess-assemble"
       flag_group {
-        flag: "-isysroot %{sdk_dir}"
+        flag: "-isysroot"
+        flag: "%{sdk_dir}"
       }
     }
   }
@@ -15517,7 +15623,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -15535,7 +15640,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -15553,7 +15657,6 @@ toolchain {
       action: "c++-compile"
       action: "c++-module-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "assemble"
       action: "preprocess-assemble"
       action: "objc-compile"
@@ -15561,11 +15664,8 @@ toolchain {
       action: "objc-archive"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
-      action: "c++-link-interface-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       action: "linkstamp-compile"
@@ -15584,10 +15684,27 @@ toolchain {
     }
   }
   feature {
+    name: "user_link_flags"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "objc-executable"
+      action: "objc++-executable"
+      flag_group {
+        flag: "%{user_link_flags}"
+        iterate_over: "user_link_flags"
+      }
+      expand_if_all_available: "user_link_flags"
+    }
+    enabled: true
+  }
+  feature {
     name: "legacy_link_flags"
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -15604,11 +15721,11 @@ toolchain {
       action: "objc++-executable"
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "preprocess-assemble"
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "objc-compile"
       action: "objc++-compile"
@@ -15622,6 +15739,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
@@ -15642,8 +15760,10 @@ toolchain {
       action: "objc-executable"
       action: "objc++-executable"
       flag_group {
-        flag: "-framework Foundation"
-        flag: "-framework UIKit"
+        flag: "-framework"
+        flag: "Foundation"
+        flag: "-framework"
+        flag: "UIKit"
       }
     }
   }
@@ -15664,11 +15784,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -15686,11 +15804,9 @@ toolchain {
       action: "c-compile"
       action: "c++-compile"
       action: "c++-header-parsing"
-      action: "c++-header-preprocessing"
       action: "c++-module-compile"
       action: "c++-module-codegen"
       action: "linkstamp-compile"
-      action: "lto-backend"
       action: "objc-compile"
       action: "objc++-compile"
       flag_group {
@@ -15705,6 +15821,7 @@ toolchain {
     flag_set {
       action: "c++-link-executable"
       action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
       flag_group {
         flag: "-Wl,@%{linker_param_file}"
       }
@@ -15712,13 +15829,58 @@ toolchain {
     }
     flag_set {
       action: "c++-link-static-library"
-      action: "c++-link-alwayslink-static-library"
-      action: "c++-link-pic-static-library"
-      action: "c++-link-alwayslink-pic-static-library"
       flag_group {
         flag: "@%{linker_param_file}"
       }
       expand_if_all_available: "linker_param_file"
+    }
+  }
+  feature {
+    name: "compiler_input_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-c"
+        flag: "%{source_file}"
+      }
+      expand_if_all_available: "source_file"
+    }
+  }
+  feature {
+    name: "compiler_output_flags"
+    flag_set {
+      action: "assemble"
+      action: "preprocess-assemble"
+      action: "c-compile"
+      action: "c++-compile"
+      action: "linkstamp-compile"
+      action: "c++-header-parsing"
+      action: "c++-module-compile"
+      action: "c++-module-codegen"
+      action: "objc-compile"
+      action: "objc++-compile"
+      flag_group {
+        flag: "-S"
+        expand_if_all_available: "output_assembly_file"
+      }
+      flag_group {
+        flag: "-E"
+        expand_if_all_available: "output_preprocess_file"
+      }
+      flag_group {
+        flag: "-o"
+        flag: "%{output_file}"
+        expand_if_all_available: "output_file"
+      }
     }
   }
   action_config {
@@ -15759,6 +15921,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-compile"
@@ -15777,6 +15941,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "linkstamp-compile"
@@ -15795,6 +15961,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-module-compile"
@@ -15813,6 +15981,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "c++-header-parsing"
@@ -15831,24 +16001,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
-  }
-  action_config {
-    config_name: "c++-header-preprocessing"
-    action_name: "c++-header-preprocessing"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "preprocessor_defines"
-    implies: "include_system_dirs"
-    implies: "version_min"
-    implies: "objc_arc"
-    implies: "no_objc_arc"
-    implies: "apple_env"
-    implies: "legacy_compile_flags"
-    implies: "user_compile_flags"
-    implies: "sysroot"
-    implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-compile"
@@ -15863,6 +16017,8 @@ toolchain {
         flag: "<architecture>"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "objc_actions"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
@@ -15893,6 +16049,8 @@ toolchain {
         flag: "-std=gnu++11"
       }
     }
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
     implies: "apply_default_compiler_flags"
     implies: "apply_default_warnings"
     implies: "framework_paths"
@@ -15922,6 +16080,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "preprocess-assemble"
@@ -15940,6 +16100,8 @@ toolchain {
     implies: "user_compile_flags"
     implies: "sysroot"
     implies: "unfiltered_compile_flags"
+    implies: "compiler_input_flags"
+    implies: "compiler_output_flags"
   }
   action_config {
     config_name: "objc-archive"
@@ -15988,11 +16150,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -16000,13 +16164,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -16055,11 +16222,13 @@ toolchain {
         flag: "-ObjC"
       }
       flag_group {
-        flag: "-framework %{framework_names}"
+        flag: "-framework"
+        flag: "%{framework_names}"
         iterate_over: "framework_names"
       }
       flag_group {
-        flag: "-weak_framework %{weak_framework_names}"
+        flag: "-weak_framework"
+        flag: "%{weak_framework_names}"
         iterate_over: "weak_framework_names"
       }
       flag_group {
@@ -16067,13 +16236,16 @@ toolchain {
         iterate_over: "library_names"
       }
       flag_group {
-        flag: "-filelist %{filelist}"
+        flag: "-filelist"
+        flag: "%{filelist}"
       }
       flag_group {
-        flag: "-o %{linked_binary}"
+        flag: "-o"
+        flag: "%{linked_binary}"
       }
       flag_group {
-        flag: "-force_load %{force_load_exec_paths}"
+        flag: "-force_load"
+        flag: "%{force_load_exec_paths}"
         iterate_over: "force_load_exec_paths"
       }
       flag_group {
@@ -16104,7 +16276,6 @@ toolchain {
     implies: "symbol_counts"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "force_pic_flags"
@@ -16128,7 +16299,28 @@ toolchain {
     implies: "shared_flag"
     implies: "linkstamps"
     implies: "output_execpath_flags"
-    implies: "global_whole_archive_open"
+    implies: "runtime_root_flags"
+    implies: "input_param_flags"
+    implies: "legacy_link_flags"
+    implies: "strip_debug_symbols"
+    implies: "linker_param_file"
+    implies: "version_min"
+    implies: "apple_env"
+    implies: "sysroot"
+  }
+  action_config {
+    config_name: "c++-link-nodeps-dynamic-library"
+    action_name: "c++-link-nodeps-dynamic-library"
+    tool {
+      tool_path: "cc_wrapper.sh"
+      execution_requirement: "requires-darwin"
+    }
+    implies: "contains_objc_source"
+    implies: "has_configured_linker_path"
+    implies: "symbol_counts"
+    implies: "shared_flag"
+    implies: "linkstamps"
+    implies: "output_execpath_flags"
     implies: "runtime_root_flags"
     implies: "input_param_flags"
     implies: "legacy_link_flags"
@@ -16145,64 +16337,10 @@ toolchain {
       tool_path: "wrapped_ar"
       execution_requirement: "requires-darwin"
     }
-    implies: "global_whole_archive_open"
     implies: "runtime_root_flags"
     implies: "archiver_flags"
     implies: "input_param_flags"
     implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-static-library"
-    action_name: "c++-link-alwayslink-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-pic-static-library"
-    action_name: "c++-link-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-alwayslink-pic-static-library"
-    action_name: "c++-link-alwayslink-pic-static-library"
-    tool {
-      tool_path: "wrapped_ar"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "global_whole_archive_open"
-    implies: "runtime_root_flags"
-    implies: "archiver_flags"
-    implies: "input_param_flags"
-    implies: "linker_param_file"
-    implies: "apple_env"
-  }
-  action_config {
-    config_name: "c++-link-interface-dynamic-library"
-    action_name: "c++-link-interface-dynamic-library"
-    tool {
-      tool_path: "wrapped_clang"
-      execution_requirement: "requires-darwin"
-    }
-    implies: "contains_objc_source"
-    implies: "strip_debug_symbols"
     implies: "apple_env"
   }
   action_config {

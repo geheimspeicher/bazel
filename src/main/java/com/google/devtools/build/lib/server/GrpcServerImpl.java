@@ -25,9 +25,10 @@ import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher;
 import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.LockingMode;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
-import com.google.devtools.build.lib.runtime.CommandExecutor;
+import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
 import com.google.devtools.build.lib.server.CommandProtos.CancelRequest;
 import com.google.devtools.build.lib.server.CommandProtos.CancelResponse;
@@ -55,7 +56,7 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.InetSocketAddress;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -110,11 +111,6 @@ import javax.annotation.concurrent.GuardedBy;
 public class GrpcServerImpl implements RPCServer {
   private static final Logger logger = Logger.getLogger(GrpcServerImpl.class.getName());
 
-  // UTF-8 won't do because we want to be able to pass arbitrary binary strings.
-  // Not that the internals of Bazel handle that correctly, but why not make at least this little
-  // part correct?
-  private static final Charset CHARSET = Charset.forName("ISO-8859-1");
-
   private static final long NANOSECONDS_IN_MS = TimeUnit.MILLISECONDS.toNanos(1);
 
   private class RunningCommand implements AutoCloseable {
@@ -156,10 +152,10 @@ public class GrpcServerImpl implements RPCServer {
    */
   public static class Factory implements RPCServer.Factory {
     @Override
-    public RPCServer create(CommandExecutor commandExecutor, Clock clock, int port,
+    public RPCServer create(BlazeCommandDispatcher dispatcher, Clock clock, int port,
       Path workspace, Path serverDirectory, int maxIdleSeconds) throws IOException {
       return new GrpcServerImpl(
-          commandExecutor, clock, port, workspace, serverDirectory, maxIdleSeconds);
+          dispatcher, clock, port, workspace, serverDirectory, maxIdleSeconds);
     }
   }
 
@@ -501,7 +497,7 @@ public class GrpcServerImpl implements RPCServer {
 
   @GuardedBy("runningCommands")
   private final Map<String, RunningCommand> runningCommands = new HashMap<>();
-  private final CommandExecutor commandExecutor;
+  private final BlazeCommandDispatcher dispatcher;
   private final ExecutorService streamExecutorPool;
   private final ExecutorService commandExecutorPool;
   private final Clock clock;
@@ -521,7 +517,7 @@ public class GrpcServerImpl implements RPCServer {
   private IdleServerTasks idleServerTasks;
   boolean serving;
 
-  public GrpcServerImpl(CommandExecutor commandExecutor, Clock clock, int port,
+  public GrpcServerImpl(BlazeCommandDispatcher dispatcher, Clock clock, int port,
       Path workspace, Path serverDirectory, int maxIdleSeconds) throws IOException {
     Runtime.getRuntime().addShutdownHook(new Thread() {
       @Override
@@ -537,7 +533,7 @@ public class GrpcServerImpl implements RPCServer {
     pidInFile = new String(FileSystemUtils.readContentAsLatin1(pidFile));
     deleteAtExit(pidFile);
 
-    this.commandExecutor = commandExecutor;
+    this.dispatcher = dispatcher;
     this.clock = clock;
     this.serverDirectory = serverDirectory;
     this.workspace = workspace;
@@ -559,13 +555,13 @@ public class GrpcServerImpl implements RPCServer {
 
     pidFileWatcherThread = new PidFileWatcherThread();
     pidFileWatcherThread.start();
-    idleServerTasks = new IdleServerTasks(workspace);
+    idleServerTasks = new IdleServerTasks();
     idleServerTasks.idle();
   }
 
   private void idle() {
     Preconditions.checkState(idleServerTasks == null);
-    idleServerTasks = new IdleServerTasks(workspace);
+    idleServerTasks = new IdleServerTasks();
     idleServerTasks.idle();
   }
 
@@ -809,11 +805,6 @@ public class GrpcServerImpl implements RPCServer {
       return;
     }
 
-    ImmutableList.Builder<String> args = ImmutableList.builder();
-    for (ByteString requestArg : request.getArgList()) {
-      args.add(requestArg.toString(CHARSET));
-    }
-
     String commandId;
     BlazeCommandResult result;
 
@@ -823,8 +814,12 @@ public class GrpcServerImpl implements RPCServer {
     // Convert the startup options record to Java strings, source first.
     ImmutableList.Builder<Pair<String, String>> startupOptions = ImmutableList.builder();
     for (StartupOption option : request.getStartupOptionsList()) {
-      startupOptions.add(
-          new Pair<>(option.getSource().toString(CHARSET), option.getOption().toString(CHARSET)));
+      // UTF-8 won't do because we want to be able to pass arbitrary binary strings.
+      // Not that the internals of Bazel handle that correctly, but why not make at least this
+      // little part correct?
+      startupOptions.add(new Pair<>(
+          option.getSource().toString(StandardCharsets.ISO_8859_1),
+          option.getOption().toString(StandardCharsets.ISO_8859_1)));
     }
 
     try (RunningCommand command = new RunningCommand()) {
@@ -847,11 +842,19 @@ public class GrpcServerImpl implements RPCServer {
           new RpcOutputStream(command.id, responseCookie, StreamType.STDERR, sink));
 
       try {
+        // UTF-8 won't do because we want to be able to pass arbitrary binary strings.
+        // Not that the internals of Bazel handle that correctly, but why not make at least this
+        // little part correct?
+        ImmutableList<String> args = request.getArgList().stream()
+            .map(arg -> arg.toString(StandardCharsets.ISO_8859_1))
+            .collect(ImmutableList.toImmutableList());
+
         InvocationPolicy policy = InvocationPolicyParser.parsePolicy(request.getInvocationPolicy());
+        logger.info(BlazeRuntime.getRequestLogString(args));
         result =
-            commandExecutor.exec(
+            dispatcher.exec(
                 policy,
-                args.build(),
+                args,
                 rpcOutErr,
                 request.getBlockForLock() ? LockingMode.WAIT : LockingMode.ERROR_OUT,
                 request.getClientDescription(),
@@ -880,8 +883,7 @@ public class GrpcServerImpl implements RPCServer {
     // the cancel request won't find the thread to interrupt)
     Thread.interrupted();
 
-    boolean shutdown = commandExecutor.shutdown();
-    if (shutdown) {
+    if (result.shutdown()) {
       server.shutdown();
     }
 
@@ -889,7 +891,7 @@ public class GrpcServerImpl implements RPCServer {
         .setCookie(responseCookie)
         .setCommandId(commandId)
         .setFinished(true)
-        .setTerminationExpected(shutdown);
+        .setTerminationExpected(result.shutdown());
 
     if (result.getExecRequest() != null) {
       response.setExitCode(0);

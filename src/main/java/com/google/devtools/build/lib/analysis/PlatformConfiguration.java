@@ -18,75 +18,67 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformConfigurationApi;
 import java.util.List;
 
 /** A configuration fragment describing the current platform configuration. */
 @AutoCodec
 @ThreadSafety.Immutable
-@SkylarkModule(
-  name = "platform",
-  doc = "The platform configuration.",
-  category = SkylarkModuleCategory.CONFIGURATION_FRAGMENT
-)
-public class PlatformConfiguration extends BuildConfiguration.Fragment {
-  public static final ObjectCodec<PlatformConfiguration> CODEC =
-      new PlatformConfiguration_AutoCodec();
-
-  private final Label executionPlatform;
-  private final ImmutableList<Label> extraExecutionPlatforms;
+public class PlatformConfiguration extends BuildConfiguration.Fragment
+    implements PlatformConfigurationApi {
+  private final Label hostPlatform;
+  private final ImmutableList<String> extraExecutionPlatforms;
   private final ImmutableList<Label> targetPlatforms;
-  private final ImmutableList<Label> extraToolchains;
+  private final ImmutableList<String> extraToolchains;
   private final ImmutableList<Label> enabledToolchainTypes;
 
   @AutoCodec.Instantiator
   PlatformConfiguration(
-      Label executionPlatform,
-      ImmutableList<Label> extraExecutionPlatforms,
+      Label hostPlatform,
+      ImmutableList<String> extraExecutionPlatforms,
       ImmutableList<Label> targetPlatforms,
-      ImmutableList<Label> extraToolchains,
+      ImmutableList<String> extraToolchains,
       ImmutableList<Label> enabledToolchainTypes) {
-    this.executionPlatform = executionPlatform;
+    this.hostPlatform = hostPlatform;
     this.extraExecutionPlatforms = extraExecutionPlatforms;
     this.targetPlatforms = targetPlatforms;
     this.extraToolchains = extraToolchains;
     this.enabledToolchainTypes = enabledToolchainTypes;
   }
 
-  @SkylarkCallable(
-    name = "execution_platform",
-    structField = true,
-    doc = "The current execution platform"
-  )
-  public Label getExecutionPlatform() {
-    return executionPlatform;
+  @Override
+  public Label getHostPlatform() {
+    return hostPlatform;
   }
 
-  /** Additional platforms that are available for action execution. */
-  public ImmutableList<Label> getExtraExecutionPlatforms() {
+  /**
+   * Target patterns that select additional platforms that will be made available for action
+   * execution.
+   */
+  public ImmutableList<String> getExtraExecutionPlatforms() {
     return extraExecutionPlatforms;
   }
 
-  @SkylarkCallable(name = "platforms", structField = true, doc = "The current target platforms")
+  @Override
   public ImmutableList<Label> getTargetPlatforms() {
     return targetPlatforms;
   }
 
-  /** Additional toolchains that should be considered during toolchain resolution. */
-  public ImmutableList<Label> getExtraToolchains() {
+  /**
+   * Target patterns that select additional toolchains that will be considered during toolchain
+   * resolution.
+   */
+  public ImmutableList<String> getExtraToolchains() {
     return extraToolchains;
   }
 
-  @SkylarkCallable(
-    name = "enabled_toolchain_types",
-    structField = true,
-    doc = "The set of toolchain types enabled for platform-based toolchain selection."
-  )
+  @Override
   public List<Label> getEnabledToolchainTypes() {
     return enabledToolchainTypes;
+  }
+
+  public boolean isToolchainTypeEnabled(Label toolchainType) {
+    return getEnabledToolchainTypes().contains(toolchainType);
   }
 }

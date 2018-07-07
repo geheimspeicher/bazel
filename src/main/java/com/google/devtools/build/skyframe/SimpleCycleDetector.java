@@ -27,6 +27,7 @@ import com.google.devtools.build.lib.profiler.AutoProfiler;
 import com.google.devtools.build.lib.util.GroupedList;
 import com.google.devtools.build.skyframe.ParallelEvaluatorContext.EnqueueParentBehavior;
 import com.google.devtools.build.skyframe.QueryableGraph.Reason;
+import com.google.devtools.build.skyframe.SkyFunctionEnvironment.UndonePreviouslyRequestedDep;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -42,7 +43,7 @@ import javax.annotation.Nullable;
  * Depth-first implementation of cycle detection after a {@link ParallelEvaluator} evaluation has
  * completed with at least one root unfinished.
  */
-class SimpleCycleDetector implements CycleDetector {
+public class SimpleCycleDetector implements CycleDetector {
   private static final Logger logger = Logger.getLogger(SimpleCycleDetector.class.getName());
 
   @Override
@@ -77,8 +78,7 @@ class SimpleCycleDetector implements CycleDetector {
    * value is popped, we know that all the children are finished. We would use null instead, but
    * ArrayDeque does not permit null elements.
    */
-  private static final SkyKey CHILDREN_FINISHED =
-      LegacySkyKey.create(SkyFunctionName.create("MARKER"), "MARKER");
+  private static final SkyKey CHILDREN_FINISHED = () -> null;
 
   /** The max number of cycles we will report to the user for a given root, to avoid OOMing. */
   private static final int MAX_CYCLES = 20;
@@ -154,12 +154,21 @@ class SimpleCycleDetector implements CycleDetector {
             "Node %s was not successfully evaluated, but had no child errors. NodeEntry: %s",
             key,
             entry);
-        SkyFunctionEnvironment env =
-            new SkyFunctionEnvironment(
-                key,
-                directDeps,
-                Sets.difference(entry.getAllRemainingDirtyDirectDeps(), removedDeps),
-                evaluatorContext);
+        SkyFunctionEnvironment env = null;
+        try {
+          env =
+              new SkyFunctionEnvironment(
+                  key,
+                  directDeps,
+                  Sets.difference(entry.getAllRemainingDirtyDirectDeps(), removedDeps),
+                  evaluatorContext);
+        } catch (UndonePreviouslyRequestedDep undoneDep) {
+          // All children were finished according to the CHILDREN_FINISHED sentinel, and cycle
+          // detection does not do normal SkyFunction evaluation, so no restarting nor child
+          // dirtying was possible.
+          throw new IllegalStateException(
+              "Previously requested dep not done: " + undoneDep.getDepKey(), undoneDep);
+        }
         env.setError(entry, ErrorInfo.fromChildErrors(key, errorDeps));
         env.commit(entry, EnqueueParentBehavior.SIGNAL);
       } else {

@@ -22,7 +22,7 @@ import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkbuildapi.FilesetEntryApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -30,19 +30,16 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
  * FilesetEntry is a value object used to represent a "FilesetEntry" inside a "Fileset" BUILD rule.
  */
-@SkylarkModule(
-    name = "FilesetEntry",
-    doc = "",
-    documented = false)
 @Immutable
 @ThreadSafe
-public final class FilesetEntry implements SkylarkValue {
+public final class FilesetEntry implements SkylarkValue, FilesetEntryApi {
 
   public static final SymlinkBehavior DEFAULT_SYMLINK_BEHAVIOR = SymlinkBehavior.COPY;
   public static final String DEFAULT_STRIP_PREFIX = ".";
@@ -98,7 +95,7 @@ public final class FilesetEntry implements SkylarkValue {
     DEREFERENCE;
 
     public static SymlinkBehavior parse(String value) throws IllegalArgumentException {
-      return valueOf(value.toUpperCase());
+      return valueOf(value.toUpperCase(Locale.ENGLISH));
     }
 
     @Override

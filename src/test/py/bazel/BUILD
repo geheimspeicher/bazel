@@ -9,7 +9,8 @@ filegroup(
 filegroup(
     name = "test-deps",
     testonly = 1,
-    srcs = ["//src:bazel_with_jdk"],
+    srcs = ["//src:bazel"],
+    data = ["//src/tools/remote:worker"],
 )
 
 py_library(
@@ -63,7 +64,7 @@ py_test(
     name = "bazel_external_repository_test",
     size = "medium",
     srcs = ["bazel_external_repository_test.py"],
-    tags = ["requires_internet"],
+    data = glob(["testdata/bazel_external_repository_test/**"]),
     deps = [":test_base"],
 )
 
@@ -85,6 +86,23 @@ py_test(
 )
 
 py_test(
+    name = "windows_remote_test",
+    size = "medium",
+    srcs = select({
+        "//src/conditions:windows": ["windows_remote_test.py"],
+        "//conditions:default": ["empty_test.py"],
+    }),
+    main = select({
+        "//src/conditions:windows": "windows_remote_test.py",
+        "//conditions:default": "empty_test.py",
+    }),
+    deps = select({
+        "//src/conditions:windows": [":test_base"],
+        "//conditions:default": [],
+    }),
+)
+
+py_test(
     name = "launcher_test",
     size = "medium",
     srcs = ["launcher_test.py"],
@@ -94,6 +112,7 @@ py_test(
 
 py_test(
     name = "runfiles_test",
+    timeout = "long",
     srcs = ["runfiles_test.py"],
     data = glob(["testdata/runfiles_test/**"]),
     deps = [
@@ -117,6 +136,13 @@ py_test(
         "//src/conditions:windows": [":test_base"],
         "//conditions:default": [],
     }),
+)
+
+py_test(
+    name = "query_test",
+    size = "medium",
+    srcs = ["query_test.py"],
+    deps = [":test_base"],
 )
 
 test_suite(

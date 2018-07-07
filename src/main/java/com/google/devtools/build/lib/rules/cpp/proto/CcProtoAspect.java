@@ -23,12 +23,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
-import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMap;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMapBuilder;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -41,8 +42,10 @@ import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.cpp.AspectLegalCppSemantics;
 import com.google.devtools.build.lib.rules.cpp.CcCommon;
-import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper;
-import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper.Info;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper.CompilationInfo;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingHelper;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingHelper.LinkingInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchain;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
@@ -50,8 +53,6 @@ import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppHelper;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 import com.google.devtools.build.lib.rules.cpp.CppSemantics;
-import com.google.devtools.build.lib.rules.cpp.TransitiveLipoInfoProvider;
-import com.google.devtools.build.lib.rules.cpp.transitions.LipoContextCollectorTransition;
 import com.google.devtools.build.lib.rules.proto.ProtoCommon;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder;
 import com.google.devtools.build.lib.rules.proto.ProtoCompileActionBuilder.ToolchainInvocation;
@@ -60,7 +61,7 @@ import com.google.devtools.build.lib.rules.proto.ProtoLangToolchainProvider;
 import com.google.devtools.build.lib.rules.proto.ProtoSourceFileBlacklist;
 import com.google.devtools.build.lib.rules.proto.ProtoSupportDataProvider;
 import com.google.devtools.build.lib.rules.proto.SupportData;
-import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndTarget;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
@@ -79,20 +80,21 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
 
   private final CppSemantics cppSemantics;
   private final LabelLateBoundDefault<?> ccToolchainAttrValue;
+  private final Label ccToolchainType;
 
-  protected CcProtoAspect(
-      AspectLegalCppSemantics cppSemantics, LabelLateBoundDefault<?> ccToolchainAttrValue) {
+  protected CcProtoAspect(AspectLegalCppSemantics cppSemantics, RuleDefinitionEnvironment env) {
     this.cppSemantics = cppSemantics;
-    this.ccToolchainAttrValue = ccToolchainAttrValue;
+    this.ccToolchainAttrValue = CppRuleClasses.ccToolchainAttribute(env);
+    this.ccToolchainType = CppRuleClasses.ccToolchainTypeAttribute(env);
   }
 
   @Override
   public ConfiguredAspect create(
-      ConfiguredTargetAndTarget ctatBase, RuleContext ruleContext, AspectParameters parameters)
-      throws InterruptedException {
+      ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+      throws InterruptedException, ActionConflictException {
     // Get SupportData, which is provided by the proto_library rule we attach to.
     SupportData supportData =
-        checkNotNull(ctatBase.getConfiguredTarget().getProvider(ProtoSupportDataProvider.class))
+        checkNotNull(ctadBase.getConfiguredTarget().getProvider(ProtoSupportDataProvider.class))
             .getSupportData();
 
     try {
@@ -112,20 +114,14 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
             .propagateAlongAttribute("deps")
             .requiresConfigurationFragments(CppConfiguration.class, ProtoConfiguration.class)
             .requireProviders(ProtoSupportDataProvider.class)
+            .addRequiredToolchains(ccToolchainType)
             .add(
                 attr(PROTO_TOOLCHAIN_ATTR, LABEL)
-                    .mandatoryNativeProviders(
-                        ImmutableList.<Class<? extends TransitiveInfoProvider>>of(
-                            ProtoLangToolchainProvider.class))
+                    .mandatoryNativeProviders(ImmutableList.of(ProtoLangToolchainProvider.class))
                     .value(PROTO_TOOLCHAIN_LABEL))
             .add(
                 attr(CcToolchain.CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME, LABEL)
-                    .value(ccToolchainAttrValue))
-            .add(
-                attr(TransitiveLipoInfoProvider.LIPO_CONTEXT_COLLECTOR, LABEL)
-                    .cfg(LipoContextCollectorTransition.INSTANCE)
-                    .value(CppRuleClasses.LIPO_CONTEXT_COLLECTOR)
-                    .skipPrereqValidatorCheck());
+                    .value(ccToolchainAttrValue));
 
     return result.build();
   }
@@ -149,7 +145,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       FeatureConfiguration featureConfiguration = getFeatureConfiguration(supportData);
       ProtoConfiguration protoConfiguration = ruleContext.getFragment(ProtoConfiguration.class);
 
-      CcLibraryHelper compilationHelper = initializeCompilationHelper(featureConfiguration);
+      CcCompilationHelper compilationHelper = initializeCompilationHelper(featureConfiguration);
 
       // Compute and register files generated by this proto library.
       Collection<Artifact> outputs = new ArrayList<>();
@@ -190,12 +186,12 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       filesBuilder.addAll(outputs);
       createProtoCompileAction(supportData, outputs);
 
-      Info.CompilationInfo compilationInfo = compilationHelper.compile();
-      Info.LinkingInfo linkingInfo =
+      CompilationInfo compilationInfo = compilationHelper.compile();
+      LinkingInfo linkingInfo =
           initializeLinkingHelper(featureConfiguration)
               .link(
                   compilationInfo.getCcCompilationOutputs(),
-                  compilationInfo.getCppCompilationContext());
+                  compilationInfo.getCcCompilationContext());
 
       ccLibraryProviders =
           new TransitiveInfoProviderMapBuilder()
@@ -204,8 +200,9 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
               .build();
       outputGroups =
           ImmutableMap.copyOf(
-              Info.mergeOutputGroups(
-                  compilationInfo.getOutputGroups(), linkingInfo.getOutputGroups()));
+              CcCommon.mergeOutputGroups(
+                  ImmutableList.of(
+                      compilationInfo.getOutputGroups(), linkingInfo.getOutputGroups())));
       // On Windows, dynamic library is not built by default, so don't add them to filesToBuild.
       linkingInfo.addLinkingOutputsTo(
           filesBuilder, !featureConfiguration.isEnabled(CppRuleClasses.TARGETS_WINDOWS));
@@ -219,7 +216,9 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
 
     private FeatureConfiguration getFeatureConfiguration(SupportData supportData) {
       ImmutableSet.Builder<String> requestedFeatures = new ImmutableSet.Builder<>();
+      requestedFeatures.addAll(ruleContext.getFeatures());
       ImmutableSet.Builder<String> unsupportedFeatures = new ImmutableSet.Builder<>();
+      unsupportedFeatures.addAll(ruleContext.getDisabledFeatures());
       unsupportedFeatures.add(CppRuleClasses.PARSE_HEADERS);
       unsupportedFeatures.add(CppRuleClasses.LAYERING_CHECK);
       if (!areSrcsBlacklisted() && supportData.hasProtoSources()) {
@@ -228,7 +227,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
         unsupportedFeatures.add(CppRuleClasses.HEADER_MODULES);
       }
       FeatureConfiguration featureConfiguration =
-          CcCommon.configureFeatures(
+          CcCommon.configureFeaturesOrReportRuleError(
               ruleContext,
               requestedFeatures.build(),
               unsupportedFeatures.build(),
@@ -236,9 +235,10 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       return featureConfiguration;
     }
 
-    private CcLibraryHelper initializeCcLibraryHelper(FeatureConfiguration featureConfiguration) {
-      CcLibraryHelper helper =
-          new CcLibraryHelper(
+    private CcCompilationHelper initializeCompilationHelper(
+        FeatureConfiguration featureConfiguration) {
+      CcCompilationHelper helper =
+          new CcCompilationHelper(
               ruleContext,
               cppSemantics,
               featureConfiguration,
@@ -250,22 +250,31 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       }
 
       helper.addDeps(ruleContext.getPrerequisites("deps", TARGET));
+
+      // Don't instrument the generated C++ files even when --collect_code_coverage is set.
+      helper.setAllowCoverageInstrumentation(false);
       return helper;
     }
 
-    private CcLibraryHelper initializeCompilationHelper(FeatureConfiguration featureConfiguration) {
-      return initializeCcLibraryHelper(featureConfiguration);
-    }
-
-    private CcLibraryHelper initializeLinkingHelper(FeatureConfiguration featureConfiguration) {
-      CcLibraryHelper helper =
-          initializeCcLibraryHelper(featureConfiguration)
-              .enableCcSpecificLinkParamsProvider()
+    private CcLinkingHelper initializeLinkingHelper(FeatureConfiguration featureConfiguration) {
+      CcLinkingHelper helper =
+          new CcLinkingHelper(
+                  ruleContext,
+                  cppSemantics,
+                  featureConfiguration,
+                  ccToolchain(ruleContext),
+                  CppHelper.getFdoSupportUsingDefaultCcToolchainAttribute(ruleContext),
+                  ruleContext.getConfiguration())
               .enableCcNativeLibrariesProvider();
+      TransitiveInfoCollection runtime = getProtoToolchainProvider().runtime();
+      if (runtime != null) {
+        helper.addDeps(ImmutableList.of(runtime));
+      }
+      helper.addDeps(ruleContext.getPrerequisites("deps", TARGET));
       // TODO(dougk): Configure output artifact with action_config
       // once proto compile action is configurable from the crosstool.
       if (!ccToolchain(ruleContext).supportsDynamicLinker()) {
-        helper.setCreateDynamicLibrary(false);
+        helper.setShouldCreateDynamicLibrary(false);
       }
       return helper;
     }
@@ -287,7 +296,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       return result.build();
     }
 
-    private void registerBlacklistedSrcs(SupportData supportData, CcLibraryHelper helper) {
+    private void registerBlacklistedSrcs(SupportData supportData, CcCompilationHelper helper) {
       // Hack: This is a proto_library for descriptor.proto or similar.
       //
       // The headers of those libraries are precomputed . They are also explicitly part of normal
@@ -333,10 +342,11 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
           supportData.getDirectProtoSources(),
           supportData.getTransitiveImports(),
           supportData.getProtosInDirectDeps(),
+          supportData.getTransitiveProtoPathFlags(),
           ruleContext.getLabel(),
           outputs,
           "C++",
-          true /* allowServices */);
+          /* allowServices= */ true);
     }
 
     private ProtoLangToolchainProvider getProtoToolchainProvider() {

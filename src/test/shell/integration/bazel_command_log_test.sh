@@ -32,16 +32,15 @@ function strip_lines_from_bazel_cc() {
 
   # different sandbox_root result in different startup options
   clean_log=$(\
-    sed\
-    -e '/^Sending SIGTERM to previous B(l)?aze(l)? server/d'\
-    -e "/^INFO: Reading 'startup' options from /d"\
-    -e '/^INFO: $TEST_TMPDIR defined: output root default is/d'\
-    -e '/^OpenJDK 64-Bit Server VM warning: ignoring option UseSeparateVSpacesInYoungGen; support was removed in 8.0/d'\
-    -e '/^Extracting B(l)?aze(l)? installation\.\.\.$/d'\
-    -e '/Waiting for response from B(l)?aze(l)? server/d'\
-    -e '/^\.*$/d'\
-    -e '/^Killed non-responsive server process/d'\
-    -e '/server needs to be killed, because the startup options are different/d'\
+    sed \
+    -e "/^INFO: Reading 'startup' options from /d" \
+    -e '/^\$TEST_TMPDIR defined: output root default is/d' \
+    -e '/^OpenJDK 64-Bit Server VM warning: ignoring option UseSeparateVSpacesInYoungGen; support was removed in 8.0/d' \
+    -e '/^Starting local B[azel]* server and connecting to it\.\.\.\.*$/d' \
+    -e '/^\.\.\. still trying to connect to local B[azel]* server after \d+ seconds \.\.\.\.*$/d' \
+    -e '/^Killed non-responsive server process/d' \
+    -e '/server needs to be killed, because the startup options are different/d' \
+    -e '/^WARNING: Waiting for server process to terminate (waited 5 seconds, waiting at most 60)$/d' \
     $TEST_log)
 
   echo "$clean_log" > $TEST_log

@@ -15,12 +15,12 @@
 
 #include <string>
 
-#include "gtest/gtest.h"
+#include "googletest/include/gtest/gtest.h"
 #include "src/test/cpp/util/windows_test_util.h"
 
-#if !defined(COMPILER_MSVC) && !defined(__CYGWIN__)
+#if !defined(_WIN32) && !defined(__CYGWIN__)
 #error("This test should only be run on Windows")
-#endif  // !defined(COMPILER_MSVC) && !defined(__CYGWIN__)
+#endif  // !defined(_WIN32) && !defined(__CYGWIN__)
 
 namespace blaze_util {
 

@@ -41,7 +41,7 @@ import org.junit.runners.JUnit4;
 public class RunfilesTest extends FoundationTestCase {
 
   private void checkWarning() {
-    assertContainsEvent("obscured by a -> /workspace/a");
+    assertContainsEvent("obscured by a -> x");
     assertWithMessage("Runfiles.filterListForObscuringSymlinks should have warned once")
         .that(eventCollector.count())
         .isEqualTo(1);
@@ -53,7 +53,7 @@ public class RunfilesTest extends FoundationTestCase {
     Map<PathFragment, Artifact> obscuringMap = new HashMap<>();
     PathFragment pathA = PathFragment.create("a");
     ArtifactRoot root = ArtifactRoot.asSourceRoot(Root.fromPath(scratch.resolve("/workspace")));
-    Artifact artifactA = new Artifact(PathFragment.create("a"), root);
+    Artifact artifactA = new Artifact(PathFragment.create("x"), root);
     obscuringMap.put(pathA, artifactA);
     obscuringMap.put(PathFragment.create("a/b"), new Artifact(PathFragment.create("c/b"),
         root));
@@ -67,8 +67,7 @@ public class RunfilesTest extends FoundationTestCase {
     Map<PathFragment, Artifact> obscuringMap = new HashMap<>();
     PathFragment pathA = PathFragment.create("a");
     ArtifactRoot root = ArtifactRoot.asSourceRoot(Root.fromPath(scratch.resolve("/workspace")));
-    Artifact artifactA = new Artifact(PathFragment.create("a"),
-                                          root);
+    Artifact artifactA = new Artifact(PathFragment.create("x"), root);
     obscuringMap.put(pathA, artifactA);
     obscuringMap.put(PathFragment.create("a/b/c"), new Artifact(PathFragment.create("b/c"),
                                                          root));
@@ -432,5 +431,25 @@ public class RunfilesTest extends FoundationTestCase {
         new Runfiles.Builder("TESTING").merge(runfiles1).merge(runfiles2).build();
     assertThat(runfilesMerged.getExtraMiddlemen())
         .containsExactlyElementsIn(ImmutableList.of(mm1, mm2));
+  }
+
+  @Test
+  public void testGetEmptyFilenames() {
+    ArtifactRoot root = ArtifactRoot.asSourceRoot(Root.fromPath(scratch.resolve("/workspace")));
+    Artifact artifact = new Artifact(PathFragment.create("my-artifact"), root);
+    Runfiles runfiles =
+        new Runfiles.Builder("TESTING")
+            .addArtifact(artifact)
+            .addSymlink(PathFragment.create("my-symlink"), artifact)
+            .addRootSymlink(PathFragment.create("my-root-symlink"), artifact)
+            .setEmptyFilesSupplier(
+                (manifestPaths) ->
+                    manifestPaths
+                        .stream()
+                        .map((f) -> f.replaceName(f.getBaseName() + "-empty"))
+                        .collect(ImmutableList.toImmutableList()))
+            .build();
+    assertThat(runfiles.getEmptyFilenames())
+        .containsExactly("my-artifact-empty", "my-symlink-empty");
   }
 }

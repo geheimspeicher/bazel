@@ -15,26 +15,26 @@ package com.google.devtools.build.lib.rules.cpp;
 
 import static com.google.common.truth.Truth.assertThat;
 
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactRoot;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
+import com.google.devtools.build.lib.rules.cpp.CcCommon.CoptsFilter;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
-import com.google.devtools.build.lib.rules.cpp.CompileCommandLine.Builder;
 import com.google.devtools.build.lib.rules.cpp.CppCompileAction.DotdFile;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
 /**
- * Tests for {@link CompileCommandLine}, for example testing the ordering of individual command
- * line flags, or that command line is emitted differently subject to the presence of certain
- * build variables. Also used to test migration logic (removing hardcoded flags and expressing
- * them using feature configuration.
+ * Tests for {@link com.google.devtools.build.lib.rules.cpp.CompileCommandLine}, for example testing
+ * the ordering of individual command line flags, or that command line is emitted differently
+ * subject to the presence of certain build variables. Also used to test migration logic (removing
+ * hardcoded flags and expressing them using feature configuration.
  */
 @RunWith(JUnit4.class)
 public class CompileCommandLineTest extends BuildViewTestCase {
@@ -55,14 +55,13 @@ public class CompileCommandLineTest extends BuildViewTestCase {
     return CcToolchainFeaturesTest.buildFeatures(crosstool)
         .getFeatureConfiguration(
             ImmutableSet.of(
-                CppCompileAction.ASSEMBLE,
-                CppCompileAction.PREPROCESS_ASSEMBLE,
-                CppCompileAction.C_COMPILE,
-                CppCompileAction.CPP_COMPILE,
-                CppCompileAction.CPP_HEADER_PARSING,
-                CppCompileAction.CPP_HEADER_PREPROCESSING,
-                CppCompileAction.CPP_MODULE_CODEGEN,
-                CppCompileAction.CPP_MODULE_COMPILE));
+                CppActionNames.ASSEMBLE,
+                CppActionNames.PREPROCESS_ASSEMBLE,
+                CppActionNames.C_COMPILE,
+                CppActionNames.CPP_COMPILE,
+                CppActionNames.CPP_HEADER_PARSING,
+                CppActionNames.CPP_MODULE_CODEGEN,
+                CppActionNames.CPP_MODULE_COMPILE));
   }
 
   @Test
@@ -90,7 +89,7 @@ public class CompileCommandLineTest extends BuildViewTestCase {
                     "  }",
                     "}"))
             .build();
-    assertThat(compileCommandLine.getArgv(scratchArtifact("a/FakeOutput").getExecPath(), null))
+    assertThat(compileCommandLine.getArguments(/* overwrittenVariables= */ null))
         .contains("-some_foo_flag");
   }
 
@@ -130,23 +129,16 @@ public class CompileCommandLineTest extends BuildViewTestCase {
                     "    }",
                     "  }",
                     "}"))
-            .setCoptsFilter(flag -> !flag.contains("i_am_a_flag"))
+            .setCoptsFilter(CoptsFilter.fromRegex(Pattern.compile(".*i_am_a_flag.*")))
             .build();
-    return compileCommandLine.getArgv(scratchArtifact("a/FakeOutput").getExecPath(), null);
+    return compileCommandLine.getArguments(/* overwrittenVariables= */ null);
   }
 
-  private Builder makeCompileCommandLineBuilder() throws Exception {
+  private CompileCommandLine.Builder makeCompileCommandLineBuilder() throws Exception {
     return CompileCommandLine.builder(
         scratchArtifact("a/FakeInput"),
-        scratchArtifact("a/FakeOutput"),
-        new Predicate<String>() {
-          @Override
-          public boolean apply(String s) {
-            return true;
-          }
-        },
+        CoptsFilter.alwaysPasses(),
         "c++-compile",
-        getTargetConfiguration().getFragment(CppConfiguration.class).getCrosstoolTopPathFragment(),
         new DotdFile(scratchArtifact("a/dotD")));
   }
 }

@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.util.io.OutErr;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.OptionMetadataTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsProvider;
@@ -68,12 +69,20 @@ public class InfoCommand implements BlazeCommand {
     @Option(
       name = "show_make_env",
       defaultValue = "false",
-      category = "misc",
       documentationCategory = OptionDocumentationCategory.LOGGING,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.TERMINAL_OUTPUT},
       help = "Include the \"Make\" environment in the output."
     )
     public boolean showMakeEnvironment;
+
+    @Option(
+        name = "experimental_supports_info_crosstool_configuration",
+        defaultValue = "true",
+        documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+        effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.TERMINAL_OUTPUT},
+        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help = "Flag to roll out the removal of 'bazel info crosstool-configuration'.")
+    public boolean experimentalSupportsInfoCrosstoolConfiguration;
   }
 
   /**
@@ -210,7 +219,6 @@ public class InfoCommand implements BlazeCommand {
             new InfoItem.BlazeBinInfoItem(productName),
             new InfoItem.BlazeGenfilesInfoItem(productName),
             new InfoItem.BlazeTestlogsInfoItem(productName),
-            new InfoItem.MessageLogInfoItem(),
             new InfoItem.ReleaseInfoItem(productName),
             new InfoItem.ServerPidInfoItem(productName),
             new InfoItem.PackagePathInfoItem(commandOptions),

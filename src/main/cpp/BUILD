@@ -59,6 +59,7 @@ cc_library(
     deps = [
         "//src/main/cpp/util",
         "//src/main/cpp/util:blaze_exit_code",
+        "//src/main/cpp/util:logging",
     ] + select({
         "//src/conditions:windows": ["//src/main/native/windows:lib-file"],
         "//conditions:default": [],
@@ -99,11 +100,13 @@ cc_binary(
     }),
     visibility = ["//src:__pkg__"],
     deps = [
+        ":bazel_startup_options",
         ":blaze_util",
         ":option_processor",
         ":startup_options",
         ":workspace_layout",
         "//src/main/cpp/util",
+        "//src/main/cpp/util:bazel_log_handler",
         "//src/main/cpp/util:errors",
         "//src/main/cpp/util:logging",
         "//src/main/cpp/util:strings",
@@ -119,12 +122,27 @@ cc_library(
         "option_processor.h",
         "option_processor-internal.h",
     ],
+    # The system bazelrc can be voided by setting BAZEL_SYSTEM_BAZELRC_PATH to
+    # /dev/null.
+    copts = select({
+        # We need to escape for multiple levels, here, this becomes
+        # /DBAZEL_SYSTEM_BAZELRC_PATH="%%ProgramData%%/bazel.bazelrc"',
+        # and the double % get reduced down to 1 by the compiler. A forward
+        # slash is used because \b is a special character, backspace.
+        "//src/conditions:windows": [
+            "/DBAZEL_SYSTEM_BAZELRC_PATH#\\\"%%ProgramData%%/bazel.bazelrc\\\"",
+        ],
+        "//conditions:default": [
+            "-DBAZEL_SYSTEM_BAZELRC_PATH=\\\"/etc/bazel.bazelrc\\\"",
+        ],
+    }),
     visibility = [
         "//src:__pkg__",
         "//src/test/cpp:__pkg__",
     ],
     deps = [
         ":blaze_util",
+        ":rc_file",
         ":startup_options",
         ":workspace_layout",
         "//src/main/cpp/util",
@@ -151,6 +169,22 @@ cc_library(
 )
 
 cc_library(
+    name = "bazel_startup_options",
+    srcs = ["bazel_startup_options.cc"],
+    hdrs = ["bazel_startup_options.h"],
+    visibility = [
+        "//src:__pkg__",
+        "//src/test/cpp:__pkg__",
+    ],
+    deps = [
+        ":blaze_util",
+        ":startup_options",
+        ":workspace_layout",
+        "//src/main/cpp/util:blaze_exit_code",
+    ],
+)
+
+cc_library(
     name = "workspace_layout",
     srcs = ["workspace_layout.cc"],
     hdrs = ["workspace_layout.h"],
@@ -161,6 +195,22 @@ cc_library(
     deps = [
         ":blaze_util",
         "//src/main/cpp/util",
+    ],
+)
+
+cc_library(
+    name = "rc_file",
+    srcs = ["rc_file.cc"],
+    hdrs = ["rc_file.h"],
+    visibility = [
+        "//src:__pkg__",
+        "//src/test/cpp:__pkg__",
+    ],
+    deps = [
+        ":blaze_util",
+        ":workspace_layout",
+        "//src/main/cpp/util",
+        "//src/main/cpp/util:logging",
     ],
 )
 

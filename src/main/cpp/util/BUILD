@@ -15,13 +15,15 @@ cc_library(
         "file_platform.h",
         "md5.h",
         "numbers.h",
+        "path.h",
+        "path_platform.h",
         "port.h",
     ],
     visibility = ["//visibility:public"],
     deps = [
         ":blaze_exit_code",
         ":errors",
-        ":file",
+        ":filesystem",
         ":md5",
         ":numbers",
         ":port",
@@ -30,18 +32,25 @@ cc_library(
 )
 
 cc_library(
-    name = "file",
-    srcs = ["file.cc"] + select({
+    name = "filesystem",
+    srcs = [
+        "file.cc",
+        "path.cc",
+    ] + select({
         "//src/conditions:windows": [
             "file_windows.cc",
+            "path_windows.cc",
         ],
         "//conditions:default": [
             "file_posix.cc",
+            "path_posix.cc",
         ],
     }),
     hdrs = [
         "file.h",
         "file_platform.h",
+        "path.h",
+        "path_platform.h",
     ],
     visibility = [
         ":ijar",
@@ -49,10 +58,12 @@ cc_library(
         "//src/tools/launcher:__subpackages__",
         "//src/tools/singlejar:__pkg__",
         "//third_party/def_parser:__pkg__",
+        "//tools/cpp/runfiles:__pkg__",
     ],
     deps = [
         ":blaze_exit_code",
         ":errors",
+        ":logging",
         ":strings",
     ] + select({
         "//src/conditions:windows": ["//src/main/native/windows:lib-file"],
@@ -62,7 +73,7 @@ cc_library(
 
 cc_library(
     name = "errors",
-    srcs = ["errors.cc"] + select({
+    srcs = select({
         "//src/conditions:windows": ["errors_windows.cc"],
         "//conditions:default": ["errors_posix.cc"],
     }),
@@ -71,7 +82,11 @@ cc_library(
         ":ijar",
         "//src/main/cpp:__subpackages__",
     ],
-    deps = [":port"],
+    deps = [
+        ":logging",
+        ":port",
+        ":strings",
+    ],
 )
 
 cc_library(
@@ -92,6 +107,10 @@ cc_library(
     srcs = ["logging.cc"],
     hdrs = ["logging.h"],
     visibility = ["//visibility:public"],
+    deps = [
+        ":blaze_exit_code",
+        ":strings",
+    ],
 )
 
 cc_library(
@@ -100,7 +119,8 @@ cc_library(
     hdrs = ["bazel_log_handler.h"],
     visibility = ["//visibility:public"],
     deps = [
-        ":file",
+        ":blaze_exit_code",
+        ":filesystem",
         ":logging",
     ],
 )
@@ -125,6 +145,26 @@ cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [":blaze_exit_code"],
+)
+
+cc_library(
+    name = "profiler",
+    srcs = [
+        "profiler.cc",
+    ] + select({
+        "//src/conditions:windows": ["profiler_windows.cc"],
+        "//conditions:default": ["profiler_posix.cc"],
+    }),
+    hdrs = ["profiler.h"],
+    visibility = [
+        "//src/main/cpp:__pkg__",
+        "//src/test/cpp/util:__pkg__",
+    ],
+    deps = [
+        ":blaze_exit_code",
+        ":errors",
+        ":logging",
+    ],
 )
 
 cc_library(

@@ -22,11 +22,12 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Sets;
-import com.google.devtools.build.lib.analysis.actions.CommandLineItem;
+import com.google.devtools.build.lib.actions.CommandLineItem;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
-import com.google.devtools.build.lib.rules.android.ResourceContainer.ResourceType;
 import com.google.devtools.build.lib.rules.android.ResourceContainerConverter.ToArg.Includes;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -35,15 +36,18 @@ import java.util.function.Consumer;
  * Factory for functions to convert a {@link ResourceContainer} to a commandline argument, or a
  * collection of artifacts. Uses a certain convention for commandline arguments (e.g., separators,
  * and ordering of container elements).
+ *
+ * @deprecated Use {@link AndroidDataConverter} instead.
  */
 @VisibleForTesting
+@Deprecated
 public class ResourceContainerConverter {
 
   static Builder builder() {
     return new Builder();
   }
 
-  static class ToArg extends CommandLineItem.ParametrizedMapFn<ResourceContainer> {
+  static class ToArg extends CommandLineItem.ParametrizedMapFn<ValidatedAndroidData> {
 
     private final Set<Includes> includes;
     private final SeparatorType separatorType;
@@ -72,35 +76,47 @@ public class ResourceContainerConverter {
 
       switch (separatorType) {
         case COLON_COMMA:
-          argJoiner = Joiner.on(":");
+          argJoiner = COLON_JOINER;
           // We currently use ":" to separate components of an argument and "," to separate
           // arguments in a list of arguments. Those characters require escaping if used in a label
           // (part of the set of allowed characters in a label).
           if (includes.contains(Includes.Label)) {
-            escaper = (String input) -> input.replace(":", "\\:").replace(",", "\\,");
+            escaper = COLON_COMMA;
           } else {
-            escaper = Functions.identity();
+            escaper = IDENTITY;
           }
           break;
         case SEMICOLON_AMPERSAND:
-          argJoiner = Joiner.on(";");
-          escaper = Functions.identity();
+          argJoiner = SEMICOLON_JOINER;
+          escaper = IDENTITY;
           break;
         default:
           throw new IllegalStateException("Unknown separator type " + separatorType);
       }
     }
 
+    @AutoCodec @AutoCodec.VisibleForSerialization
+    static final Function<String, String> IDENTITY = Functions.identity();
+
+    @AutoCodec @AutoCodec.VisibleForSerialization
+    static final Function<String, String> COLON_COMMA =
+        (input) -> input.replace(":", "\\:").replace(",", "\\,");
+
+    @AutoCodec @AutoCodec.VisibleForSerialization
+    static final Joiner SEMICOLON_JOINER = Joiner.on(";");
+
+    @AutoCodec @AutoCodec.VisibleForSerialization static final Joiner COLON_JOINER = Joiner.on(":");
+
     @Override
-    public void expandToCommandLine(ResourceContainer container, Consumer<String> args) {
+    public void expandToCommandLine(ValidatedAndroidData container, Consumer<String> args) {
       args.accept(map(container));
     }
 
-    String map(ResourceContainer container) {
+    String map(ValidatedAndroidData container) {
       ImmutableList.Builder<String> cmdPieces = ImmutableList.builder();
       if (includes.contains(Includes.ResourceRoots)) {
-        cmdPieces.add(convertRoots(container, ResourceType.RESOURCES));
-        cmdPieces.add(convertRoots(container, ResourceType.ASSETS));
+        cmdPieces.add(convertRoots(container.getResourceRoots()));
+        cmdPieces.add(convertRoots(container.getAssetRoots()));
       }
       if (includes.contains(Includes.Label)) {
         cmdPieces.add(escaper.apply(container.getLabel().toString()));
@@ -195,11 +211,8 @@ public class ResourceContainerConverter {
   }
 
   @VisibleForTesting
-  public static String convertRoots(ResourceContainer container, ResourceType resourceType) {
-    return Joiner.on("#")
-        .join(
-            Iterators.transform(
-                container.getRoots(resourceType).iterator(), Functions.toStringFunction()));
+  public static String convertRoots(Iterable<PathFragment> roots) {
+    return Joiner.on("#").join(Iterators.transform(roots.iterator(), Functions.toStringFunction()));
   }
 
   /**

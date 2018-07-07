@@ -28,16 +28,16 @@ import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.BlazeVersionInfo;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
-import com.google.devtools.build.lib.analysis.config.BinTools;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationFragmentFactory;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory;
-import com.google.devtools.build.lib.buildeventstream.PathConverter;
-import com.google.devtools.build.lib.buildtool.BuildRequestOptions;
+import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploaderMap;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.clock.Clock;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.OutputFilter;
+import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.RuleClassProvider;
@@ -47,6 +47,7 @@ import com.google.devtools.build.lib.profiler.ProfilePhase;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.Profiler.ProfiledTaskKinds;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.query2.AbstractBlazeQueryEnvironment;
 import com.google.devtools.build.lib.query2.QueryEnvironmentFactory;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
@@ -87,12 +88,12 @@ import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsParsingException;
 import com.google.devtools.common.options.OptionsProvider;
 import com.google.devtools.common.options.TriState;
-import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Type;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
@@ -154,7 +155,7 @@ public final class BlazeRuntime {
   private final String defaultsPackageContent;
   private final SubscriberExceptionHandler eventBusExceptionHandler;
   private final String productName;
-  private final PathConverter pathToUriConverter;
+  private final BuildEventArtifactUploaderMap buildEventArtifactUploaders;
   private final ActionKeyContext actionKeyContext;
 
   // Workspace state (currently exactly one workspace per server)
@@ -179,7 +180,7 @@ public final class BlazeRuntime {
       InvocationPolicy moduleInvocationPolicy,
       Iterable<BlazeCommand> commands,
       String productName,
-      PathConverter pathToUriConverter) {
+      BuildEventArtifactUploaderMap buildEventArtifactUploaders) {
     // Server state
     this.fileSystem = fileSystem;
     this.blazeModules = blazeModules;
@@ -206,7 +207,7 @@ public final class BlazeRuntime {
     CommandNameCache.CommandNameCacheInstance.INSTANCE.setCommandNameCache(
         new CommandNameCacheImpl(getCommandMap()));
     this.productName = productName;
-    this.pathToUriConverter = pathToUriConverter;
+    this.buildEventArtifactUploaders = buildEventArtifactUploaders;
   }
 
   public BlazeWorkspace initWorkspace(BlazeDirectories directories, BinTools binTools)
@@ -260,22 +261,33 @@ public final class BlazeRuntime {
     return moduleInvocationPolicy;
   }
 
-  /**
-   * Conditionally enable profiling.
-   */
-  private final boolean initProfiler(CommandEnvironment env, CommonCommandOptions options,
-      UUID buildID, long execStartTimeNanos) {
+  /** Configure profiling based on the provided options. */
+  void initProfiler(
+      EventHandler eventHandler,
+      BlazeWorkspace workspace,
+      CommonCommandOptions options,
+      UUID buildID,
+      long execStartTimeNanos) {
     OutputStream out = null;
     boolean recordFullProfilerData = false;
     ProfiledTaskKinds profiledTasks = ProfiledTaskKinds.NONE;
-
+    Profiler.Format format = Profiler.Format.BINARY_BAZEL_FORMAT;
     try {
-      if (options.profilePath != null) {
-        Path profilePath = env.getWorkspace().getRelative(options.profilePath);
+      if (options.enableTracer) {
+        Path profilePath = options.profilePath != null
+            ? workspace.getWorkspace().getRelative(options.profilePath)
+            : workspace.getOutputBase().getRelative("command.profile");
+        recordFullProfilerData = false;
+        out = profilePath.getOutputStream();
+        eventHandler.handle(Event.info("Writing tracer profile to '" + profilePath + "'"));
+        profiledTasks = ProfiledTaskKinds.ALL_FOR_TRACE;
+        format = Profiler.Format.JSON_TRACE_FILE_FORMAT;
+      } else if (options.profilePath != null) {
+        Path profilePath = workspace.getWorkspace().getRelative(options.profilePath);
 
         recordFullProfilerData = options.recordFullProfilerData;
-        out = new BufferedOutputStream(profilePath.getOutputStream(), 1024 * 1024);
-        env.getReporter().handle(Event.info("Writing profile data to '" + profilePath + "'"));
+        out = profilePath.getOutputStream();
+        eventHandler.handle(Event.info("Writing profile data to '" + profilePath + "'"));
         profiledTasks = ProfiledTaskKinds.ALL;
       } else if (options.alwaysProfileSlowOperations) {
         recordFullProfilerData = false;
@@ -283,16 +295,35 @@ public final class BlazeRuntime {
         profiledTasks = ProfiledTaskKinds.SLOWEST;
       }
       if (profiledTasks != ProfiledTaskKinds.NONE) {
-        Profiler.instance().start(profiledTasks, out,
-            getProductName() + " profile for " + env.getOutputBase() + " at " + new Date()
-            + ", build ID: " + buildID,
-            recordFullProfilerData, clock, execStartTimeNanos);
-        return true;
+        Profiler profiler = Profiler.instance();
+        profiler.start(
+            profiledTasks,
+            out,
+            format,
+            String.format(
+                "%s profile for %s at %s, build ID: %s",
+                getProductName(),
+                workspace.getOutputBase(),
+                new Date(),
+                buildID),
+            recordFullProfilerData,
+            clock,
+            execStartTimeNanos);
+        // Instead of logEvent() we're calling the low level function to pass the timings we took in
+        // the launcher. We're setting the INIT phase marker so that it follows immediately the
+        // LAUNCH phase.
+        long startupTimeNanos = options.startupTime * 1000000L;
+        profiler.logSimpleTaskDuration(
+            execStartTimeNanos - startupTimeNanos,
+            Duration.ZERO,
+            ProfilerTask.PHASE,
+            ProfilePhase.LAUNCH.description);
+        profiler.logSimpleTaskDuration(
+            execStartTimeNanos, Duration.ZERO, ProfilerTask.PHASE, ProfilePhase.INIT.description);
       }
     } catch (IOException e) {
-      env.getReporter().handle(Event.error("Error while creating profile file: " + e.getMessage()));
+      eventHandler.handle(Event.error("Error while creating profile file: " + e.getMessage()));
     }
-    return false;
   }
 
   public FileSystem getFileSystem() {
@@ -353,6 +384,25 @@ public final class BlazeRuntime {
     return blazeModules;
   }
 
+  public BuildOptions getDefaultBuildOptions() {
+    BuildOptions options = null;
+    for (BlazeModule module : blazeModules) {
+      BuildOptions optionsFromModule = module.getDefaultBuildOptions(this);
+      if (optionsFromModule != null) {
+        if (options == null) {
+          options = optionsFromModule;
+        } else {
+          throw new IllegalArgumentException(
+              "Two or more blaze modules contained default build options.");
+        }
+      }
+    }
+    if (options == null) {
+      throw new IllegalArgumentException("No default build options specified in any Blaze module");
+    }
+    return options;
+  }
+
   @SuppressWarnings("unchecked")
   public <T extends BlazeModule> T getBlazeModule(Class<T> moduleClass) {
     for (BlazeModule module : blazeModules) {
@@ -377,6 +427,10 @@ public final class BlazeRuntime {
     return projectFileProvider;
   }
 
+  public Path getOutputBase() {
+    return getWorkspace().getDirectories().getOutputBase();
+  }
+
   /**
    * Hook method called by the BlazeCommandDispatcher prior to the dispatch of
    * each command.
@@ -384,25 +438,12 @@ public final class BlazeRuntime {
    * @param options The CommonCommandOptions used by every command.
    * @throws AbruptExitException if this command is unsuitable to be run as specified
    */
-  void beforeCommand(CommandEnvironment env, CommonCommandOptions options, long execStartTimeNanos)
+  void beforeCommand(CommandEnvironment env, CommonCommandOptions options)
       throws AbruptExitException {
-    // Conditionally enable profiling
-    // We need to compensate for launchTimeNanos (measurements taken outside of the jvm).
-    long startupTimeNanos = options.startupTime * 1000000L;
-    if (initProfiler(env, options, env.getCommandId(), execStartTimeNanos - startupTimeNanos)) {
-      Profiler profiler = Profiler.instance();
-
-      // Instead of logEvent() we're calling the low level function to pass the timings we took in
-      // the launcher. We're setting the INIT phase marker so that it follows immediately the LAUNCH
-      // phase.
-      profiler.logSimpleTaskDuration(execStartTimeNanos - startupTimeNanos, 0, ProfilerTask.PHASE,
-          ProfilePhase.LAUNCH.description);
-      profiler.logSimpleTaskDuration(execStartTimeNanos, 0, ProfilerTask.PHASE,
-          ProfilePhase.INIT.description);
-    }
-
     if (options.memoryProfilePath != null) {
       Path memoryProfilePath = env.getWorkingDirectory().getRelative(options.memoryProfilePath);
+      MemoryProfiler.instance()
+          .setStableMemoryParameters(options.memoryProfileStableHeapParameters);
       try {
         MemoryProfiler.instance().start(memoryProfilePath.getOutputStream());
       } catch (IOException e) {
@@ -429,25 +470,40 @@ public final class BlazeRuntime {
     workspace.getSkyframeExecutor().getEventBus().post(new CommandCompleteEvent(exitCode));
   }
 
-  /** Hook method called by the BlazeCommandDispatcher after the dispatch of each command. */
+  /**
+   * Hook method called by the BlazeCommandDispatcher after the dispatch of each command. Returns a
+   * new exit code in case exceptions were encountered during cleanup.
+   */
   @VisibleForTesting
-  public void afterCommand(CommandEnvironment env, int exitCode) {
+  public int afterCommand(CommandEnvironment env, int exitCode) {
     // Remove any filters that the command might have added to the reporter.
     env.getReporter().setOutputFilter(OutputFilter.OUTPUT_EVERYTHING);
 
     notifyCommandComplete(exitCode);
 
     for (BlazeModule module : blazeModules) {
-      module.afterCommand();
+      try (SilentCloseable c = Profiler.instance().profile(module + ".afterCommand")) {
+        module.afterCommand();
+      }
     }
 
-    // If the command just completed was or inherits from Build, wipe the dependency graph if
-    // requested. This is sufficient, as this method is always run at the end of commands unless
-    // the server crashes, in which case no inmemory state will linger for the next build anyway.
-    BuildRequestOptions buildRequestOptions =
-        env.getOptions().getOptions(BuildRequestOptions.class);
-    if (buildRequestOptions != null && !buildRequestOptions.keepStateAfterBuild) {
+    // Wipe the dependency graph if requested. Note that this method always runs at the end of
+    // a commands unless the server crashes, in which case no inmemory state will linger for the
+    // next build anyway.
+    CommonCommandOptions commonOptions =
+        Preconditions.checkNotNull(env.getOptions().getOptions(CommonCommandOptions.class));
+    if (!commonOptions.keepStateAfterBuild) {
       workspace.getSkyframeExecutor().resetEvaluator();
+    }
+
+    // Build-related commands already call this hook in BuildTool#stopRequest, but non-build
+    // commands might also need to notify the SkyframeExecutor. It's called in #stopRequest so that
+    // timing metrics for builds can be more accurate (since this call can be slow).
+    try {
+      workspace.getSkyframeExecutor().notifyCommandComplete();
+    } catch (InterruptedException e) {
+      exitCode = ExitCode.INTERRUPTED.getNumericExitCode();
+      Thread.currentThread().interrupt();
     }
 
     env.getBlazeWorkspace().clearEventBus();
@@ -461,6 +517,7 @@ public final class BlazeRuntime {
     env.getReporter().clearEventBus();
 
     actionKeyContext.clear();
+    return exitCode;
   }
 
   // Make sure we keep a strong reference to this logger, so that the
@@ -618,8 +675,7 @@ public final class BlazeRuntime {
    * @param requestStrings
    * @return the filtered request to write to the log.
    */
-  @VisibleForTesting
-  static String getRequestLogString(List<String> requestStrings) {
+  public static String getRequestLogString(List<String> requestStrings) {
     StringBuilder buf = new StringBuilder();
     buf.append('[');
     String sep = "";
@@ -830,8 +886,6 @@ public final class BlazeRuntime {
         logger.log(Level.SEVERE, "Exception while executing binary from 'run' command", e);
         return ExitCode.LOCAL_ENVIRONMENTAL_ERROR.getNumericExitCode();
       }
-    } catch (BlazeCommandDispatcher.ShutdownBlazeServerException e) {
-      return e.getExitCode().getNumericExitCode();
     } catch (InterruptedException e) {
       // This is almost main(), so it's okay to just swallow it. We are exiting soon.
       return ExitCode.INTERRUPTED.getNumericExitCode();
@@ -850,7 +904,26 @@ public final class BlazeRuntime {
   private static int serverMain(Iterable<BlazeModule> modules, OutErr outErr, String[] args) {
     InterruptSignalHandler sigintHandler = null;
     try {
-      final RPCServer blazeServer = createBlazeRPCServer(modules, Arrays.asList(args));
+      final RPCServer[] rpcServer = new RPCServer[1];
+      Runnable prepareForAbruptShutdown = () -> rpcServer[0].prepareForAbruptShutdown();
+      BlazeRuntime runtime = newRuntime(modules, Arrays.asList(args), prepareForAbruptShutdown);
+      BlazeCommandDispatcher dispatcher = new BlazeCommandDispatcher(runtime);
+      BlazeServerStartupOptions startupOptions =
+          runtime.getStartupOptionsProvider().getOptions(BlazeServerStartupOptions.class);
+      try {
+        // This is necessary so that Bazel kind of works during bootstrapping, at which time the
+        // gRPC server is not compiled in so that we don't need gRPC for bootstrapping.
+        Class<?> factoryClass = Class.forName(
+            "com.google.devtools.build.lib.server.GrpcServerImpl$Factory");
+        RPCServer.Factory factory = (RPCServer.Factory) factoryClass.getConstructor().newInstance();
+        rpcServer[0] = factory.create(dispatcher, runtime.getClock(),
+            startupOptions.commandPort,
+            runtime.getWorkspace().getWorkspace(),
+            runtime.getServerDirectory(),
+            startupOptions.maxIdleSeconds);
+      } catch (ReflectiveOperationException | IllegalArgumentException e) {
+        throw new AbruptExitException("gRPC server not compiled in", ExitCode.BLAZE_INTERNAL_ERROR);
+      }
 
       // Register the signal handler.
       sigintHandler =
@@ -858,11 +931,13 @@ public final class BlazeRuntime {
             @Override
             public void run() {
               logger.severe("User interrupt");
-              blazeServer.interrupt();
+              rpcServer[0].interrupt();
             }
           };
 
-      blazeServer.serve();
+      rpcServer[0].serve();
+      runtime.shutdown();
+      dispatcher.shutdown();
       return ExitCode.SUCCESS.getNumericExitCode();
     } catch (OptionsParsingException e) {
       outErr.printErr(e.getMessage());
@@ -898,47 +973,13 @@ public final class BlazeRuntime {
   }
 
   /**
-   * Creates and returns a new Blaze RPCServer. Call {@link RPCServer#serve()} to start the server.
-   */
-  @SuppressWarnings("LiteralClassName")  // bootstrap binary does not have gRPC
-  private static RPCServer createBlazeRPCServer(
-      Iterable<BlazeModule> modules, List<String> args)
-      throws IOException, OptionsParsingException, AbruptExitException {
-    final RPCServer[] rpcServer = new RPCServer[1];
-    Runnable prepareForAbruptShutdown = () -> rpcServer[0].prepareForAbruptShutdown();
-
-    BlazeRuntime runtime = newRuntime(modules, args, prepareForAbruptShutdown);
-    BlazeCommandDispatcher dispatcher = new BlazeCommandDispatcher(runtime);
-    CommandExecutor commandExecutor = new CommandExecutor(runtime, dispatcher);
-
-    BlazeServerStartupOptions startupOptions =
-        runtime.getStartupOptionsProvider().getOptions(BlazeServerStartupOptions.class);
-    try {
-      // This is necessary so that Bazel kind of works during bootstrapping, at which time the
-      // gRPC server is not compiled in so that we don't need gRPC for bootstrapping.
-      Class<?> factoryClass = Class.forName(
-          "com.google.devtools.build.lib.server.GrpcServerImpl$Factory");
-      RPCServer.Factory factory = (RPCServer.Factory) factoryClass.getConstructor().newInstance();
-      rpcServer[0] = factory.create(commandExecutor, runtime.getClock(),
-          startupOptions.commandPort,
-          runtime.getWorkspace().getWorkspace(),
-          runtime.getServerDirectory(),
-          startupOptions.maxIdleSeconds);
-      return rpcServer[0];
-    } catch (ReflectiveOperationException | IllegalArgumentException e) {
-      throw new AbruptExitException("gRPC server not compiled in", ExitCode.BLAZE_INTERNAL_ERROR);
-    }
-
-  }
-
-  /**
    * Parses the command line arguments into a {@link OptionsParser} object.
    *
-   *  <p>This function needs to parse the --option_sources option manually so that the real option
+   * <p>This function needs to parse the --option_sources option manually so that the real option
    * parser can set the source for every option correctly. If that cannot be parsed or is missing,
    * we just report an unknown source for every startup option.
    */
-  private static OptionsProvider parseOptions(
+  private static OptionsProvider parseStartupOptions(
       Iterable<BlazeModule> modules, List<String> args) throws OptionsParsingException {
     ImmutableList<Class<? extends OptionsBase>> optionClasses =
         BlazeCommandUtils.getStartupOptions(modules);
@@ -980,7 +1021,7 @@ public final class BlazeRuntime {
   private static BlazeRuntime newRuntime(Iterable<BlazeModule> blazeModules, List<String> args,
       Runnable abruptShutdownHandler)
       throws AbruptExitException, OptionsParsingException {
-    OptionsProvider options = parseOptions(blazeModules, args);
+    OptionsProvider options = parseStartupOptions(blazeModules, args);
     for (BlazeModule module : blazeModules) {
       module.globalInit(options);
     }
@@ -989,16 +1030,22 @@ public final class BlazeRuntime {
     String productName = startupOptions.productName.toLowerCase(Locale.US);
 
     PathFragment workspaceDirectory = startupOptions.workspaceDirectory;
+    PathFragment defaultSystemJavabase = startupOptions.defaultSystemJavabase;
+    PathFragment outputUserRoot = startupOptions.outputUserRoot;
     PathFragment installBase = startupOptions.installBase;
     PathFragment outputBase = startupOptions.outputBase;
 
     maybeForceJNIByGettingPid(installBase); // Must be before first use of JNI.
 
-    // From the point of view of the Java program --install_base and --output_base
-    // are mandatory options, despite the comment in their declarations.
+    // From the point of view of the Java program --install_base, --output_base, and
+    // --output_user_root are mandatory options, despite the comment in their declarations.
     if (installBase == null || !installBase.isAbsolute()) { // (includes "" default case)
       throw new IllegalArgumentException(
           "Bad --install_base option specified: '" + installBase + "'");
+    }
+    if (outputUserRoot != null && !outputUserRoot.isAbsolute()) { // (includes "" default case)
+      throw new IllegalArgumentException(
+          "Bad --output_user_root option specified: '" + outputUserRoot + "'");
     }
     if (outputBase != null && !outputBase.isAbsolute()) { // (includes "" default case)
       throw new IllegalArgumentException(
@@ -1021,15 +1068,21 @@ public final class BlazeRuntime {
     Path.setFileSystemForSerialization(fs);
     SubprocessBuilder.setSubprocessFactory(subprocessFactoryImplementation());
 
+    Path outputUserRootPath = fs.getPath(outputUserRoot);
     Path installBasePath = fs.getPath(installBase);
     Path outputBasePath = fs.getPath(outputBase);
     Path workspaceDirectoryPath = null;
     if (!workspaceDirectory.equals(PathFragment.EMPTY_FRAGMENT)) {
       workspaceDirectoryPath = fs.getPath(workspaceDirectory);
     }
+    Path defaultSystemJavabasePath = null;
+    if (!defaultSystemJavabase.equals(PathFragment.EMPTY_FRAGMENT)) {
+      defaultSystemJavabasePath = fs.getPath(defaultSystemJavabase);
+    }
 
     ServerDirectories serverDirectories =
-        new ServerDirectories(installBasePath, outputBasePath, startupOptions.installMD5);
+        new ServerDirectories(
+            installBasePath, outputBasePath, outputUserRootPath, startupOptions.installMD5);
     Clock clock = BlazeClock.instance();
     BlazeRuntime.Builder runtimeBuilder =
         new BlazeRuntime.Builder()
@@ -1053,7 +1106,6 @@ public final class BlazeRuntime {
       LoggingUtil.installRemoteLogger(getTestCrashLogger());
     }
 
-    runtimeBuilder.addBlazeModule(new BuiltinCommandModule());
     // This module needs to be registered before any module providing a SpawnCache implementation.
     runtimeBuilder.addBlazeModule(new NoSpawnCacheModule());
     runtimeBuilder.addBlazeModule(new CommandLogModule());
@@ -1064,7 +1116,8 @@ public final class BlazeRuntime {
     BlazeRuntime runtime = runtimeBuilder.build();
 
     BlazeDirectories directories =
-        new BlazeDirectories(serverDirectories, workspaceDirectoryPath, productName);
+        new BlazeDirectories(
+            serverDirectories, workspaceDirectoryPath, defaultSystemJavabasePath, productName);
     BinTools binTools;
     try {
       binTools = BinTools.forProduction(directories);
@@ -1074,11 +1127,48 @@ public final class BlazeRuntime {
           ExitCode.LOCAL_ENVIRONMENTAL_ERROR);
     }
     runtime.initWorkspace(directories, binTools);
-    CustomExitCodePublisher.setAbruptExitStatusFileDir(serverDirectories.getOutputBase());
+    CustomExitCodePublisher.setAbruptExitStatusFileDir(
+        serverDirectories.getOutputBase().getPathString());
+
+    // Most static initializers for @SkylarkSignature-containing classes have already run by this
+    // point, but this will pick up the stragglers.
+    initSkylarkBuiltinsRegistry();
 
     AutoProfiler.setClock(runtime.getClock());
     BugReport.setRuntime(runtime);
     return runtime;
+  }
+
+  /**
+   * Configures the Skylark builtins registry.
+   *
+   * <p>Any class containing {@link SkylarkSignature}-annotated fields should call
+   * {@link SkylarkSignatureProcessor#configureSkylarkFunctions} on itself. This serves two
+   * purposes: 1) it initializes those fields for use, and 2) it registers them with the Skylark
+   * builtins registry object
+   * ({@link com.google.devtools.build.lib.syntax.Runtime#getBuiltinRegistry}). Unfortunately
+   * there's some technical debt here: The registry object is static and the registration occurs
+   * inside static initializer blocks.
+   *
+   * <p>The registry supports concurrent read/write access, but read access is not actually
+   * efficient (lockless) until write access is disallowed by calling its
+   * {@link com.google.devtools.build.lib.syntax.Runtime.BuiltinRegistry#freeze freeze} method.
+   * We want to freeze before the build begins, but not before all classes have had a chance to run
+   * their static initializers.
+   *
+   * <p>Therefore, this method first ensures that the initializers have run, and then explicitly
+   * freezes the registry. It ensures initialization by calling a no-op static method on the class.
+   * Only classes whose initializers have been observed to cause {@code BuiltinRegistry} to throw an
+   * exception need to be included here, since that indicates that their initialization did not
+   * happen by this point in time.
+   *
+   * <p>Unit tests don't need to worry about registry freeze exceptions, since the registry isn't
+   * frozen at all for them. They just pay the cost of extra synchronization on every access.
+   */
+  private static void initSkylarkBuiltinsRegistry() {
+    // Currently no classes need to be initialized here. The hook's still here because it's
+    // possible it may be needed again in the future.
+    com.google.devtools.build.lib.syntax.Runtime.getBuiltinRegistry().freeze();
   }
 
   private static String maybeGetPidString() {
@@ -1166,8 +1256,8 @@ public final class BlazeRuntime {
     return productName;
   }
 
-  public PathConverter getPathToUriConverter() {
-    return pathToUriConverter;
+  public BuildEventArtifactUploaderMap getBuildEventArtifactUploaders() {
+    return buildEventArtifactUploaders;
   }
 
   /**
@@ -1226,8 +1316,7 @@ public final class BlazeRuntime {
 
       Package.Builder.Helper packageBuilderHelper = null;
       for (BlazeModule module : blazeModules) {
-        Package.Builder.Helper candidateHelper =
-            module.getPackageBuilderHelper(ruleClassProvider, fileSystem);
+        Package.Builder.Helper candidateHelper = module.getPackageBuilderHelper(ruleClassProvider);
         if (candidateHelper != null) {
           Preconditions.checkState(packageBuilderHelper == null,
               "more than one module defines a package builder helper");
@@ -1241,7 +1330,6 @@ public final class BlazeRuntime {
       PackageFactory packageFactory =
           new PackageFactory(
               ruleClassProvider,
-              ruleClassBuilder.getPlatformRegexps(),
               serverBuilder.getAttributeContainerFactory(),
               serverBuilder.getEnvironmentExtensions(),
               BlazeVersionInfo.instance().getVersion(),
@@ -1276,7 +1364,7 @@ public final class BlazeRuntime {
           serverBuilder.getInvocationPolicy(),
           serverBuilder.getCommands(),
           productName,
-          serverBuilder.getPathToUriConverter());
+          serverBuilder.getBuildEventArtifactUploaderMap());
     }
 
     public Builder setProductName(String productName) {

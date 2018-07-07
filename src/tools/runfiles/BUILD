@@ -20,36 +20,9 @@ filegroup(
     name = "embedded_tools",
     srcs = [
         "BUILD.tools",
-        "runfiles.py",
         "//src/tools/runfiles/java/com/google/devtools/build/runfiles:embedded_tools",
     ],
     visibility = ["//src:__pkg__"],
-)
-
-py_library(
-    name = "py-runfiles",
-    srcs = ["runfiles.py"],
-)
-
-py_test(
-    name = "py-runfiles-test",
-    srcs = ["runfiles_test.py"],
-    main = "runfiles_test.py",
-    deps = [":py-runfiles"],
-)
-
-sh_library(
-    name = "runfiles_sh_lib",
-    srcs = ["runfiles.sh"],
-)
-
-sh_test(
-    name = "runfiles_sh_test",
-    srcs = select({
-        "//src/conditions:windows": ["runfiles_windows_test.sh"],
-        "//conditions:default": ["runfiles_posix_test.sh"],
-    }),
-    deps = [":runfiles_sh_lib"],
 )
 
 test_suite(

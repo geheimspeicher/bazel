@@ -51,8 +51,15 @@ If an attribute name starts with `_` it is private and users cannot set it.
 
 Every repository rule requires an `implementation` function. It contains the
 actual logic of the rule and is executed strictly in the Loading Phase.
-The function has exactly one input parameter, `repository_ctx`, and should
-always returns `None`. The input parameter `repository_ctx` can be used to
+
+The function has exactly one input parameter, `repository_ctx`. The function
+returns either `None` to signify that the rule is reproducible, or a dict with a
+set of parameters for that rule that would turn that rule into a reproducible
+one generating the same repository. For example, for a rule tracking a git
+repository that would mean returning a specific commit identifier instead of a
+floating branch that was originally specified.
+
+The input parameter `repository_ctx` can be used to
 access attribute values, and non-hermetic functions (finding a binary,
 executing a binary, creating a file in the repository or downloading a file
 from the Internet). See [the library](lib/repository_ctx.html) for more
@@ -75,11 +82,12 @@ cause an execution of the implementation function.
 
 The implementation function can be _restarted_ if a dependency it
 request is _missing_. The beginning of the implementation function
-will be re-executed after the dependency has been resolved.
-
-File given as a label are declared as dependencies, so requesting it
-might interrupt the function and restart it later, re-executing the
-part up till there.
+will be re-executed after the dependency has been resolved. To avoid
+unnecessary restarts (which are expensive, as network access might
+have to be repeated), label arguments are prefetched, provided all
+label arguments can be resolved to an existing file. Note that resolving
+a path from a string or a label that was constructed only during execution
+of the function might still cause a restart.
 
 Finally, for non-`local` repositories, only a change in the following
 dependencies might cause a restart:

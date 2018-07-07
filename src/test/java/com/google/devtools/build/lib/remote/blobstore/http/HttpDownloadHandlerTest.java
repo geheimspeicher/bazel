@@ -14,13 +14,16 @@
 package com.google.devtools.build.lib.remote.blobstore.http;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import com.google.common.net.HttpHeaders;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.embedded.EmbeddedChannel;
+import io.netty.handler.codec.http.DefaultHttpContent;
 import io.netty.handler.codec.http.DefaultHttpResponse;
 import io.netty.handler.codec.http.DefaultLastHttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
@@ -30,6 +33,7 @@ import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -40,7 +44,7 @@ import org.mockito.Mockito;
 
 /** Tests for {@link HttpDownloadHandler}. */
 @RunWith(JUnit4.class)
-public class HttpDownloadHandlerTest {
+public class HttpDownloadHandlerTest extends AbstractHttpHandlerTest {
 
   private static final URI CACHE_URI = URI.create("http://storage.googleapis.com:80/cache-bucket");
 
@@ -83,7 +87,7 @@ public class HttpDownloadHandlerTest {
 
     assertThat(writePromise.isDone()).isTrue();
     assertThat(out.toByteArray()).isEqualTo(new byte[] {1, 2, 3, 4, 5});
-    verify(out).close();
+    verify(out, never()).close();
     assertThat(ch.isActive()).isTrue();
   }
 
@@ -98,15 +102,57 @@ public class HttpDownloadHandlerTest {
 
     HttpResponse response =
         new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
-    response.headers().set(HttpHeaders.CONNECTION, HttpHeaderValues.CLOSE);
+    response.headers().set(HttpHeaders.HOST, "localhost");
+    response.headers().set(HttpHeaders.CONTENT_LENGTH, 0);
+    response.headers().set(HttpHeaders.CONNECTION, HttpHeaderValues.KEEP_ALIVE);
     ch.writeInbound(response);
+    ch.writeInbound(LastHttpContent.EMPTY_LAST_CONTENT);
     assertThat(writePromise.isDone()).isTrue();
     assertThat(writePromise.cause()).isInstanceOf(HttpException.class);
-    assertThat(((HttpException) writePromise.cause()).status())
+    assertThat(((HttpException) writePromise.cause()).response().status())
         .isEqualTo(HttpResponseStatus.NOT_FOUND);
     // No data should have been written to the OutputStream and it should have been closed.
     assertThat(out.size()).isEqualTo(0);
-    verify(out).close();
+    // The caller is responsible for closing the stream.
+    verify(out, never()).close();
+    assertThat(ch.isOpen()).isTrue();
+  }
+
+  /**
+   * Test that the handler correctly supports http error codes i.e. 404 (NOT FOUND) with a
+   * Content-Length header.
+   */
+  @Test
+  public void httpErrorsWithContentAreSupported() throws IOException {
+    EmbeddedChannel ch = new EmbeddedChannel(new HttpDownloadHandler(null));
+    ByteArrayOutputStream out = Mockito.spy(new ByteArrayOutputStream());
+    DownloadCommand cmd = new DownloadCommand(CACHE_URI, true, "abcdef", out);
+    ChannelPromise writePromise = ch.newPromise();
+    ch.writeOneOutbound(cmd, writePromise);
+
+    HttpResponse response =
+        new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.NOT_FOUND);
+    ByteBuf errorMessage = ByteBufUtil.writeAscii(ch.alloc(), "Error message");
+    response.headers().set(HttpHeaders.HOST, "localhost");
+    response
+        .headers()
+        .set(HttpHeaders.CONTENT_LENGTH, String.valueOf(errorMessage.readableBytes()));
+    response.headers().set(HttpHeaders.CONNECTION, HttpHeaderValues.CLOSE);
+
+    ch.writeInbound(response);
+    // The promise must not be done because we haven't received the error message yet.
+    assertThat(writePromise.isDone()).isFalse();
+
+    ch.writeInbound(new DefaultHttpContent(errorMessage));
+    ch.writeInbound(LastHttpContent.EMPTY_LAST_CONTENT);
+    assertThat(writePromise.isDone()).isTrue();
+    assertThat(writePromise.cause()).isInstanceOf(HttpException.class);
+    assertThat(((HttpException) writePromise.cause()).response().status())
+        .isEqualTo(HttpResponseStatus.NOT_FOUND);
+    // No data should have been written to the OutputStream and it should have been closed.
+    assertThat(out.size()).isEqualTo(0);
+    // The caller is responsible for closing the stream.
+    verify(out, never()).close();
     assertThat(ch.isOpen()).isFalse();
   }
 }

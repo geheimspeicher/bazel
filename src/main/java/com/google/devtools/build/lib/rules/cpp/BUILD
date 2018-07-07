@@ -6,15 +6,23 @@ filegroup(
     visibility = ["//src/main/java/com/google/devtools/build/lib:__pkg__"],
 )
 
+INTERFACE_SOURCES = [
+    "IncludeScannable.java",
+]
+
 # Description:
 #   C++ rule support
 java_library(
     name = "cpp",
-    srcs = glob([
-        "*.java",
-        "transitions/*.java",
-    ]),
+    srcs = glob(
+        [
+            "*.java",
+            "transitions/*.java",
+        ],
+        exclude = INTERFACE_SOURCES,
+    ),
     deps = [
+        ":cpp_interface",
         "//src/main/java/com/google/devtools/build/lib:build-base",
         "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:io",
@@ -31,8 +39,8 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/rules/apple",
         "//src/main/java/com/google/devtools/build/lib/shell",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi/cpp",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
@@ -43,5 +51,17 @@ java_library(
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",
+    ],
+)
+
+java_library(
+    name = "cpp_interface",
+    srcs = INTERFACE_SOURCES,
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/actions",
+        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        "//src/main/java/com/google/devtools/build/lib/vfs",
+        "//third_party:guava",
+        "//third_party:jsr305",
     ],
 )

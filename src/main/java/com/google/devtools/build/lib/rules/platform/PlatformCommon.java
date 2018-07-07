@@ -15,79 +15,20 @@
 package com.google.devtools.build.lib.rules.platform;
 
 import com.google.devtools.build.lib.analysis.TemplateVariableInfo;
-import com.google.devtools.build.lib.analysis.platform.ConstraintSettingInfo;
-import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
-import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.packages.Provider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.syntax.SkylarkSignatureProcessor;
+import com.google.devtools.build.lib.skylarkbuildapi.platform.PlatformCommonApi;
 
 /** Skylark namespace used to interact with the platform APIs. */
-@SkylarkModule(
-  name = "platform_common",
-  doc = "Functions for Skylark to interact with the platform APIs."
-)
-public class PlatformCommon {
+public class PlatformCommon implements PlatformCommonApi {
 
-  @SkylarkCallable(
-      name = TemplateVariableInfo.SKYLARK_NAME,
-      doc = "The provider used to retrieve the provider that contains the template variables "
-          + "defined by a particular toolchain, for example by calling "
-          + "ctx.attr._cc_toolchain[platform_common.TemplateVariableInfo].make_variables[<name>]",
-      structField = true
-  )
+  @Override
   public Provider getMakeVariableProvider() {
     return TemplateVariableInfo.PROVIDER;
   }
 
-  @SkylarkCallable(
-    name = PlatformInfo.SKYLARK_NAME,
-    doc =
-        "The provider constructor for PlatformInfo. The constructor takes the list of "
-            + "ConstraintValueInfo providers that defines the platform.",
-    structField = true
-  )
-  public Provider getPlatformInfoConstructor() {
-    return PlatformInfo.SKYLARK_CONSTRUCTOR;
-  }
-
-  @SkylarkCallable(
-    name = ConstraintSettingInfo.SKYLARK_NAME,
-    doc =
-        "The provider constructor for ConstraintSettingInfo. The constructor takes the label that "
-            + "uniquely identifies the constraint (and which should always be ctx.label).",
-    structField = true
-  )
-  public Provider getConstraintSettingInfoConstructor() {
-    return ConstraintSettingInfo.PROVIDER;
-  }
-
-  @SkylarkCallable(
-    name = ConstraintValueInfo.SKYLARK_NAME,
-    doc =
-        "The provider constructor for ConstraintValueInfo. The constructor takes the label that "
-            + "uniquely identifies the constraint value (and which should always be ctx.label), "
-            + "and the ConstraintSettingInfo which the value belongs to.",
-    structField = true
-  )
-  public Provider getConstraintValueInfoConstructor() {
-    return ConstraintValueInfo.SKYLARK_CONSTRUCTOR;
-  }
-
-  @SkylarkCallable(
-    name = ToolchainInfo.SKYLARK_NAME,
-    doc =
-        "The provider constructor for ToolchainInfo. The constructor takes the type of the "
-            + "toolchain, and a map of the toolchain's data.",
-    structField = true
-  )
+  @Override
   public Provider getToolchainInfoConstructor() {
     return ToolchainInfo.PROVIDER;
-  }
-
-  static {
-    SkylarkSignatureProcessor.configureSkylarkFunctions(PlatformCommon.class);
   }
 }

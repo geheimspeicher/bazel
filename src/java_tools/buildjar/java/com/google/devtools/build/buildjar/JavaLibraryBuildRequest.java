@@ -16,7 +16,6 @@ package com.google.devtools.build.buildjar;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 
 import com.google.common.base.Joiner;
@@ -33,7 +32,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map.Entry;
+import java.util.Map;
 import javax.annotation.Nullable;
 
 /** All the information needed to perform a single Java library build operation. */
@@ -62,6 +61,8 @@ public final class JavaLibraryBuildRequest {
 
   private final Path outputJar;
   private final Path nativeHeaderOutput;
+  @Nullable private final String targetLabel;
+  @Nullable private final String injectingRuleKind;
 
   private final Path classDir;
   private final Path tempDir;
@@ -109,12 +110,6 @@ public final class JavaLibraryBuildRequest {
       throws InvalidCommandLineException, IOException {
     depsBuilder.setDirectJars(
         optionsParser.directJars().stream().map(Paths::get).collect(toImmutableSet()));
-    depsBuilder.setJarsToTargets(
-        optionsParser
-            .jarsToTargets()
-            .entrySet()
-            .stream()
-            .collect(toImmutableMap(e -> Paths.get(e.getKey()), e -> e.getValue())));
     if (optionsParser.getStrictJavaDeps() != null) {
       depsBuilder.setStrictJavaDeps(optionsParser.getStrictJavaDeps());
     }
@@ -129,9 +124,6 @@ public final class JavaLibraryBuildRequest {
             .build());
     if (optionsParser.reduceClasspath()) {
       depsBuilder.setReduceClasspath();
-    }
-    if (optionsParser.getRuleKind() != null) {
-      depsBuilder.setRuleKind(optionsParser.getRuleKind());
     }
     if (optionsParser.getTargetLabel() != null) {
       depsBuilder.setTargetLabel(optionsParser.getTargetLabel());
@@ -169,7 +161,7 @@ public final class JavaLibraryBuildRequest {
     this.tempDir = asPath(firstNonNull(optionsParser.getTempDir(), "_tmp"));
     this.outputJar = asPath(optionsParser.getOutputJar());
     this.nativeHeaderOutput = asPath(optionsParser.getNativeHeaderOutput());
-    for (Entry<String, List<String>> entry : optionsParser.getPostProcessors().entrySet()) {
+    for (Map.Entry<String, List<String>> entry : optionsParser.getPostProcessors().entrySet()) {
       switch (entry.getKey()) {
         case "jacoco":
           this.jacocoInstrumentationProcessor =
@@ -183,6 +175,8 @@ public final class JavaLibraryBuildRequest {
     this.sourceGenDir = asPath(optionsParser.getSourceGenDir());
     this.generatedSourcesOutputJar = asPath(optionsParser.getGeneratedSourcesOutputJar());
     this.generatedClassOutputJar = asPath(optionsParser.getManifestProtoPath());
+    this.targetLabel = optionsParser.getTargetLabel();
+    this.injectingRuleKind = optionsParser.getInjectingRuleKind();
   }
 
   private static ImmutableList<Path> asPaths(Collection<String> paths) {
@@ -286,6 +280,16 @@ public final class JavaLibraryBuildRequest {
 
   public ImmutableList<BlazeJavaCompilerPlugin> getPlugins() {
     return plugins;
+  }
+
+  @Nullable
+  public String getTargetLabel() {
+    return targetLabel;
+  }
+
+  @Nullable
+  public String getInjectingRuleKind() {
+    return injectingRuleKind;
   }
 
   public BlazeJavacArguments toBlazeJavacArguments(ImmutableList<Path> classPath) {

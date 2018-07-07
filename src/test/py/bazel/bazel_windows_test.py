@@ -77,12 +77,13 @@ class BazelWindowsTest(test_base.TestBase):
         'cc_binary(',
         '    name="x",',
         '    srcs=['
-        '        "x.asm",',
+        '        "inc.asm",',  # Test assemble action_config
+        '        "dec.S",',    # Test preprocess-assemble action_config
         '        "y.cc",',
         '    ],',
         ')',
     ])
-    self.ScratchFile('x.asm', [
+    self.ScratchFile('inc.asm', [
         '.code',
         'PUBLIC increment',
         'increment PROC x:WORD',
@@ -92,12 +93,25 @@ class BazelWindowsTest(test_base.TestBase):
         'increment EndP',
         'END',
     ])
+    self.ScratchFile('dec.S', [
+        '.code',
+        'PUBLIC decrement',
+        'decrement PROC x:WORD',
+        '  xchg rcx,rax',
+        '  dec rax',
+        '  ret',
+        'decrement EndP',
+        'END',
+    ])
     self.ScratchFile('y.cc', [
         '#include <stdio.h>',
         'extern "C" int increment(int);',
+        'extern "C" int decrement(int);',
         'int main(int, char**) {'
         '  int x = 5;',
         '  x = increment(x);',
+        '  printf("%d\\n", x);',
+        '  x = decrement(x);',
         '  printf("%d\\n", x);',
         '  return 0;',
         '}',
@@ -110,6 +124,38 @@ class BazelWindowsTest(test_base.TestBase):
 
     self.AssertExitCode(exit_code, 0, stderr)
     self.assertTrue(os.path.exists(os.path.join(bazel_bin, 'x.exe')))
+
+  def testWindowsEnvironmentVariablesSetting(self):
+    self.ScratchFile('BUILD')
+    self.ScratchFile('WORKSPACE', [
+        'load(":repo.bzl", "my_repo")',
+        'my_repo(name = "env_test")',
+    ])
+    self.ScratchFile('repo.bzl', [
+        'def my_repo_impl(repository_ctx):',
+        '  repository_ctx.file("env.bat", "set FOO\\n")',
+        '  env = {"foo" : "bar2", "Foo": "bar3",}',
+        '  result = repository_ctx.execute(["./env.bat"], environment = env)',
+        '  print(result.stdout)',
+        '  repository_ctx.file("BUILD")',
+        '',
+        'my_repo = repository_rule(',
+        '    implementation = my_repo_impl,',
+        ')',
+    ])
+
+    exit_code, _, stderr = self.RunBazel(
+        [
+            'build',
+            '@env_test//...',
+        ],
+        env_add={'FOO': 'bar1'},
+    )
+    self.AssertExitCode(exit_code, 0, stderr)
+    result_in_lower_case = ''.join(stderr).lower()
+    self.assertNotIn('foo=bar1', result_in_lower_case)
+    self.assertNotIn('foo=bar2', result_in_lower_case)
+    self.assertIn('foo=bar3', result_in_lower_case)
 
 
 if __name__ == '__main__':

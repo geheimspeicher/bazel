@@ -14,94 +14,200 @@
 
 package com.google.devtools.build.lib.skyframe;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
+import static java.util.stream.Collectors.joining;
+
 import com.google.auto.value.AutoValue;
 import com.google.common.base.Joiner;
+import com.google.common.base.Optional;
+import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Table;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
+import com.google.devtools.build.lib.analysis.PlatformOptions;
 import com.google.devtools.build.lib.analysis.ToolchainContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.packages.NoSuchTargetException;
-import com.google.devtools.build.lib.packages.Target;
+import com.google.devtools.build.lib.cmdline.TargetParsingException;
+import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetFunction.ConfiguredValueCreationException;
 import com.google.devtools.build.lib.skyframe.RegisteredToolchainsFunction.InvalidToolchainLabelException;
 import com.google.devtools.build.lib.skyframe.ToolchainResolutionFunction.NoToolchainFoundException;
-import com.google.devtools.build.lib.skyframe.ToolchainResolutionValue.ToolchainResolutionKey;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.ValueOrException;
 import com.google.devtools.build.skyframe.ValueOrException4;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 /**
  * Common code to create a {@link ToolchainContext} given a set of required toolchain type labels.
  */
+// TODO(katre): Refactor this and ToolchainContext into something nicer to work with and with
+// fewer static methods everywhere.
 public class ToolchainUtil {
 
   /**
-   * Returns a new {@link ToolchainContext}, with the correct toolchain labels based on the results
-   * of the {@link ToolchainResolutionFunction}.
+   * Returns a new {@link ToolchainContext}, containing:
+   *
+   * <ul>
+   *   <li>If {@code requiredToolchains} was non-empty, the resolved toolchains and execution
+   *       platform (as labels), based on the results of the {@link ToolchainResolutionFunction}
+   *   <li>If {@code requiredToolchains} was empty:
+   *       <ul>
+   *         <li>The resolved toolchains will be empty.
+   *         <li>The execution platform will be the host platform, if the host platform was in the
+   *             set of available execution platforms.
+   *         <li>Otherwise, the execution platform will be the first available execution platform.
+   *       </ul>
+   * </ul>
+   *
+   * @param env the Skyframe environment to use to acquire dependencies
+   * @param targetDescription a description of the target use, for error and debug message context
+   * @param requiredToolchains the required toolchain types that must be resolved
+   * @param execConstraintLabels extra constraints on the execution platform to select
+   * @param configurationKey the build configuration to use for resolving other targets
    */
   @Nullable
-  public static ToolchainContext createToolchainContext(
+  static ToolchainContext createToolchainContext(
       Environment env,
       String targetDescription,
       Set<Label> requiredToolchains,
-      @Nullable BuildConfiguration configuration)
+      Set<Label> execConstraintLabels,
+      @Nullable BuildConfigurationValue.Key configurationKey)
       throws ToolchainContextException, InterruptedException {
 
     // In some cases this is called with a missing configuration, so we skip toolchain context.
-    if (configuration == null) {
+    if (configurationKey == null) {
       return null;
     }
 
-    // TODO(katre): Load several possible execution platforms, and select one based on available
-    // toolchains.
+    // This call could be combined with the call below, but this SkyFunction is evaluated so rarely
+    // it's not worth optimizing.
+    BuildConfigurationValue value = (BuildConfigurationValue) env.getValue(configurationKey);
+    if (env.valuesMissing()) {
+      return null;
+    }
+    BuildConfiguration configuration = value.getConfiguration();
 
-    // Load the execution and target platforms for the current configuration.
-    PlatformDescriptors platforms = loadPlatformDescriptors(env, configuration);
-    if (platforms == null) {
+    // Load the target and host platform keys.
+    PlatformConfiguration platformConfiguration =
+        configuration.getFragment(PlatformConfiguration.class);
+    if (platformConfiguration == null) {
+      return null;
+    }
+    Label hostPlatformLabel = platformConfiguration.getHostPlatform();
+    Label targetPlatformLabel = platformConfiguration.getTargetPlatforms().get(0);
+
+    ConfiguredTargetKey hostPlatformKey = ConfiguredTargetKey.of(hostPlatformLabel, configuration);
+    ConfiguredTargetKey targetPlatformKey =
+        ConfiguredTargetKey.of(targetPlatformLabel, configuration);
+    ImmutableList<ConfiguredTargetKey> execConstraintKeys =
+        execConstraintLabels
+            .stream()
+            .map(label -> ConfiguredTargetKey.of(label, configuration))
+            .collect(toImmutableList());
+
+    // Load the host and target platforms early, to check for errors.
+    getPlatformInfo(ImmutableList.of(hostPlatformKey, targetPlatformKey), env);
+
+    // Load all available execution platform keys. This will find any errors in the execution
+    // platform definitions.
+    RegisteredExecutionPlatformsValue registeredExecutionPlatforms =
+        loadRegisteredExecutionPlatforms(env, configurationKey);
+    if (registeredExecutionPlatforms == null) {
       return null;
     }
 
-    ImmutableBiMap<Label, Label> resolvedLabels =
-        resolveToolchainLabels(env, requiredToolchains, configuration, platforms);
-    if (resolvedLabels == null) {
+    ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys =
+        new ImmutableList.Builder<ConfiguredTargetKey>()
+            .addAll(registeredExecutionPlatforms.registeredExecutionPlatformKeys())
+            .add(hostPlatformKey)
+            .build();
+
+    // Filter out execution platforms that don't satisfy the extra constraints.
+    boolean debug = configuration.getOptions().get(PlatformOptions.class).toolchainResolutionDebug;
+    availableExecutionPlatformKeys =
+        filterPlatforms(availableExecutionPlatformKeys, execConstraintKeys, env, debug);
+    if (availableExecutionPlatformKeys == null) {
       return null;
     }
 
-    ToolchainContext toolchainContext =
-        ToolchainContext.create(
-            targetDescription,
-            platforms.execPlatform(),
-            platforms.targetPlatform(),
+    ResolvedToolchains resolvedToolchains =
+        resolveToolchainLabels(
+            env,
             requiredToolchains,
-            resolvedLabels);
-    return toolchainContext;
+            configurationKey,
+            hostPlatformKey,
+            availableExecutionPlatformKeys,
+            targetPlatformKey,
+            debug);
+    if (resolvedToolchains == null) {
+      return null;
+    }
+
+    return createContext(
+        env,
+        targetDescription,
+        resolvedToolchains.executionPlatformKey(),
+        resolvedToolchains.targetPlatformKey(),
+        requiredToolchains,
+        resolvedToolchains.toolchains());
   }
 
-  /**
-   * Data class to hold platform descriptors loaded based on the current {@link BuildConfiguration}.
-   */
-  @AutoValue
-  protected abstract static class PlatformDescriptors {
-    abstract PlatformInfo execPlatform();
-
-    abstract PlatformInfo targetPlatform();
-
-    protected static PlatformDescriptors create(
-        PlatformInfo execPlatform, PlatformInfo targetPlatform) {
-      return new AutoValue_ToolchainUtil_PlatformDescriptors(execPlatform, targetPlatform);
+  private static RegisteredExecutionPlatformsValue loadRegisteredExecutionPlatforms(
+      Environment env, BuildConfigurationValue.Key configurationKey)
+      throws InterruptedException, ToolchainContextException {
+    try {
+      RegisteredExecutionPlatformsValue registeredExecutionPlatforms =
+          (RegisteredExecutionPlatformsValue)
+              env.getValueOrThrow(
+                  RegisteredExecutionPlatformsValue.key(configurationKey),
+                  InvalidPlatformException.class);
+      if (registeredExecutionPlatforms == null) {
+        return null;
+      }
+      return registeredExecutionPlatforms;
+    } catch (InvalidPlatformException e) {
+      throw new ToolchainContextException(e);
     }
+  }
+
+  @Nullable
+  static Map<ConfiguredTargetKey, PlatformInfo> getPlatformInfo(
+      Iterable<ConfiguredTargetKey> platformKeys, Environment env)
+      throws InterruptedException, ToolchainContextException {
+
+    Map<SkyKey, ValueOrException<ConfiguredValueCreationException>> values =
+        env.getValuesOrThrow(platformKeys, ConfiguredValueCreationException.class);
+    boolean valuesMissing = env.valuesMissing();
+    Map<ConfiguredTargetKey, PlatformInfo> platforms = valuesMissing ? null : new HashMap<>();
+    try {
+      for (ConfiguredTargetKey key : platformKeys) {
+        PlatformInfo platformInfo = findPlatformInfo(values.get(key));
+        if (!valuesMissing && platformInfo != null) {
+          platforms.put(key, platformInfo);
+        }
+      }
+    } catch (ConfiguredValueCreationException e) {
+      throw new ToolchainContextException(e);
+    }
+    if (valuesMissing) {
+      return null;
+    }
+    return platforms;
   }
 
   /**
@@ -112,9 +218,7 @@ public class ToolchainUtil {
    */
   @Nullable
   private static PlatformInfo findPlatformInfo(
-      ValueOrException<ConfiguredValueCreationException> valueOrException,
-      String platformType,
-      Environment env)
+      ValueOrException<ConfiguredValueCreationException> valueOrException)
       throws ConfiguredValueCreationException, ToolchainContextException {
 
     ConfiguredTargetValue ctv = (ConfiguredTargetValue) valueOrException.get();
@@ -123,80 +227,51 @@ public class ToolchainUtil {
     }
 
     ConfiguredTarget configuredTarget = ctv.getConfiguredTarget();
-    Target target = null;
-    try {
-      target =
-          ((PackageValue)
-                  env.getValue(
-                      PackageValue.key(configuredTarget.getLabel().getPackageIdentifier())))
-              .getPackage()
-              .getTarget(configuredTarget.getLabel().getName());
-    } catch (NoSuchTargetException | InterruptedException e) {
-      throw new IllegalStateException("Unable to get Target when computing PlatformInfo.", e);
-    }
     PlatformInfo platformInfo = PlatformProviderUtils.platform(configuredTarget);
     if (platformInfo == null) {
-      throw new ToolchainContextException(new InvalidPlatformException(platformType, target));
+      throw new ToolchainContextException(
+          new InvalidPlatformException(configuredTarget.getLabel()));
     }
 
     return platformInfo;
   }
 
-  @Nullable
-  private static PlatformDescriptors loadPlatformDescriptors(
-      Environment env, BuildConfiguration configuration)
-      throws InterruptedException, ToolchainContextException {
-    PlatformConfiguration platformConfiguration =
-        configuration.getFragment(PlatformConfiguration.class);
-    if (platformConfiguration == null) {
-      return null;
-    }
-    Label executionPlatformLabel = platformConfiguration.getExecutionPlatform();
-    Label targetPlatformLabel = platformConfiguration.getTargetPlatforms().get(0);
+  /** Data class to hold the result of resolving toolchain labels. */
+  @AutoValue
+  protected abstract static class ResolvedToolchains {
 
-    SkyKey executionPlatformKey = ConfiguredTargetKey.of(executionPlatformLabel, configuration);
-    SkyKey targetPlatformKey = ConfiguredTargetKey.of(targetPlatformLabel, configuration);
+    abstract ConfiguredTargetKey executionPlatformKey();
 
-    Map<SkyKey, ValueOrException<ConfiguredValueCreationException>> values =
-        env.getValuesOrThrow(
-            ImmutableList.of(executionPlatformKey, targetPlatformKey),
-            ConfiguredValueCreationException.class);
-    boolean valuesMissing = env.valuesMissing();
-    try {
-      PlatformInfo execPlatform =
-          findPlatformInfo(values.get(executionPlatformKey), "execution platform", env);
-      PlatformInfo targetPlatform =
-          findPlatformInfo(values.get(targetPlatformKey), "target platform", env);
+    abstract ConfiguredTargetKey targetPlatformKey();
 
-      if (valuesMissing) {
-        return null;
-      }
+    abstract ImmutableBiMap<Label, Label> toolchains();
 
-      return PlatformDescriptors.create(execPlatform, targetPlatform);
-    } catch (ConfiguredValueCreationException e) {
-      throw new ToolchainContextException(e);
+    protected static ResolvedToolchains create(
+        ConfiguredTargetKey executionPlatformKey,
+        ConfiguredTargetKey targetPlatformKey,
+        Map<Label, Label> toolchains) {
+      return new AutoValue_ToolchainUtil_ResolvedToolchains(
+          executionPlatformKey, targetPlatformKey, ImmutableBiMap.copyOf(toolchains));
     }
   }
 
   @Nullable
-  private static ImmutableBiMap<Label, Label> resolveToolchainLabels(
+  private static ResolvedToolchains resolveToolchainLabels(
       Environment env,
       Set<Label> requiredToolchains,
-      BuildConfiguration configuration,
-      PlatformDescriptors platforms)
+      BuildConfigurationValue.Key configurationKey,
+      ConfiguredTargetKey hostPlatformKey,
+      ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys,
+      ConfiguredTargetKey targetPlatformKey,
+      boolean debug)
       throws InterruptedException, ToolchainContextException {
 
-    // If there are no required toolchains, bail out early.
-    if (requiredToolchains.isEmpty()) {
-      return ImmutableBiMap.of();
-    }
-
     // Find the toolchains for the required toolchain types.
-    List<SkyKey> registeredToolchainKeys = new ArrayList<>();
+    List<ToolchainResolutionValue.Key> registeredToolchainKeys = new ArrayList<>();
     for (Label toolchainType : requiredToolchains) {
       registeredToolchainKeys.add(
           ToolchainResolutionValue.key(
-              configuration, toolchainType, platforms.targetPlatform(), platforms.execPlatform()));
+              configurationKey, toolchainType, targetPlatformKey, availableExecutionPlatformKeys));
     }
 
     Map<
@@ -213,8 +288,8 @@ public class ToolchainUtil {
                 EvalException.class);
     boolean valuesMissing = false;
 
-    // Load the toolchains.
-    ImmutableBiMap.Builder<Label, Label> builder = new ImmutableBiMap.Builder<>();
+    // Determine the potential set of toolchains.
+    Table<ConfiguredTargetKey, Label, Label> resolvedToolchains = HashBasedTable.create();
     List<Label> missingToolchains = new ArrayList<>();
     for (Map.Entry<
             SkyKey,
@@ -224,18 +299,19 @@ public class ToolchainUtil {
         entry : results.entrySet()) {
       try {
         Label requiredToolchainType =
-            ((ToolchainResolutionKey) entry.getKey().argument()).toolchainType();
+            ((ToolchainResolutionValue.Key) entry.getKey().argument()).toolchainType();
         ValueOrException4<
                 NoToolchainFoundException, ConfiguredValueCreationException,
                 InvalidToolchainLabelException, EvalException>
             valueOrException = entry.getValue();
         if (valueOrException.get() == null) {
           valuesMissing = true;
-        } else {
-          Label toolchainLabel =
-              ((ToolchainResolutionValue) valueOrException.get()).toolchainLabel();
-          builder.put(requiredToolchainType, toolchainLabel);
+          continue;
         }
+
+        ToolchainResolutionValue toolchainResolutionValue =
+            (ToolchainResolutionValue) valueOrException.get();
+        addPlatformsAndLabels(resolvedToolchains, requiredToolchainType, toolchainResolutionValue);
       } catch (NoToolchainFoundException e) {
         // Save the missing type and continue looping to check for more.
         missingToolchains.add(e.missingToolchainType());
@@ -256,16 +332,339 @@ public class ToolchainUtil {
       return null;
     }
 
-    return builder.build();
+    // Find and return the first execution platform which has all required toolchains.
+    Optional<ConfiguredTargetKey> selectedExecutionPlatformKey;
+    if (requiredToolchains.isEmpty() && availableExecutionPlatformKeys.contains(hostPlatformKey)) {
+      // Fall back to the legacy behavior: use the host platform if it's available, otherwise the
+      // first execution platform.
+      selectedExecutionPlatformKey = Optional.of(hostPlatformKey);
+    } else {
+      // If there are no toolchains, this will return the first execution platform.
+      selectedExecutionPlatformKey =
+          findExecutionPlatformForToolchains(
+              env, requiredToolchains, availableExecutionPlatformKeys, resolvedToolchains, debug);
+    }
+
+    if (!selectedExecutionPlatformKey.isPresent()) {
+      throw new ToolchainContextException(
+          new NoMatchingPlatformException(
+              requiredToolchains, availableExecutionPlatformKeys, targetPlatformKey));
+    }
+
+    return ResolvedToolchains.create(
+        selectedExecutionPlatformKey.get(),
+        targetPlatformKey,
+        resolvedToolchains.row(selectedExecutionPlatformKey.get()));
+  }
+
+  private static Optional<ConfiguredTargetKey> findExecutionPlatformForToolchains(
+      Environment env,
+      Set<Label> requiredToolchains,
+      ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys,
+      Table<ConfiguredTargetKey, Label, Label> resolvedToolchains,
+      boolean debug) {
+    for (ConfiguredTargetKey executionPlatformKey : availableExecutionPlatformKeys) {
+      // PlatformInfo executionPlatform = platforms.get(executionPlatformKey);
+      Map<Label, Label> toolchains = resolvedToolchains.row(executionPlatformKey);
+      if (!toolchains.keySet().containsAll(requiredToolchains)) {
+        // Not all toolchains are present, keep going
+        continue;
+      }
+
+      if (debug) {
+        env.getListener()
+            .handle(
+                Event.info(
+                    String.format(
+                        "ToolchainUtil: Selected execution platform %s, %s",
+                        executionPlatformKey.getLabel(),
+                        toolchains
+                            .entrySet()
+                            .stream()
+                            .map(
+                                e ->
+                                    String.format(
+                                        "type %s -> toolchain %s", e.getKey(), e.getValue()))
+                            .collect(joining(", ")))));
+      }
+      return Optional.of(executionPlatformKey);
+    }
+
+    return Optional.absent();
+  }
+
+  private static void addPlatformsAndLabels(
+      Table<ConfiguredTargetKey, Label, Label> resolvedToolchains,
+      Label requiredToolchainType,
+      ToolchainResolutionValue toolchainResolutionValue) {
+
+    for (Map.Entry<ConfiguredTargetKey, Label> entry :
+        toolchainResolutionValue.availableToolchainLabels().entrySet()) {
+      resolvedToolchains.put(entry.getKey(), requiredToolchainType, entry.getValue());
+    }
+  }
+
+  @Nullable
+  private static ToolchainContext createContext(
+      Environment env,
+      String targetDescription,
+      ConfiguredTargetKey executionPlatformKey,
+      ConfiguredTargetKey targetPlatformKey,
+      Set<Label> requiredToolchains,
+      ImmutableBiMap<Label, Label> toolchains)
+      throws ToolchainContextException, InterruptedException {
+
+    Map<ConfiguredTargetKey, PlatformInfo> platforms =
+        getPlatformInfo(ImmutableList.of(executionPlatformKey, targetPlatformKey), env);
+
+    if (platforms == null) {
+      return null;
+    }
+
+    return ToolchainContext.create(
+        targetDescription,
+        platforms.get(executionPlatformKey),
+        platforms.get(targetPlatformKey),
+        requiredToolchains,
+        toolchains);
+  }
+
+  @Nullable
+  static ImmutableList<Label> expandTargetPatterns(
+      Environment env, List<String> targetPatterns, FilteringPolicy filteringPolicy)
+      throws InvalidTargetPatternException, InterruptedException {
+
+    // First parse the patterns, and throw any errors immediately.
+    List<TargetPatternValue.TargetPatternKey> patternKeys = new ArrayList<>();
+    for (TargetPatternValue.TargetPatternSkyKeyOrException keyOrException :
+        TargetPatternValue.keys(targetPatterns, filteringPolicy, "")) {
+
+      try {
+        patternKeys.add(keyOrException.getSkyKey());
+      } catch (TargetParsingException e) {
+        throw new InvalidTargetPatternException(keyOrException.getOriginalPattern(), e);
+      }
+    }
+
+    // Then, resolve the patterns.
+    Map<SkyKey, ValueOrException<TargetParsingException>> resolvedPatterns =
+        env.getValuesOrThrow(patternKeys, TargetParsingException.class);
+    boolean valuesMissing = env.valuesMissing();
+    ImmutableList.Builder<Label> labels = valuesMissing ? null : new ImmutableList.Builder<>();
+
+    for (TargetPatternValue.TargetPatternKey pattern : patternKeys) {
+      TargetPatternValue value;
+      try {
+        value = (TargetPatternValue) resolvedPatterns.get(pattern).get();
+        if (!valuesMissing && value != null) {
+          labels.addAll(value.getTargets().getTargets());
+        }
+      } catch (TargetParsingException e) {
+        throw new InvalidTargetPatternException(pattern.getPattern(), e);
+      }
+    }
+
+    if (valuesMissing) {
+      return null;
+    }
+
+    return labels.build();
+  }
+
+  @Nullable
+  private static ImmutableList<ConfiguredTargetKey> filterPlatforms(
+      ImmutableList<ConfiguredTargetKey> platformKeys,
+      ImmutableList<ConfiguredTargetKey> constraintKeys,
+      Environment env,
+      boolean debug)
+      throws ToolchainContextException, InterruptedException {
+
+    // Short circuit if not needed.
+    if (constraintKeys.isEmpty()) {
+      return platformKeys;
+    }
+
+    Map<ConfiguredTargetKey, PlatformInfo> platformInfoMap = getPlatformInfo(platformKeys, env);
+    if (platformInfoMap == null) {
+      return null;
+    }
+    List<ConstraintValueInfo> constraints = getConstraintValueInfo(constraintKeys, env);
+    if (constraints == null) {
+      return null;
+    }
+
+    return platformKeys
+        .stream()
+        .filter(key -> filterPlatform(platformInfoMap.get(key), constraints, env, debug))
+        .collect(toImmutableList());
+  }
+
+  @Nullable
+  private static List<ConstraintValueInfo> getConstraintValueInfo(
+      ImmutableList<ConfiguredTargetKey> constraintKeys, Environment env)
+      throws InterruptedException, ToolchainContextException {
+
+    Map<SkyKey, ValueOrException<ConfiguredValueCreationException>> values =
+        env.getValuesOrThrow(constraintKeys, ConfiguredValueCreationException.class);
+    boolean valuesMissing = env.valuesMissing();
+    List<ConstraintValueInfo> constraintValues = valuesMissing ? null : new ArrayList<>();
+    try {
+      for (ConfiguredTargetKey key : constraintKeys) {
+        ConstraintValueInfo constraintValueInfo = findConstraintValueInfo(values.get(key));
+        if (!valuesMissing && constraintValueInfo != null) {
+          constraintValues.add(constraintValueInfo);
+        }
+      }
+    } catch (ConfiguredValueCreationException e) {
+      throw new ToolchainContextException(e);
+    }
+    if (valuesMissing) {
+      return null;
+    }
+    return constraintValues;
+  }
+
+  @Nullable
+  private static ConstraintValueInfo findConstraintValueInfo(
+      ValueOrException<ConfiguredValueCreationException> valueOrException)
+      throws ConfiguredValueCreationException, ToolchainContextException {
+
+    ConfiguredTargetValue configuredTargetValue = (ConfiguredTargetValue) valueOrException.get();
+    if (configuredTargetValue == null) {
+      return null;
+    }
+
+    ConfiguredTarget configuredTarget = configuredTargetValue.getConfiguredTarget();
+    ConstraintValueInfo constraintValueInfo =
+        PlatformProviderUtils.constraintValue(configuredTarget);
+    if (constraintValueInfo == null) {
+      throw new ToolchainContextException(
+          new InvalidConstraintValueException(configuredTarget.getLabel()));
+    }
+
+    return constraintValueInfo;
+  }
+
+  private static boolean filterPlatform(
+      PlatformInfo platformInfo,
+      List<ConstraintValueInfo> constraints,
+      Environment env,
+      boolean debug) {
+    for (ConstraintValueInfo filterConstraint : constraints) {
+      ConstraintValueInfo platformInfoConstraint =
+          platformInfo.getConstraint(filterConstraint.constraint());
+      if (platformInfoConstraint == null || !platformInfoConstraint.equals(filterConstraint)) {
+        // The value for this setting is not present in the platform, or doesn't match the expected
+        // value.
+        if (debug) {
+          env.getListener()
+              .handle(
+                  Event.info(
+                      String.format(
+                          "ToolchainUtil: Removed execution platform %s from"
+                              + " available execution platforms, it is missing constraint %s",
+                          platformInfo.label(), filterConstraint.label())));
+        }
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /** Exception used when no execution platform can be found. */
+  static final class NoMatchingPlatformException extends Exception {
+    NoMatchingPlatformException() {
+      super("No available execution platform satisfies all requested toolchain types");
+    }
+
+    public NoMatchingPlatformException(
+        Set<Label> requiredToolchains,
+        ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys,
+        ConfiguredTargetKey targetPlatformKey) {
+      super(formatError(requiredToolchains, availableExecutionPlatformKeys, targetPlatformKey));
+    }
+
+    private static String formatError(
+        Set<Label> requiredToolchains,
+        ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys,
+        ConfiguredTargetKey targetPlatformKey) {
+      if (requiredToolchains.isEmpty()) {
+        return String.format(
+            "Unable to find an execution platform for target platform %s"
+                + " from available execution platforms [%s]",
+            targetPlatformKey.getLabel(),
+            availableExecutionPlatformKeys
+                .stream()
+                .map(key -> key.getLabel().toString())
+                .collect(Collectors.joining(", ")));
+      }
+      return String.format(
+          "Unable to find an execution platform for toolchains [%s] and target platform %s"
+              + " from available execution platforms [%s]",
+          Joiner.on(", ").join(requiredToolchains),
+          targetPlatformKey.getLabel(),
+          availableExecutionPlatformKeys
+              .stream()
+              .map(key -> key.getLabel().toString())
+              .collect(Collectors.joining(", ")));
+    }
+  }
+
+  /**
+   * Exception used when an error occurs in {@link #expandTargetPatterns(Environment, List,
+   * FilteringPolicy)}.
+   */
+  static final class InvalidTargetPatternException extends Exception {
+    private String invalidPattern;
+    private TargetParsingException tpe;
+
+    public InvalidTargetPatternException(String invalidPattern, TargetParsingException tpe) {
+      super(tpe);
+      this.invalidPattern = invalidPattern;
+      this.tpe = tpe;
+    }
+
+    public String getInvalidPattern() {
+      return invalidPattern;
+    }
+
+    public TargetParsingException getTpe() {
+      return tpe;
+    }
   }
 
   /** Exception used when a platform label is not a valid platform. */
-  public static final class InvalidPlatformException extends Exception {
-    public InvalidPlatformException(String platformType, Target target) {
-      super(
-          String.format(
-              "Target %s was found as the %s, but does not provide PlatformInfo",
-              target, platformType));
+  static final class InvalidPlatformException extends Exception {
+    InvalidPlatformException(Label label) {
+      super(formatError(label));
+    }
+
+    InvalidPlatformException(Label label, ConfiguredValueCreationException e) {
+      super(formatError(label), e);
+    }
+
+    private static String formatError(Label label) {
+      return String.format(
+          "Target %s was referenced as a platform, but does not provide PlatformInfo", label);
+    }
+  }
+
+  /** Exception used when a constraint value label is not a valid constraint value. */
+  static final class InvalidConstraintValueException extends Exception {
+    InvalidConstraintValueException(Label label) {
+      super(formatError(label));
+    }
+
+    InvalidConstraintValueException(Label label, ConfiguredValueCreationException e) {
+      super(formatError(label), e);
+    }
+
+    private static String formatError(Label label) {
+      return String.format(
+          "Target %s was referenced as a constraint_value,"
+              + " but does not provide ConstraintValueInfo",
+          label);
     }
   }
 
@@ -288,7 +687,15 @@ public class ToolchainUtil {
 
   /** Exception used to wrap exceptions during toolchain resolution. */
   public static class ToolchainContextException extends Exception {
+    public ToolchainContextException(NoMatchingPlatformException e) {
+      super(e);
+    }
+
     public ToolchainContextException(InvalidPlatformException e) {
+      super(e);
+    }
+
+    public ToolchainContextException(InvalidConstraintValueException e) {
       super(e);
     }
 

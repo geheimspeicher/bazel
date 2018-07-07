@@ -23,7 +23,10 @@
 #include "src/main/cpp/util/errors.h"
 #include "src/main/cpp/util/exit_code.h"
 #include "src/main/cpp/util/file.h"
+#include "src/main/cpp/util/logging.h"
 #include "src/main/cpp/util/numbers.h"
+#include "src/main/cpp/util/path.h"
+#include "src/main/cpp/util/path_platform.h"
 #include "src/main/cpp/util/strings.h"
 #include "src/main/cpp/workspace_layout.h"
 
@@ -57,9 +60,6 @@ bool NullaryStartupFlag::IsValid(const std::string &arg) const {
       GetNullaryOption(arg.c_str(), ("--no" + name_).c_str());
 }
 
-StartupOptions::StartupOptions(const WorkspaceLayout* workspace_layout)
-    : StartupOptions("Bazel", workspace_layout) {}
-
 void StartupOptions::RegisterNullaryStartupFlag(const std::string &flag_name) {
   valid_startup_flags.insert(std::unique_ptr<NullaryStartupFlag>(
       new NullaryStartupFlag(flag_name)));
@@ -73,6 +73,7 @@ void StartupOptions::RegisterUnaryStartupFlag(const std::string &flag_name) {
 StartupOptions::StartupOptions(const string &product_name,
                                const WorkspaceLayout *workspace_layout)
     : product_name(product_name),
+      ignore_all_rc_files(false),
       deep_execroot(true),
       block_for_lock(true),
       host_jvm_debug(false),
@@ -83,7 +84,6 @@ StartupOptions::StartupOptions(const string &product_name,
       oom_more_eagerly_threshold(100),
       write_command_log(true),
       watchfs(false),
-      allow_configurable_attributes(false),
       fatal_event_bus_exceptions(false),
       command_port(0),
       connect_timeout_secs(30),
@@ -91,29 +91,30 @@ StartupOptions::StartupOptions(const string &product_name,
       client_debug(false),
       java_logging_formatter(
           "com.google.devtools.build.lib.util.SingleLineFormatter"),
-      expand_configs_in_place(false),
+      expand_configs_in_place(true),
       original_startup_options_(std::vector<RcStartupFlag>()) {
   bool testing = !blaze::GetEnv("TEST_TMPDIR").empty();
   if (testing) {
-    output_root = MakeAbsolute(blaze::GetEnv("TEST_TMPDIR"));
+    output_root = blaze_util::MakeAbsolute(blaze::GetEnv("TEST_TMPDIR"));
     max_idle_secs = 15;
-    fprintf(stderr,
-            "INFO: $TEST_TMPDIR defined: output root default is '%s' and "
-            "max_idle_secs default is '%d'.\n",
-            output_root.c_str(),
-            max_idle_secs);
+    BAZEL_LOG(USER) << "$TEST_TMPDIR defined: output root default is '"
+                    << output_root << "' and max_idle_secs default is '"
+                    << max_idle_secs << "'.";
   } else {
     output_root = workspace_layout->GetOutputRoot();
     max_idle_secs = 3 * 3600;
+    BAZEL_LOG(INFO) << "output root is '" << output_root
+                    << "' and max_idle_secs default is '" << max_idle_secs
+                    << "'.";
   }
 
-#if defined(COMPILER_MSVC) || defined(__CYGWIN__)
+#if defined(_WIN32) || defined(__CYGWIN__)
   string windows_unix_root = WindowsUnixRoot(blaze::GetEnv("BAZEL_SH"));
   if (!windows_unix_root.empty()) {
     host_jvm_args.push_back(string("-Dbazel.windows_unix_root=") +
                             windows_unix_root);
   }
-#endif  // defined(COMPILER_MSVC) || defined(__CYGWIN__)
+#endif  // defined(_WIN32) || defined(__CYGWIN__)
 
   const string product_name_lower = GetLowercaseProductName();
   output_user_root = blaze_util::JoinPath(
@@ -122,22 +123,18 @@ StartupOptions::StartupOptions(const string &product_name,
   // IMPORTANT: Before modifying the statements below please contact a Bazel
   // core team member that knows the internal procedure for adding/deprecating
   // startup flags.
-  RegisterNullaryStartupFlag("allow_configurable_attributes");
   RegisterNullaryStartupFlag("batch");
   RegisterNullaryStartupFlag("batch_cpu_scheduling");
   RegisterNullaryStartupFlag("block_for_lock");
   RegisterNullaryStartupFlag("client_debug");
   RegisterNullaryStartupFlag("deep_execroot");
+  RegisterNullaryStartupFlag("expand_configs_in_place");
   RegisterNullaryStartupFlag("experimental_oom_more_eagerly");
   RegisterNullaryStartupFlag("fatal_event_bus_exceptions");
   RegisterNullaryStartupFlag("host_jvm_debug");
-  RegisterNullaryStartupFlag("master_bazelrc");
-  RegisterNullaryStartupFlag("master_blazerc");
+  RegisterNullaryStartupFlag("ignore_all_rc_files");
   RegisterNullaryStartupFlag("watchfs");
   RegisterNullaryStartupFlag("write_command_log");
-  RegisterNullaryStartupFlag("expand_configs_in_place");
-  RegisterUnaryStartupFlag("bazelrc");
-  RegisterUnaryStartupFlag("blazerc");
   RegisterUnaryStartupFlag("command_port");
   RegisterUnaryStartupFlag("connect_timeout_secs");
   RegisterUnaryStartupFlag("experimental_oom_more_eagerly_threshold");
@@ -192,19 +189,19 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
   const char* value = NULL;
 
   if ((value = GetUnaryOption(arg, next_arg, "--output_base")) != NULL) {
-    output_base = MakeAbsolute(value);
+    output_base = blaze::AbsolutePathFromFlag(value);
     option_sources["output_base"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg,
                                      "--install_base")) != NULL) {
-    install_base = MakeAbsolute(value);
+    install_base = blaze::AbsolutePathFromFlag(value);
     option_sources["install_base"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg,
                                      "--output_user_root")) != NULL) {
-    output_user_root = MakeAbsolute(value);
+    output_user_root = blaze::AbsolutePathFromFlag(value);
     option_sources["output_user_root"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg,
                                      "--server_jvm_out")) != NULL) {
-    server_jvm_out = MakeAbsolute(value);
+    server_jvm_out = blaze::AbsolutePathFromFlag(value);
     option_sources["server_jvm_out"] = rcfile;
   } else if (GetNullaryOption(arg, "--deep_execroot")) {
     deep_execroot = true;
@@ -226,36 +223,26 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
                                      "--host_javabase")) != NULL) {
     // TODO(bazel-team): Consider examining the javabase and re-execing in case
     // of architecture mismatch.
-    host_javabase = MakeAbsolute(value);
+    host_javabase = blaze::AbsolutePathFromFlag(value);
     option_sources["host_javabase"] = rcfile;
   } else if ((value = GetUnaryOption(arg, next_arg, "--host_jvm_args")) !=
              NULL) {
     host_jvm_args.push_back(value);
     option_sources["host_jvm_args"] = rcfile;  // NB: This is incorrect
-  } else if ((value = GetUnaryOption(arg, next_arg, "--bazelrc")) != NULL) {
+  } else if (GetNullaryOption(arg, "--ignore_all_rc_files")) {
     if (!rcfile.empty()) {
-      *error = "Can't specify --bazelrc in the .bazelrc file.";
+      *error = "Can't specify --ignore_all_rc_files in an rc file.";
       return blaze_exit_code::BAD_ARGV;
     }
-  } else if ((value = GetUnaryOption(arg, next_arg, "--blazerc")) != NULL) {
+    ignore_all_rc_files = true;
+    option_sources["ignore_all_rc_files"] = rcfile;
+  } else if (GetNullaryOption(arg, "--noignore_all_rc_files")) {
     if (!rcfile.empty()) {
-      *error = "Can't specify --blazerc in the .blazerc file.";
+      *error = "Can't specify --noignore_all_rc_files in an rc file.";
       return blaze_exit_code::BAD_ARGV;
     }
-  } else if (GetNullaryOption(arg, "--nomaster_blazerc") ||
-             GetNullaryOption(arg, "--master_blazerc")) {
-    if (!rcfile.empty()) {
-      *error = "Can't specify --[no]master_blazerc in .blazerc file.";
-      return blaze_exit_code::BAD_ARGV;
-    }
-    option_sources["blazerc"] = rcfile;
-  } else if (GetNullaryOption(arg, "--nomaster_bazelrc") ||
-             GetNullaryOption(arg, "--master_bazelrc")) {
-    if (!rcfile.empty()) {
-      *error = "Can't specify --[no]master_bazelrc in .bazelrc file.";
-      return blaze_exit_code::BAD_ARGV;
-    }
-    option_sources["blazerc"] = rcfile;
+    ignore_all_rc_files = false;
+    option_sources["ignore_all_rc_files"] = rcfile;
   } else if (GetNullaryOption(arg, "--batch")) {
     batch = true;
     option_sources["batch"] = rcfile;
@@ -268,20 +255,14 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
   } else if (GetNullaryOption(arg, "--nobatch_cpu_scheduling")) {
     batch_cpu_scheduling = false;
     option_sources["batch_cpu_scheduling"] = rcfile;
-  } else if (GetNullaryOption(arg, "--allow_configurable_attributes")) {
-    allow_configurable_attributes = true;
-    option_sources["allow_configurable_attributes"] = rcfile;
-  } else if (GetNullaryOption(arg, "--noallow_configurable_attributes")) {
-    allow_configurable_attributes = false;
-    option_sources["allow_configurable_attributes"] = rcfile;
   } else if (GetNullaryOption(arg, "--fatal_event_bus_exceptions")) {
     fatal_event_bus_exceptions = true;
     option_sources["fatal_event_bus_exceptions"] = rcfile;
   } else if (GetNullaryOption(arg, "--nofatal_event_bus_exceptions")) {
     fatal_event_bus_exceptions = false;
     option_sources["fatal_event_bus_exceptions"] = rcfile;
-  } else if ((value = GetUnaryOption(arg, next_arg,
-                                     "--io_nice_level")) != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg, "--io_nice_level")) !=
+             NULL) {
     if (!blaze_util::safe_strto32(value, &io_nice_level) ||
         io_nice_level > 7) {
       blaze_util::StringPrintf(error,
@@ -290,8 +271,8 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
       return blaze_exit_code::BAD_ARGV;
     }
     option_sources["io_nice_level"] = rcfile;
-  } else if ((value = GetUnaryOption(arg, next_arg,
-                                     "--max_idle_secs")) != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg, "--max_idle_secs")) !=
+             NULL) {
     if (!blaze_util::safe_strto32(value, &max_idle_secs) ||
         max_idle_secs < 0) {
       blaze_util::StringPrintf(error,
@@ -342,8 +323,8 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
   } else if (GetNullaryOption(arg, "--noexpand_configs_in_place")) {
     expand_configs_in_place = false;
     option_sources["expand_configs_in_place"] = rcfile;
-  } else if ((value = GetUnaryOption(
-      arg, next_arg, "--connect_timeout_secs")) != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg,
+                                     "--connect_timeout_secs")) != NULL) {
     if (!blaze_util::safe_strto32(value, &connect_timeout_secs) ||
         connect_timeout_secs < 1 || connect_timeout_secs > 120) {
       blaze_util::StringPrintf(error,
@@ -353,8 +334,8 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
       return blaze_exit_code::BAD_ARGV;
     }
     option_sources["connect_timeout_secs"] = rcfile;
-  } else if ((value = GetUnaryOption(
-      arg, next_arg, "--command_port")) != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg, "--command_port")) !=
+             NULL) {
     if (!blaze_util::safe_strto32(value, &command_port) ||
         command_port < 0 || command_port > 65535) {
       blaze_util::StringPrintf(error,
@@ -364,8 +345,8 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArg(
       return blaze_exit_code::BAD_ARGV;
     }
     option_sources["command_port"] = rcfile;
-  } else if ((value = GetUnaryOption(arg, next_arg, "--invocation_policy"))
-              != NULL) {
+  } else if ((value = GetUnaryOption(arg, next_arg, "--invocation_policy")) !=
+             NULL) {
     if (invocation_policy == NULL) {
       invocation_policy = value;
       option_sources["invocation_policy"] = rcfile;
@@ -429,37 +410,42 @@ blaze_exit_code::ExitCode StartupOptions::ProcessArgs(
   return blaze_exit_code::SUCCESS;
 }
 
-blaze_exit_code::ExitCode StartupOptions::ProcessArgExtra(
-    const char *arg, const char *next_arg, const string &rcfile,
-    const char **value, bool *is_processed, string *error) {
-  *is_processed = false;
-  return blaze_exit_code::SUCCESS;
+string StartupOptions::GetSystemJavabase() const {
+  return blaze::GetSystemJavabase();
 }
 
-string StartupOptions::GetDefaultHostJavabase() const {
-  return blaze::GetDefaultHostJavabase();
+string StartupOptions::GetEmbeddedJavabase() {
+  string bundled_jre_path = blaze_util::JoinPath(
+      install_base, "_embedded_binaries/embedded_tools/jdk");
+  if (blaze_util::CanExecuteFile(blaze_util::JoinPath(
+          bundled_jre_path, GetJavaBinaryUnderJavabase()))) {
+    return bundled_jre_path;
+  }
+  return "";
 }
 
 string StartupOptions::GetHostJavabase() {
   // 1) Allow overriding the host_javabase via --host_javabase.
-  if (host_javabase.empty()) {
-    if (default_host_javabase.empty()) {
-      string bundled_jre_path = blaze_util::JoinPath(
-          install_base, "_embedded_binaries/embedded_tools/jdk");
-      if (blaze_util::CanExecuteFile(blaze_util::JoinPath(
-              bundled_jre_path, GetJavaBinaryUnderJavabase()))) {
-        // 2) Use a bundled JVM if we have one.
-        default_host_javabase = bundled_jre_path;
-      } else {
-        // 3) Otherwise fall back to using the default system JVM.
-        default_host_javabase = GetDefaultHostJavabase();
-      }
-    }
-
-    return default_host_javabase;
-  } else {
+  if (!host_javabase.empty()) {
     return host_javabase;
   }
+  if (default_host_javabase.empty()) {
+    string bundled_jre_path = GetEmbeddedJavabase();
+    if (!bundled_jre_path.empty()) {
+      // 2) Use a bundled JVM if we have one.
+      default_host_javabase = bundled_jre_path;
+    } else {
+      // 3) Otherwise fall back to using the default system JVM.
+      string system_javabase = GetSystemJavabase();
+      if (system_javabase.empty()) {
+        BAZEL_DIE(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR)
+            << "Could not find system javabase. Ensure JAVA_HOME is set, or "
+               "javac is on your PATH.";
+      }
+      default_host_javabase = system_javabase;
+    }
+  }
+  return default_host_javabase;
 }
 
 string StartupOptions::GetExplicitHostJavabase() const {
@@ -471,10 +457,11 @@ string StartupOptions::GetJvm() {
       blaze_util::JoinPath(GetHostJavabase(), GetJavaBinaryUnderJavabase());
   if (!blaze_util::CanExecuteFile(java_program)) {
     if (!blaze_util::PathExists(java_program)) {
-      fprintf(stderr, "Couldn't find java at '%s'.\n", java_program.c_str());
+      BAZEL_LOG(ERROR) << "Couldn't find java at '" << java_program << "'.";
     } else {
-      fprintf(stderr, "Java at '%s' exists but is not executable: %s\n",
-              java_program.c_str(), blaze_util::GetLastErrorString().c_str());
+      BAZEL_LOG(ERROR) << "Java at '" << java_program
+                       << "' exists but is not executable: "
+                       << blaze_util::GetLastErrorString();
     }
     exit(1);
   }
@@ -491,10 +478,9 @@ string StartupOptions::GetJvm() {
       blaze_util::CanReadFile(jre_java_exe)) {
     return java_program;
   }
-  fprintf(stderr,
-          "Problem with java installation: "
-          "couldn't find/access rt.jar or java in %s\n",
-          GetHostJavabase().c_str());
+  BAZEL_LOG(ERROR) << "Problem with java installation: couldn't find/access "
+                      "rt.jar or java in "
+                   << GetHostJavabase();
   exit(1);
 }
 
@@ -510,8 +496,8 @@ void StartupOptions::AddJVMArgumentSuffix(const string &real_install_dir,
                                           const string &jar_path,
     std::vector<string> *result) const {
   result->push_back("-jar");
-  result->push_back(
-      blaze::PathAsJvmFlag(blaze_util::JoinPath(real_install_dir, jar_path)));
+  result->push_back(blaze_util::PathAsJvmFlag(
+      blaze_util::JoinPath(real_install_dir, jar_path)));
 }
 
 blaze_exit_code::ExitCode StartupOptions::AddJVMArguments(
@@ -526,7 +512,7 @@ void StartupOptions::AddJVMLoggingArguments(std::vector<string> *result) const {
   const string propFile =
       blaze_util::JoinPath(output_base, "javalog.properties");
   string java_log(
-      blaze::PathAsJvmFlag(blaze_util::JoinPath(output_base, "java.log")));
+      blaze_util::PathAsJvmFlag(blaze_util::JoinPath(output_base, "java.log")));
   if (!blaze_util::WriteFile("handlers=java.util.logging.FileHandler\n"
                              ".level=INFO\n"
                              "java.util.logging.FileHandler.level=INFO\n"
@@ -550,7 +536,7 @@ blaze_exit_code::ExitCode StartupOptions::AddJVMMemoryArguments(
   return blaze_exit_code::SUCCESS;
 }
 
-#if defined(COMPILER_MSVC) || defined(__CYGWIN__)
+#if defined(_WIN32) || defined(__CYGWIN__)
 // Extract the Windows path of "/" from $BAZEL_SH.
 // $BAZEL_SH usually has the form `<prefix>/usr/bin/bash.exe` or
 // `<prefix>/bin/bash.exe`, and this method returns that `<prefix>` part.
@@ -576,6 +562,6 @@ string StartupOptions::WindowsUnixRoot(const string &bazel_sh) {
     return split.first;
   }
 }
-#endif  // defined(COMPILER_MSVC) || defined(__CYGWIN__)
+#endif  // defined(_WIN32) || defined(__CYGWIN__)
 
 }  // namespace blaze

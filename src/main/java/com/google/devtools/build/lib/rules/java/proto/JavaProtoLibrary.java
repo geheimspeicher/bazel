@@ -21,6 +21,7 @@ import static com.google.devtools.build.lib.rules.java.proto.StrictDepsUtils.con
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
@@ -37,27 +38,30 @@ import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaRunfilesProvider;
 import com.google.devtools.build.lib.rules.java.JavaSkylarkApiProvider;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
-import com.google.devtools.build.lib.rules.java.ProtoJavaApiInfoAspectProvider;
+import com.google.devtools.build.lib.rules.java.JavaStrictCompilationArgsProvider;
 
 /** Implementation of the java_proto_library rule. */
 public class JavaProtoLibrary implements RuleConfiguredTargetFactory {
 
   @Override
   public ConfiguredTarget create(final RuleContext ruleContext)
-      throws InterruptedException, RuleErrorException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
 
     Iterable<JavaProtoLibraryAspectProvider> javaProtoLibraryAspectProviders =
         ruleContext.getPrerequisites("deps", TARGET, JavaProtoLibraryAspectProvider.class);
 
     JavaCompilationArgsProvider dependencyArgsProviders =
         constructJcapFromAspectDeps(ruleContext, javaProtoLibraryAspectProviders);
+    JavaStrictCompilationArgsProvider strictDependencyArgsProviders =
+        new JavaStrictCompilationArgsProvider(
+            constructJcapFromAspectDeps(
+                ruleContext, javaProtoLibraryAspectProviders, /* alwaysStrict= */ true));
 
     // We assume that the runtime jars will not have conflicting artifacts
     // with the same root relative path
     Runfiles runfiles =
         new Runfiles.Builder(ruleContext.getWorkspaceName())
-            .addTransitiveArtifactsWrappedInStableOrder(
-                dependencyArgsProviders.getRecursiveJavaCompilationArgs().getRuntimeJars())
+            .addTransitiveArtifactsWrappedInStableOrder(dependencyArgsProviders.getRuntimeJars())
             .build();
 
     JavaSourceJarsProvider sourceJarsProvider =
@@ -78,13 +82,8 @@ public class JavaProtoLibrary implements RuleConfiguredTargetFactory {
     JavaInfo javaInfo =
         JavaInfo.Builder.create()
             .addProvider(JavaCompilationArgsProvider.class, dependencyArgsProviders)
+            .addProvider(JavaStrictCompilationArgsProvider.class, strictDependencyArgsProviders)
             .addProvider(JavaSourceJarsProvider.class, sourceJarsProvider)
-            .addProvider(
-                ProtoJavaApiInfoAspectProvider.class,
-                ProtoJavaApiInfoAspectProvider.merge(
-                    JavaInfo.getProvidersFromListOfTargets(
-                        ProtoJavaApiInfoAspectProvider.class,
-                        ruleContext.getPrerequisites("deps", TARGET))))
             .addProvider(JavaRuleOutputJarsProvider.class, JavaRuleOutputJarsProvider.EMPTY)
             .addProvider(JavaRunfilesProvider.class, javaRunfilesProvider)
             .build();

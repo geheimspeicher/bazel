@@ -106,13 +106,6 @@ public class NativePathTest {
   }
 
   @Test
-  public void testParentOfRootIsRoot() {
-    assertThat(fs.getPath("/..")).isEqualTo(fs.getPath("/"));
-    assertThat(fs.getPath("/../../../../../..")).isEqualTo(fs.getPath("/"));
-    assertThat(fs.getPath("/../../../foo")).isEqualTo(fs.getPath("/foo"));
-  }
-
-  @Test
   public void testIsDirectory() {
     assertThat(fs.getPath(aDirectory.getPath()).isDirectory()).isTrue();
     assertThat(fs.getPath(aFile.getPath()).isDirectory()).isFalse();
@@ -229,26 +222,16 @@ public class NativePathTest {
   @Test
   public void testInputOutputStreams() throws IOException {
     Path path = fs.getPath(aFile.getPath());
-    OutputStream out = path.getOutputStream();
-    for (int i = 0; i < 256; i++) {
-      out.write(i);
+    try (OutputStream out = path.getOutputStream()) {
+      for (int i = 0; i < 256; i++) {
+        out.write(i);
+      }
     }
-    out.close();
-    InputStream in = path.getInputStream();
-    for (int i = 0; i < 256; i++) {
-      assertThat(in.read()).isEqualTo(i);
+    try (InputStream in = path.getInputStream()) {
+      for (int i = 0; i < 256; i++) {
+        assertThat(in.read()).isEqualTo(i);
+      }
+      assertThat(in.read()).isEqualTo(-1);
     }
-    assertThat(in.read()).isEqualTo(-1);
-    in.close();
-  }
-
-  @Test
-  public void testDerivedSegmentEquality() {
-    Path absoluteSegment = fs.getRootDirectory();
-
-    Path derivedNode = absoluteSegment.getChild("derivedSegment");
-    Path otherDerivedNode = absoluteSegment.getChild("derivedSegment");
-
-    assertThat(otherDerivedNode).isSameAs(derivedNode);
   }
 }

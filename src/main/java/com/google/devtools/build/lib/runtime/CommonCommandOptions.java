@@ -15,6 +15,7 @@ package com.google.devtools.build.lib.runtime;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 
+import com.google.devtools.build.lib.profiler.MemoryProfiler.MemoryProfileStableHeapParameters;
 import com.google.devtools.build.lib.runtime.CommandLineEvent.ToolCommandLineEvent;
 import com.google.devtools.build.lib.util.OptionsUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -39,7 +40,6 @@ public class CommonCommandOptions extends OptionsBase {
   @Option(
     name = "all_incompatible_changes",
     defaultValue = "null",
-    category = "misc",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
@@ -53,7 +53,6 @@ public class CommonCommandOptions extends OptionsBase {
   @Option(
     name = "config",
     defaultValue = "",
-    category = "misc",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     allowMultiple = true,
@@ -70,7 +69,6 @@ public class CommonCommandOptions extends OptionsBase {
   @Option(
     name = "logging",
     defaultValue = "3", // Level.INFO
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     converter = Converters.LogLevelConverter.class,
@@ -92,7 +90,6 @@ public class CommonCommandOptions extends OptionsBase {
   @Option(
     name = "announce_rc",
     defaultValue = "false",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help = "Whether to announce rc options."
@@ -107,16 +104,6 @@ public class CommonCommandOptions extends OptionsBase {
     help = "Whether profiling slow operations is always turned on"
   )
   public boolean alwaysProfileSlowOperations;
-
-  @Option(
-    name = "allow_undefined_configs",
-    defaultValue = "true",
-    category = "flags",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.EAGERNESS_TO_EXIT},
-    help = "Do not throw an error when the config is not defined."
-  )
-  public boolean allowUndefinedConfigs;
 
   /** Converter for UUID. Accepts values as specified by {@link UUID#fromString(String)}. */
   public static class UUIDConverter implements Converter<UUID> {
@@ -198,9 +185,19 @@ public class CommonCommandOptions extends OptionsBase {
   public String buildRequestId;
 
   @Option(
+    name = "experimental_generate_json_trace_profile",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.LOGGING,
+    effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
+    help =
+        "If enabled, Bazel profiles the build and writes a JSON-format profile into a file in the "
+            + "output base."
+  )
+  public boolean enableTracer;
+
+  @Option(
     name = "profile",
     defaultValue = "null",
-    category = "misc",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
     converter = OptionsUtils.PathFragmentConverter.class,
@@ -229,9 +226,24 @@ public class CommonCommandOptions extends OptionsBase {
     documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
     converter = OptionsUtils.PathFragmentConverter.class,
-    help = "If set, write memory usage data to the specified file at phase ends."
+    help =
+        "If set, write memory usage data to the specified file at phase ends and stable heap to"
+            + " master log at end of build."
   )
   public PathFragment memoryProfilePath;
+
+  @Option(
+    name = "memory_profile_stable_heap_parameters",
+    defaultValue = "1,0",
+    documentationCategory = OptionDocumentationCategory.LOGGING,
+    effectTags = {OptionEffectTag.BAZEL_MONITORING},
+    converter = MemoryProfileStableHeapParameters.Converter.class,
+    help =
+        "Tune memory profile's computation of stable heap at end of build. Should be two integers "
+            + "separated by a comma. First parameter is the number of GCs to perform. Second "
+            + "parameter is the number of seconds to wait between GCs."
+  )
+  public MemoryProfileStableHeapParameters memoryProfileStableHeapParameters;
 
   @Option(
     name = "experimental_oom_more_eagerly_threshold",
@@ -277,7 +289,6 @@ public class CommonCommandOptions extends OptionsBase {
   @Option(
     name = "tool_tag",
     defaultValue = "",
-    category = "misc",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.BAZEL_MONITORING},
     help = "A tool name to attribute this Blaze invocation to."
@@ -362,4 +373,30 @@ public class CommonCommandOptions extends OptionsBase {
             + "or the bad combination should be checked for programmatically."
   )
   public List<String> deprecationWarnings;
+
+  @Option(
+      name = "track_incremental_state",
+      oldName = "keep_incrementality_data",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "If false, Blaze will not persist data that allows for invalidation and re-evaluation "
+              + "on incremental builds in order to save memory on this build. Subsequent builds "
+              + "will not have any incrementality with respect to this one. Usually you will want "
+              + "to specify --batch when setting this to false."
+  )
+  public boolean trackIncrementalState;
+
+  @Option(
+      name = "keep_state_after_build",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "If false, Blaze will discard the inmemory state from this build when the build "
+              + "finishes. Subsequent builds will not have any incrementality with respect to this "
+              + "one."
+  )
+  public boolean keepStateAfterBuild;
 }

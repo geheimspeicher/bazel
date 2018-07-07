@@ -40,13 +40,6 @@ package com.google.devtools.build.lib.view.config.crosstool;
 // exectuable. In particular, it is used to check if the compilation products of
 // a toolchain can run on the host machine.
 message CToolchain {
-  // Optional flag. Some option lists have a corresponding optional flag list.
-  // These are appended at the end of the option list in case the corresponding
-  // default setting is set.
-  message OptionalFlag {
-    required string default_setting_name = 1;
-    repeated string flag = 2;
-  }
 
   // A group of correlated flags. Supports parametrization via variable
   // expansion.
@@ -267,10 +260,10 @@ message CToolchain {
     // categories include "linked_output" or "debug_symbols". An error is thrown
     // if no category is matched.
     required string category_name = 1;
-    // The pattern for creating the artifact for this selection.  The given
-    // pattern is templated by bazel and then used to create an artifact in
-    // a target-specific directory in bazel-bin.
-    required string pattern = 2;
+    // The prefix and extension for creating the artifact for this selection.
+    // They are used to create an artifact name based on the target name.
+    required string prefix = 2;
+    required string extension = 3;
   }
 
   // An action config corresponds to a blaze action, and allows selection of
@@ -380,21 +373,16 @@ message CToolchain {
 
   // Compiler flags for C/C++/Asm compilation.
   repeated string compiler_flag = 13;
-  repeated OptionalFlag optional_compiler_flag = 35;
   // Additional compiler flags for C++ compilation.
   repeated string cxx_flag = 14;
-  repeated OptionalFlag optional_cxx_flag = 36;
   // Additional unfiltered compiler flags for C/C++/Asm compilation.
   // These are not subject to nocopt filtering in cc_* rules.
   // Note: These flags are *not* applied to objc/objc++ compiles.
   repeated string unfiltered_cxx_flag = 25;
-  repeated OptionalFlag optional_unfiltered_cxx_flag = 37;
   // Linker flags.
   repeated string linker_flag = 15;
-  repeated OptionalFlag optional_linker_flag = 38;
   // Additional linker flags when linking dynamic libraries.
   repeated string dynamic_library_linker_flag = 27;
-  repeated OptionalFlag optional_dynamic_library_linker_flag = 39;
   // Additional test-only linker flags.
   repeated string test_only_linker_flag = 49;
   // Objcopy flags for embedding files into binaries.
@@ -413,9 +401,6 @@ message CToolchain {
 
   // Additional compiler and linker flags depending on the compilation mode.
   repeated CompilationModeFlags compilation_mode_flags = 17;
-
-  // Additional compiler and linker flags depending on the LIPO mode.
-  repeated LipoModeFlags lipo_mode_flags = 44;
 
   // Additional linker flags depending on the linking mode.
   repeated LinkingModeFlags linking_mode_flags = 18;
@@ -514,19 +499,6 @@ message LinkingModeFlags {
   repeated string linker_flag = 2;
 }
 
-enum LipoMode {
-  OFF = 1;
-  BINARY = 2;
-  // LIBRARY = 3;  // RESERVED
-}
-
-message LipoModeFlags {
-  required LipoMode mode = 1;
-  repeated string compiler_flag = 2;
-  repeated string cxx_flag = 3;
-  repeated string linker_flag = 4;
-}
-
 message MakeVariable {
   required string name = 1;
   required string value = 2;
@@ -535,18 +507,12 @@ message MakeVariable {
 message DefaultCpuToolchain {
   required string cpu = 1;
   required string toolchain_identifier = 2;
-  optional bool supports_lipo = 3 [default = true];
 }
 
 // An entire crosstool release, containing the version number, a default target
 // cpu, a default toolchain for each supported cpu type, and a set of
 // toolchains.
 message CrosstoolRelease {
-  message DefaultSetting {
-    required string name = 1;
-    required bool default_value = 2;
-  }
-
   // The major and minor version of the crosstool release.
   required string major_version = 1;
   required string minor_version = 2;
@@ -557,9 +523,6 @@ message CrosstoolRelease {
   required string default_target_cpu = 3;
   // The default toolchain to use for each given cpu.
   repeated DefaultCpuToolchain default_toolchain = 4;
-
-  // The default settings used in this release.
-  repeated DefaultSetting default_setting = 6;
 
   // All the toolchains in this release.
   repeated CToolchain toolchain = 5;

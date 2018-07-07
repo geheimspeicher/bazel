@@ -14,12 +14,10 @@
 package com.google.devtools.build.lib.skyframe;
 
 import com.google.common.base.Preconditions;
-import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import java.util.function.Supplier;
 
 /** Creates the workspace status artifacts and action. */
 public class WorkspaceStatusFunction implements SkyFunction {
@@ -27,16 +25,10 @@ public class WorkspaceStatusFunction implements SkyFunction {
     WorkspaceStatusAction create(String workspaceName);
   }
 
-  private final ActionKeyContext actionKeyContext;
-  private final Supplier<Boolean> removeActionAfterEvaluation;
   private final WorkspaceStatusActionFactory workspaceStatusActionFactory;
 
   WorkspaceStatusFunction(
-      ActionKeyContext actionKeyContext,
-      Supplier<Boolean> removeActionAfterEvaluation,
       WorkspaceStatusActionFactory workspaceStatusActionFactory) {
-    this.actionKeyContext = actionKeyContext;
-    this.removeActionAfterEvaluation = Preconditions.checkNotNull(removeActionAfterEvaluation);
     this.workspaceStatusActionFactory = workspaceStatusActionFactory;
   }
 
@@ -53,12 +45,7 @@ public class WorkspaceStatusFunction implements SkyFunction {
     WorkspaceStatusAction action =
         workspaceStatusActionFactory.create(workspaceNameValue.getName());
 
-    return new WorkspaceStatusValue(
-        actionKeyContext,
-        action.getStableStatus(),
-        action.getVolatileStatus(),
-        action,
-        removeActionAfterEvaluation.get());
+    return new WorkspaceStatusValue(action.getStableStatus(), action.getVolatileStatus(), action);
   }
 
   @Override

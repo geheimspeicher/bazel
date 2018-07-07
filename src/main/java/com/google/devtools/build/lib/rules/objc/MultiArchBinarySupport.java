@@ -35,10 +35,11 @@ import com.google.devtools.build.lib.packages.Info;
 import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform;
-import com.google.devtools.build.lib.rules.cpp.CcLinkParamsInfo;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs;
 import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -201,8 +202,6 @@ public class MultiArchBinarySupport {
    *     dependencies of the current rule are built
    * @param configToDepsCollectionMap a map from child configuration to providers that "deps" of the
    *     current rule have propagated in that configuration
-   * @param configurationToNonPropagatedObjcMap a map from child configuration to providers that
-   *     "non_propagated_deps" of the current rule have propagated in that configuration
    * @param dylibProviders {@link TransitiveInfoCollection}s that dynamic library dependencies of
    *     the current rule have propagated
    * @throws RuleErrorException if there are attribute errors in the current rule context
@@ -210,7 +209,8 @@ public class MultiArchBinarySupport {
   public ImmutableSet<DependencySpecificConfiguration> getDependencySpecificConfigurations(
       Map<BuildConfiguration, CcToolchainProvider> childConfigurationsAndToolchains,
       ImmutableListMultimap<BuildConfiguration, TransitiveInfoCollection> configToDepsCollectionMap,
-      ImmutableListMultimap<BuildConfiguration, ObjcProvider> configurationToNonPropagatedObjcMap,
+      ImmutableListMultimap<BuildConfiguration, ConfiguredTargetAndData>
+          configToCTATDepsCollectionMap,
       Iterable<TransitiveInfoCollection> dylibProviders)
       throws RuleErrorException, InterruptedException {
     Iterable<ObjcProvider> dylibObjcProviders = getDylibObjcProviders(dylibProviders);
@@ -255,12 +255,12 @@ public class MultiArchBinarySupport {
               ruleContext,
               childConfig,
               intermediateArtifacts,
-              nullToEmptyList(configToDepsCollectionMap.get(childConfig)),
-              nullToEmptyList(configurationToNonPropagatedObjcMap.get(childConfig)),
+              nullToEmptyList(configToCTATDepsCollectionMap.get(childConfig)),
               additionalDepProviders);
       ObjcProvider objcProviderWithDylibSymbols = common.getObjcProvider();
-      ObjcProvider objcProvider = objcProviderWithDylibSymbols.subtractSubtrees(dylibObjcProviders,
-          ImmutableList.<CcLinkParamsInfo>of());
+      ObjcProvider objcProvider =
+          objcProviderWithDylibSymbols.subtractSubtrees(
+              dylibObjcProviders, ImmutableList.<CcLinkingInfo>of());
 
       childInfoBuilder.add(
           DependencySpecificConfiguration.create(
@@ -296,19 +296,18 @@ public class MultiArchBinarySupport {
       RuleContext ruleContext,
       BuildConfiguration buildConfiguration,
       IntermediateArtifacts intermediateArtifacts,
-      List<TransitiveInfoCollection> propagatedDeps,
-      List<ObjcProvider> nonPropagatedObjcDeps,
-      Iterable<ObjcProvider> additionalDepProviders) {
+      List<ConfiguredTargetAndData> propagatedConfiguredTargetAndDataDeps,
+      Iterable<ObjcProvider> additionalDepProviders) throws InterruptedException {
 
-    ObjcCommon.Builder commonBuilder = new ObjcCommon.Builder(ruleContext, buildConfiguration)
-        .setCompilationAttributes(
-            CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
-        .addDeps(propagatedDeps)
-        .addDepObjcProviders(additionalDepProviders)
-        .addNonPropagatedDepObjcProviders(nonPropagatedObjcDeps)
-        .setIntermediateArtifacts(intermediateArtifacts)
-        .setAlwayslink(false)
-        .setLinkedBinary(intermediateArtifacts.strippedSingleArchitectureBinary());
+    ObjcCommon.Builder commonBuilder =
+        new ObjcCommon.Builder(ruleContext, buildConfiguration)
+            .setCompilationAttributes(
+                CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
+            .addDeps(propagatedConfiguredTargetAndDataDeps)
+            .addDepObjcProviders(additionalDepProviders)
+            .setIntermediateArtifacts(intermediateArtifacts)
+            .setAlwayslink(false)
+            .setLinkedBinary(intermediateArtifacts.strippedSingleArchitectureBinary());
 
     if (ObjcRuleClasses.objcConfiguration(ruleContext).generateDsym()) {
       commonBuilder.addDebugArtifacts(DsymOutputType.APP);

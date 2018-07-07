@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.rules.android;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.ConfiguredAspectFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -26,10 +27,7 @@ import com.google.devtools.build.lib.packages.NativeAspectClass;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
-import com.google.devtools.build.lib.rules.java.JavaRuntimeJarProvider;
-import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndTarget;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,11 +39,7 @@ import java.util.List;
  * <p>One would think that using the compile time classpath would be enough, but alas, those are
  * ijars,
  */
-@AutoCodec
 public class AndroidNeverlinkAspect extends NativeAspectClass implements ConfiguredAspectFactory {
-  public static final ObjectCodec<AndroidNeverlinkAspect> CODEC =
-      new AndroidNeverlinkAspect_AutoCodec();
-
   public static final String NAME = "AndroidNeverlinkAspect";
   private static final ImmutableList<String> ATTRIBUTES =
       ImmutableList.of(
@@ -53,7 +47,8 @@ public class AndroidNeverlinkAspect extends NativeAspectClass implements Configu
 
   @Override
   public ConfiguredAspect create(
-      ConfiguredTargetAndTarget ctatBase, RuleContext ruleContext, AspectParameters parameters) {
+      ConfiguredTargetAndData ctadBase, RuleContext ruleContext, AspectParameters parameters)
+      throws ActionConflictException {
     if (!JavaCommon.getConstraints(ruleContext).contains("android")
         && !ruleContext.getRule().getRuleClass().startsWith("android_")) {
       return new ConfiguredAspect.Builder(this, parameters, ruleContext).build();
@@ -78,10 +73,9 @@ public class AndroidNeverlinkAspect extends NativeAspectClass implements Configu
                 AndroidCommon.collectTransitiveNeverlinkLibraries(
                     ruleContext,
                     deps,
-                    ctatBase
-                        .getConfiguredTarget()
-                        .getProvider(JavaRuntimeJarProvider.class)
-                        .getRuntimeJars())))
+                    JavaInfo.getJavaInfo(ctadBase
+                        .getConfiguredTarget())
+                        .getDirectRuntimeJars())))
         .build();
   }
 

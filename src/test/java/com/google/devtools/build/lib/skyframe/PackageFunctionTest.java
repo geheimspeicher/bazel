@@ -22,6 +22,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.devtools.build.lib.actions.FileStateValue;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.clock.BlazeClock;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -446,8 +448,10 @@ public class PackageFunctionTest extends BuildViewTestCase {
 
     SkyKey skyKey = PackageValue.key(PackageIdentifier.parse("@//foo"));
     PackageValue value = validPackage(skyKey);
-    assertThat(value.getPackage().getSkylarkFileDependencies()).containsExactly(
-        Label.parseAbsolute("//bar:ext.bzl"), Label.parseAbsolute("//baz:ext.bzl"));
+    assertThat(value.getPackage().getSkylarkFileDependencies())
+        .containsExactly(
+            Label.parseAbsolute("//bar:ext.bzl", ImmutableMap.of()),
+            Label.parseAbsolute("//baz:ext.bzl", ImmutableMap.of()));
 
     scratch.overwriteFile("bar/ext.bzl",
         "load('//qux:ext.bzl', 'c')",
@@ -459,8 +463,10 @@ public class PackageFunctionTest extends BuildViewTestCase {
             Root.fromPath(rootDirectory));
 
     value = validPackage(skyKey);
-    assertThat(value.getPackage().getSkylarkFileDependencies()).containsExactly(
-        Label.parseAbsolute("//bar:ext.bzl"), Label.parseAbsolute("//qux:ext.bzl"));
+    assertThat(value.getPackage().getSkylarkFileDependencies())
+        .containsExactly(
+            Label.parseAbsolute("//bar:ext.bzl", ImmutableMap.of()),
+            Label.parseAbsolute("//qux:ext.bzl", ImmutableMap.of()));
   }
 
   @Test
@@ -570,7 +576,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     getSkyframeExecutor()
         .invalidate(
             Predicates.equalTo(
-                com.google.devtools.build.lib.skyframe.FileStateValue.key(
+                FileStateValue.key(
                     RootedPath.toRootedPath(
                         Root.fromPath(workspacePath.getParentDirectory()),
                         PathFragment.create(workspacePath.getBaseName())))));
@@ -696,7 +702,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage).contains("nope");
     assertThat(errorInfo.getException()).isInstanceOf(NoSuchPackageException.class);
-    assertThat(errorInfo.getException()).hasCauseThat().isSameAs(exn);
+    assertThat(errorInfo.getException()).hasCauseThat().isInstanceOf(IOException.class);
   }
 
   @Test
@@ -714,7 +720,7 @@ public class PackageFunctionTest extends BuildViewTestCase {
     String errorMessage = errorInfo.getException().getMessage();
     assertThat(errorMessage).contains("nope");
     assertThat(errorInfo.getException()).isInstanceOf(NoSuchPackageException.class);
-    assertThat(errorInfo.getException()).hasCauseThat().isSameAs(exn);
+    assertThat(errorInfo.getException()).hasCauseThat().isInstanceOf(IOException.class);
   }
 
   private static class CustomInMemoryFs extends InMemoryFileSystem {

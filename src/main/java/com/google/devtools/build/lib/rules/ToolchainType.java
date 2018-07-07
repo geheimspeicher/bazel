@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
@@ -24,11 +25,11 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TemplateVariableInfo;
-import com.google.devtools.build.lib.analysis.ToolchainContext.ResolvedToolchainProviders;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Options;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Options.MakeVariableSource;
+import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.cmdline.Label;
 import java.util.TreeMap;
 
@@ -62,7 +63,7 @@ public class ToolchainType implements RuleConfiguredTargetFactory {
 
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
-      throws InterruptedException, RuleErrorException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     if (fragmentMap == null && fragmentMapFromRuleContext != null) {
       this.fragmentMap = fragmentMapFromRuleContext.apply(ruleContext);
     }
@@ -77,12 +78,12 @@ public class ToolchainType implements RuleConfiguredTargetFactory {
             == MakeVariableSource.TOOLCHAIN
         && ruleContext
             .getFragment(PlatformConfiguration.class)
-            .getEnabledToolchainTypes()
-            .contains(ruleContext.getLabel())) {
-      ResolvedToolchainProviders providers =
-          (ResolvedToolchainProviders)
-              ruleContext.getToolchainContext().getResolvedToolchainProviders();
-      providers.getForToolchainType(ruleContext.getLabel()).addGlobalMakeVariables(fragmentBuilder);
+            .isToolchainTypeEnabled(ruleContext.getLabel())) {
+      ToolchainInfo toolchainInfo =
+          ruleContext.getToolchainContext().forToolchainType(ruleContext.getLabel());
+      if (toolchainInfo != null) {
+        toolchainInfo.addGlobalMakeVariables(fragmentBuilder);
+      }
     } else {
       Class<? extends BuildConfiguration.Fragment> fragmentClass =
           fragmentMap.get(ruleContext.getLabel());
@@ -102,7 +103,8 @@ public class ToolchainType implements RuleConfiguredTargetFactory {
     // out the lookup rule -> toolchain rule mapping. For now, it only provides Make variables that
     // come from BuildConfiguration so no need to ask Skyframe.
     return new RuleConfiguredTargetBuilder(ruleContext)
-        .addNativeDeclaredProvider(new TemplateVariableInfo(ImmutableMap.copyOf(makeVariables)))
+        .addNativeDeclaredProvider(new TemplateVariableInfo(
+            ImmutableMap.copyOf(makeVariables), ruleContext.getRule().getLocation()))
         .addProvider(RunfilesProvider.simple(Runfiles.EMPTY))
         .build();
   }

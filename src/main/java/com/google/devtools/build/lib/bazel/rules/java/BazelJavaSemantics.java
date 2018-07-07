@@ -20,36 +20,38 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
+import com.google.devtools.build.lib.analysis.ShToolchain;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.LauncherFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.LauncherFileWriteAction.LaunchInfo;
 import com.google.devtools.build.lib.analysis.actions.LazyWritePathsFileAction;
+import com.google.devtools.build.lib.analysis.actions.Substitution;
+import com.google.devtools.build.lib.analysis.actions.Substitution.ComputedSubstitution;
+import com.google.devtools.build.lib.analysis.actions.Template;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
-import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.ComputedSubstitution;
-import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
-import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Template;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.TestConfiguration;
-import com.google.devtools.build.lib.bazel.rules.BazelConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.TargetUtils;
+import com.google.devtools.build.lib.rules.cpp.AbstractCcLinkParamsStore;
+import com.google.devtools.build.lib.rules.cpp.CcLinkParams;
+import com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingInfo;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder;
 import com.google.devtools.build.lib.rules.java.DeployArchiveBuilder.Compression;
+import com.google.devtools.build.lib.rules.java.JavaCcLinkParamsProvider;
 import com.google.devtools.build.lib.rules.java.JavaCommon;
-import com.google.devtools.build.lib.rules.java.JavaCompilationArgs;
-import com.google.devtools.build.lib.rules.java.JavaCompilationArgs.ClasspathType;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider;
+import com.google.devtools.build.lib.rules.java.JavaCompilationArgsProvider.ClasspathType;
 import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
 import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
@@ -60,16 +62,18 @@ import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaTargetAttributes;
+import com.google.devtools.build.lib.rules.java.JavaToolchainProvider;
 import com.google.devtools.build.lib.rules.java.JavaUtil;
 import com.google.devtools.build.lib.rules.java.proto.GeneratedExtensionRegistryProvider;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.ShellEscaper;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.File;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import javax.annotation.Nullable;
 
@@ -78,7 +82,7 @@ import javax.annotation.Nullable;
  */
 public class BazelJavaSemantics implements JavaSemantics {
 
-  public static final BazelJavaSemantics INSTANCE = new BazelJavaSemantics();
+  @AutoCodec public static final BazelJavaSemantics INSTANCE = new BazelJavaSemantics();
 
   private static final Template STUB_SCRIPT =
       Template.forResource(BazelJavaSemantics.class, "java_stub_template.txt");
@@ -114,10 +118,6 @@ public class BazelJavaSemantics implements JavaSemantics {
   @Override
   public void checkForProtoLibraryAndJavaProtoLibraryOnSameProto(
       RuleContext ruleContext, JavaCommon javaCommon) {}
-
-  @Override
-  public void checkProtoDeps(
-      RuleContext ruleContext, Collection<? extends TransitiveInfoCollection> deps) {}
 
   private static final String JUNIT4_RUNNER = "org.junit.runner.JUnitCore";
 
@@ -231,8 +231,8 @@ public class BazelJavaSemantics implements JavaSemantics {
         if (!isRunfilesEnabled) {
           buffer.append("$(rlocation ");
           PathFragment runfilePath =
-              PathFragment.create(PathFragment.create(workspacePrefix), artifact.getRunfilesPath());
-          buffer.append(runfilePath.normalize().getPathString());
+              PathFragment.create(workspacePrefix).getRelative(artifact.getRunfilesPath());
+          buffer.append(runfilePath.getPathString());
           buffer.append(")");
         } else {
           buffer.append("${RUNPATH}");
@@ -392,25 +392,17 @@ public class BazelJavaSemantics implements JavaSemantics {
     if (OS.getCurrent() == OS.WINDOWS) {
       Artifact newExecutable =
           ruleContext.getImplicitOutputArtifact(ruleContext.getTarget().getName() + ".cmd");
+      PathFragment shExecutable = ShToolchain.getPathOrError(ruleContext);
       ruleContext.registerAction(
           new TemplateExpansionAction(
               ruleContext.getActionOwner(),
               newExecutable,
               STUB_SCRIPT_WINDOWS,
               ImmutableList.of(
-                  Substitution.of(
-                      "%bash_exe_path%",
-                      ruleContext
-                          .getFragment(BazelConfiguration.class)
-                          .getShellExecutable()
-                          .getPathString()),
+                  Substitution.of("%bash_exe_path%", shExecutable.getPathString()),
                   Substitution.of(
                       "%cygpath_exe_path%",
-                      ruleContext
-                          .getFragment(BazelConfiguration.class)
-                          .getShellExecutable()
-                          .replaceName("cygpath.exe")
-                          .getPathString())),
+                      shExecutable.replaceName("cygpath.exe").getPathString())),
               true));
       return newExecutable;
     } else {
@@ -517,13 +509,9 @@ public class BazelJavaSemantics implements JavaSemantics {
   private static NestedSet<Artifact> getRuntimeJarsForTargets(TransitiveInfoCollection... deps) {
     // The dep may be a simple JAR and not a java rule, hence we can't simply do
     // dep.getProvider(JavaCompilationArgsProvider.class).getRecursiveJavaCompilationArgs(),
-    // so we reuse the logic within JavaCompilationArgs to handle both scenarios.
-    JavaCompilationArgs args =
-        JavaCompilationArgs.builder()
-            .addTransitiveTargets(
-                ImmutableList.copyOf(deps), /*recursive=*/ true, ClasspathType.RUNTIME_ONLY)
-            .build();
-    return args.getRuntimeJars();
+    // so we reuse the logic within JavaCompilationArgsProvider to handle both scenarios.
+    return JavaCompilationArgsProvider.legacyFromTargets(ImmutableList.copyOf(deps))
+        .getRuntimeJars();
   }
 
   @Override
@@ -562,21 +550,32 @@ public class BazelJavaSemantics implements JavaSemantics {
   }
 
   @Override
-  public Iterable<String> getExtraJavacOpts(RuleContext ruleContext) {
-    return ImmutableList.<String>of();
+  public ImmutableList<String> getCompatibleJavacOptions(
+      RuleContext ruleContext, JavaToolchainProvider toolchain) {
+    return ImmutableList.of();
   }
 
   @Override
-  public void addProviders(RuleContext ruleContext,
+  public void addProviders(
+      RuleContext ruleContext,
       JavaCommon javaCommon,
-      List<String> jvmFlags,
-      Artifact classJar,
-      Artifact srcJar,
-      Artifact genJar,
       Artifact gensrcJar,
-      ImmutableMap<Artifact, Artifact> compilationToRuntimeJarMap,
-      NestedSetBuilder<Artifact> filesBuilder,
       RuleConfiguredTargetBuilder ruleBuilder) {
+    // TODO(plf): Figure out whether we can remove support for C++ dependencies in Bazel.
+    CcLinkingInfo.Builder ccLinkingInfoBuilder = CcLinkingInfo.Builder.create();
+    ccLinkingInfoBuilder.setCcLinkParamsStore(
+        new CcLinkParamsStore(
+            new AbstractCcLinkParamsStore() {
+              @Override
+              protected void collect(
+                  CcLinkParams.Builder builder, boolean linkingStatically, boolean linkShared) {
+                builder.addTransitiveTargets(
+                    javaCommon.targetsTreatedAsDeps(ClasspathType.BOTH),
+                    JavaCcLinkParamsProvider.TO_LINK_PARAMS,
+                    CcLinkParamsStore.TO_LINK_PARAMS);
+              }
+            }));
+    ruleBuilder.addNativeDeclaredProvider(ccLinkingInfoBuilder.build());
   }
 
   // TODO(dmarting): simplify that logic when we remove the legacy Bazel java_test behavior.
@@ -735,7 +734,7 @@ public class BazelJavaSemantics implements JavaSemantics {
 
   @Override
   public CustomCommandLine buildSingleJarCommandLine(
-      BuildConfiguration configuration,
+      String toolchainIdentifier,
       Artifact output,
       String mainClass,
       ImmutableList<String> manifestLines,
@@ -770,25 +769,22 @@ public class BazelJavaSemantics implements JavaSemantics {
   }
 
   @Override
-  public Artifact getLauncher(RuleContext ruleContext, JavaCommon common,
-      DeployArchiveBuilder deployArchiveBuilder, Runfiles.Builder runfilesBuilder,
-      List<String> jvmFlags, JavaTargetAttributes.Builder attributesBuilder, boolean shouldStrip) {
-    return JavaHelper.launcherArtifactForTarget(this, ruleContext);
-  }
-
-  @Override
-  public void addDependenciesForRunfiles(RuleContext ruleContext, Runfiles.Builder builder) {
+  public Pair<Artifact, Artifact> getLauncher(
+      RuleContext ruleContext,
+      JavaCommon common,
+      DeployArchiveBuilder deployArchiveBuilder,
+      DeployArchiveBuilder unstrippedDeployArchiveBuilder,
+      Runfiles.Builder runfilesBuilder,
+      List<String> jvmFlags,
+      JavaTargetAttributes.Builder attributesBuilder,
+      boolean shouldStrip) {
+    Artifact launcher = JavaHelper.launcherArtifactForTarget(this, ruleContext);
+    return new Pair<>(launcher, launcher);
   }
 
   @Override
   public void addArtifactToJavaTargetAttribute(JavaTargetAttributes.Builder builder,
       Artifact srcArtifact) {
-  }
-
-  @Override
-  public void commonDependencyProcessing(RuleContext ruleContext,
-      JavaTargetAttributes.Builder attributes,
-      Collection<? extends TransitiveInfoCollection> deps) {
   }
 
   @Override
@@ -859,5 +855,10 @@ public class BazelJavaSemantics implements JavaSemantics {
   public Artifact getObfuscatedConstantStringMap(RuleContext ruleContext)
       throws InterruptedException {
     return null;
+  }
+
+  @Override
+  public boolean isJavaProtoLibraryStrictDeps(RuleContext ruleContext) {
+    return false;
   }
 }

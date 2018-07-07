@@ -17,7 +17,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
@@ -208,7 +207,7 @@ public abstract class InvalidatingNodeVisitor<TGraph extends QueryableGraph> {
     }
   }
 
-  public static class DirtyingInvalidationState extends InvalidationState {
+  static class DirtyingInvalidationState extends InvalidationState {
     public DirtyingInvalidationState() {
       super(InvalidationType.CHANGED);
     }
@@ -243,7 +242,7 @@ public abstract class InvalidatingNodeVisitor<TGraph extends QueryableGraph> {
     @Override
     public void visit(Iterable<SkyKey> keys, InvalidationType invalidationType) {
       Preconditions.checkState(invalidationType == InvalidationType.DELETED, keys);
-      Builder<SkyKey> unvisitedKeysBuilder = ImmutableList.builder();
+      ImmutableList.Builder<SkyKey> unvisitedKeysBuilder = ImmutableList.builder();
       for (SkyKey key : keys) {
         if (visited.add(key)) {
           unvisitedKeysBuilder.add(key);
@@ -478,7 +477,7 @@ public abstract class InvalidatingNodeVisitor<TGraph extends QueryableGraph> {
                 // method.
                 // Any exception thrown should be unrecoverable.
                 // This entry remains in the graph in this dirty state until it is re-evaluated.
-                MarkedDirtyResult markedDirtyResult = null;
+                MarkedDirtyResult markedDirtyResult;
                 try {
                   markedDirtyResult = entry.markDirty(isChanged);
                 } catch (InterruptedException e) {
@@ -488,8 +487,13 @@ public abstract class InvalidatingNodeVisitor<TGraph extends QueryableGraph> {
                   // visitation, so we can resume next time.
                   return;
                 }
-                if (markedDirtyResult == null) {
-                  // Another thread has already dirtied this node. Don't do anything in this thread.
+                Preconditions.checkState(
+                    !markedDirtyResult.wasCallRedundant(),
+                    "Node unexpectedly marked dirty or changed twice: %s",
+                    entry);
+                if (!markedDirtyResult.wasClean()) {
+                  // Another thread has already handled this node's rdeps. Don't do anything in this
+                  // thread.
                   if (supportInterruptions) {
                     pendingVisitations.remove(Pair.of(key, invalidationType));
                   }
@@ -497,7 +501,10 @@ public abstract class InvalidatingNodeVisitor<TGraph extends QueryableGraph> {
                 }
                 // Propagate dirtiness upwards and mark this node dirty/changed. Reverse deps should
                 // only be marked dirty (because only a dependency of theirs has changed).
-                visit(markedDirtyResult.getReverseDepsUnsafe(), InvalidationType.DIRTIED, key);
+                visit(
+                    markedDirtyResult.getReverseDepsUnsafeIfWasClean(),
+                    InvalidationType.DIRTIED,
+                    key);
 
                 progressReceiver.invalidated(key,
                     EvaluationProgressReceiver.InvalidationState.DIRTY);

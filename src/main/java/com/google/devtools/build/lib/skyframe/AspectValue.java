@@ -19,9 +19,7 @@ import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Interner;
-import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
-import com.google.devtools.build.lib.actions.ActionKeyContext;
-import com.google.devtools.build.lib.actions.ActionLookupValue;
+import com.google.devtools.build.lib.actions.BasicActionLookupValue;
 import com.google.devtools.build.lib.analysis.ConfiguredAspect;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -35,21 +33,14 @@ import com.google.devtools.build.lib.packages.AspectParameters;
 import com.google.devtools.build.lib.packages.Package;
 import com.google.devtools.build.lib.skyframe.BuildConfigurationValue.Key;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey.KeyAndHost;
-import com.google.devtools.build.lib.skyframe.serialization.ImmutableListCodec;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
-import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.syntax.SkylarkImport;
 import com.google.devtools.build.skyframe.SkyFunctionName;
-import com.google.protobuf.CodedInputStream;
-import com.google.protobuf.CodedOutputStream;
-import java.io.IOException;
-import java.util.List;
 import javax.annotation.Nullable;
 
-/**
- * An aspect in the context of the Skyframe graph.
- */
-public final class AspectValue extends ActionLookupValue {
+/** An aspect in the context of the Skyframe graph. */
+@AutoCodec
+public final class AspectValue extends BasicActionLookupValue {
 
   /**
    * A base class for keys that have AspectValue as a Sky value.
@@ -59,8 +50,8 @@ public final class AspectValue extends ActionLookupValue {
   }
 
   /** A base class for a key representing an aspect applied to a particular target. */
+  @AutoCodec
   public static class AspectKey extends AspectValueKey {
-    public static final ObjectCodec<AspectKey> CODEC = new AspectKeyCodec();
     private final Label label;
     private final ImmutableList<AspectKey> baseKeys;
     private final BuildConfigurationValue.Key aspectConfigurationKey;
@@ -79,6 +70,31 @@ public final class AspectValue extends ActionLookupValue {
       this.aspectConfigurationKey = aspectConfigurationKey;
       this.baseConfiguredTargetKey = baseConfiguredTargetKey;
       this.aspectDescriptor = aspectDescriptor;
+    }
+
+    @AutoCodec.VisibleForSerialization
+    @AutoCodec.Instantiator
+    static AspectKey createAspectKey(
+        Label label,
+        ConfiguredTargetKey baseConfiguredTargetKey,
+        ImmutableList<AspectKey> baseKeys,
+        AspectDescriptor aspectDescriptor,
+        BuildConfigurationValue.Key aspectConfigurationKey,
+        boolean aspectConfigurationIsHost) {
+      return aspectKeyInterner.intern(
+          aspectConfigurationIsHost
+              ? new HostAspectKey(
+                  label,
+                  aspectConfigurationKey,
+                  baseConfiguredTargetKey,
+                  baseKeys,
+                  aspectDescriptor)
+              : new AspectKey(
+                  label,
+                  aspectConfigurationKey,
+                  baseConfiguredTargetKey,
+                  baseKeys,
+                  aspectDescriptor));
     }
 
     @Override
@@ -106,7 +122,7 @@ public final class AspectValue extends ActionLookupValue {
     }
 
     @Nullable
-    public ImmutableList<AspectKey> getBaseKeys() {
+    ImmutableList<AspectKey> getBaseKeys() {
       return baseKeys;
     }
 
@@ -121,6 +137,8 @@ public final class AspectValue extends ActionLookupValue {
       }
     }
 
+    // Note that this does not factor into equality/hash-code computations because its value is
+    // already encoded in the aspectConfigurationKey, albeit in an opaque way.
     protected boolean aspectConfigurationIsHost() {
       return false;
     }
@@ -221,13 +239,14 @@ public final class AspectValue extends ActionLookupValue {
     public String toString() {
       return (baseKeys == null ? label : baseKeys.toString())
           + "#"
-          + aspectDescriptor.getAspectClass().getName()
+          + aspectDescriptor
           + " "
           + aspectConfigurationKey
           + " "
           + baseConfiguredTargetKey
           + " "
-          + aspectDescriptor.getParameters();
+          + aspectDescriptor.getParameters()
+          + (aspectConfigurationIsHost() ? " (host)" : "");
     }
 
     AspectKey withLabel(Label label) {
@@ -251,8 +270,6 @@ public final class AspectValue extends ActionLookupValue {
 
   /** An {@link AspectKey} for an aspect in the host configuration. */
   static class HostAspectKey extends AspectKey {
-    static final ObjectCodec<AspectKey> CODEC = AspectKey.CODEC;
-
     private HostAspectKey(
         Label label,
         Key aspectConfigurationKey,
@@ -265,38 +282,6 @@ public final class AspectValue extends ActionLookupValue {
     @Override
     protected boolean aspectConfigurationIsHost() {
       return true;
-    }
-  }
-
-  private static class AspectKeyCodec implements ObjectCodec<AspectKey> {
-    private final ImmutableListCodec<AspectKey> listCodec = new ImmutableListCodec<>(this);
-
-    @Override
-    public Class<AspectKey> getEncodedClass() {
-      return AspectKey.class;
-    }
-
-    @Override
-    public void serialize(AspectKey obj, CodedOutputStream codedOut)
-        throws SerializationException, IOException {
-      Label.CODEC.serialize(obj.label, codedOut);
-      ConfiguredTargetKey.CODEC.serialize(obj.baseConfiguredTargetKey, codedOut);
-      listCodec.serialize(obj.baseKeys, codedOut);
-      AspectDescriptor.CODEC.serialize(obj.aspectDescriptor, codedOut);
-      Key.CODEC.serialize(obj.aspectConfigurationKey, codedOut);
-      codedOut.writeBoolNoTag(obj.aspectConfigurationIsHost());
-    }
-
-    @Override
-    public AspectKey deserialize(CodedInputStream codedIn)
-        throws SerializationException, IOException {
-      return createAspectKey(
-          Label.CODEC.deserialize(codedIn),
-          ConfiguredTargetKey.CODEC.deserialize(codedIn),
-          listCodec.deserialize(codedIn),
-          AspectDescriptor.CODEC.deserialize(codedIn),
-          Key.CODEC.deserialize(codedIn),
-          codedIn.readBool());
     }
   }
 
@@ -402,7 +387,7 @@ public final class AspectValue extends ActionLookupValue {
     }
 
     AspectKey toAspectKey(AspectClass aspectClass) {
-      return createAspectKey(
+      return AspectKey.createAspectKey(
           targetLabel,
           baseConfiguredTargetKey,
           ImmutableList.of(),
@@ -445,17 +430,31 @@ public final class AspectValue extends ActionLookupValue {
   // May be null either after clearing or because transitive packages are not tracked.
   @Nullable private NestedSet<Package> transitivePackagesForPackageRootResolution;
 
+  @AutoCodec.Instantiator
+  @AutoCodec.VisibleForSerialization
+  AspectValue(
+      AspectKey key,
+      Aspect aspect,
+      Label label,
+      Location location,
+      ConfiguredAspect configuredAspect) {
+    super(configuredAspect.getActions(), configuredAspect.getGeneratingActionIndex());
+    this.label = Preconditions.checkNotNull(label, actions);
+    this.aspect = Preconditions.checkNotNull(aspect, label);
+    this.location = Preconditions.checkNotNull(location, label);
+    this.key = Preconditions.checkNotNull(key, label);
+    this.configuredAspect = Preconditions.checkNotNull(configuredAspect, label);
+    this.transitivePackagesForPackageRootResolution = null;
+  }
+
   public AspectValue(
       AspectKey key,
       Aspect aspect,
       Label label,
       Location location,
       ConfiguredAspect configuredAspect,
-      ActionKeyContext actionKeyContext,
-      List<ActionAnalysisMetadata> actions,
-      NestedSet<Package> transitivePackagesForPackageRootResolution,
-      boolean removeActionsAfterEvaluation) {
-    super(actionKeyContext, actions, removeActionsAfterEvaluation);
+      NestedSet<Package> transitivePackagesForPackageRootResolution) {
+    super(configuredAspect.getActions(), configuredAspect.getGeneratingActionIndex());
     this.label = Preconditions.checkNotNull(label, actions);
     this.aspect = Preconditions.checkNotNull(aspect, label);
     this.location = Preconditions.checkNotNull(location, label);
@@ -529,7 +528,7 @@ public final class AspectValue extends ActionLookupValue {
       AspectDescriptor aspectDescriptor,
       BuildConfiguration aspectConfiguration) {
     KeyAndHost aspectKeyAndHost = ConfiguredTargetKey.keyFromConfiguration(aspectConfiguration);
-    return createAspectKey(
+    return AspectKey.createAspectKey(
         label,
         ConfiguredTargetKey.of(label, baseConfiguration),
         baseKeys,
@@ -546,28 +545,13 @@ public final class AspectValue extends ActionLookupValue {
       AspectDescriptor aspectDescriptor,
       BuildConfiguration aspectConfiguration) {
     KeyAndHost aspectKeyAndHost = ConfiguredTargetKey.keyFromConfiguration(aspectConfiguration);
-    return createAspectKey(
+    return AspectKey.createAspectKey(
         label,
         ConfiguredTargetKey.of(label, baseConfiguration),
         ImmutableList.of(),
         aspectDescriptor,
         aspectKeyAndHost.key,
         aspectKeyAndHost.isHost);
-  }
-
-  private static AspectKey createAspectKey(
-      Label label,
-      ConfiguredTargetKey configuredTargetKey,
-      ImmutableList<AspectKey> aspectKeys,
-      AspectDescriptor aspectDescriptor,
-      BuildConfigurationValue.Key aspectConfigurationKey,
-      boolean aspectConfigurationIsHost) {
-    return aspectKeyInterner.intern(
-        aspectConfigurationIsHost
-            ? new HostAspectKey(
-                label, aspectConfigurationKey, configuredTargetKey, aspectKeys, aspectDescriptor)
-            : new AspectKey(
-                label, aspectConfigurationKey, configuredTargetKey, aspectKeys, aspectDescriptor));
   }
 
   private static final Interner<SkylarkAspectLoadingKey> skylarkAspectKeyInterner =

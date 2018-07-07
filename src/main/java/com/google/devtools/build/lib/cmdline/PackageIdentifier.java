@@ -16,11 +16,12 @@ package com.google.devtools.build.lib.cmdline;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ComparisonChain;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Interner;
 import com.google.devtools.build.lib.concurrent.BlazeInterners;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.vfs.Canonicalizer;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.Serializable;
 import java.util.Objects;
@@ -33,10 +34,10 @@ import javax.annotation.concurrent.Immutable;
  * the workspace name "". Other repositories can be named in the WORKSPACE file. These workspaces
  * are prefixed by {@literal @}.
  */
+@AutoCodec
 @Immutable
 public final class PackageIdentifier
     implements Comparable<PackageIdentifier>, Serializable, SkylarkValue {
-
   private static final Interner<PackageIdentifier> INTERNER = BlazeInterners.newWeakInterner();
 
   public static PackageIdentifier create(String repository, PathFragment pkgName)
@@ -44,7 +45,9 @@ public final class PackageIdentifier
     return create(RepositoryName.create(repository), pkgName);
   }
 
+  @AutoCodec.Instantiator
   public static PackageIdentifier create(RepositoryName repository, PathFragment pkgName) {
+    // Note: We rely on these being interned to fast-path Label#equals.
     return INTERNER.intern(new PackageIdentifier(repository, pkgName));
   }
 
@@ -87,7 +90,7 @@ public final class PackageIdentifier
       // TODO(ulfjack): Remove this when kchodorow@'s exec root rearrangement has been rolled out.
       RepositoryName repository = RepositoryName.create("@" + tofind.getSegment(1));
       return PackageIdentifier.create(repository, tofind.subFragment(2));
-    } else if (!tofind.normalize().isNormalized()) {
+    } else if (tofind.containsUplevelReferences()) {
       RepositoryName repository = RepositoryName.create("@" + tofind.getSegment(1));
       return PackageIdentifier.create(repository, tofind.subFragment(2));
     } else {
@@ -112,18 +115,22 @@ public final class PackageIdentifier
 
   private PackageIdentifier(RepositoryName repository, PathFragment pkgName) {
     this.repository = Preconditions.checkNotNull(repository);
-    if (!pkgName.isNormalized()) {
-      pkgName = pkgName.normalize();
-    }
-    this.pkgName = Canonicalizer.fragments().intern(Preconditions.checkNotNull(pkgName));
+    this.pkgName = Preconditions.checkNotNull(pkgName);
     this.hashCode = Objects.hash(repository, pkgName);
   }
 
   public static PackageIdentifier parse(String input) throws LabelSyntaxException {
-    String repo;
+    return parse(input, /* repo= */ null, /* repositoryMapping= */ null);
+  }
+
+  public static PackageIdentifier parse(
+      String input, String repo, ImmutableMap<RepositoryName, RepositoryName> repositoryMapping)
+      throws LabelSyntaxException {
     String packageName;
     int packageStartPos = input.indexOf("//");
-    if (input.startsWith("@") && packageStartPos > 0) {
+    if (repo != null) {
+      packageName = input;
+    } else if (input.startsWith("@") && packageStartPos > 0) {
       repo = input.substring(0, packageStartPos);
       packageName = input.substring(packageStartPos + 2);
     } else if (input.startsWith("@")) {
@@ -146,7 +153,13 @@ public final class PackageIdentifier
       throw new LabelSyntaxException(error);
     }
 
-    return create(repo, PathFragment.create(packageName));
+    if (repositoryMapping != null) {
+      RepositoryName repositoryName = RepositoryName.create(repo);
+      repositoryName = repositoryMapping.getOrDefault(repositoryName, repositoryName);
+      return create(repositoryName, PathFragment.create(packageName));
+    } else {
+      return create(repo, PathFragment.create(packageName));
+    }
   }
 
   public RepositoryName getRepository() {

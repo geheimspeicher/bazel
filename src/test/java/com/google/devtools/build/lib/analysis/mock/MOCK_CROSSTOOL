@@ -32,11 +32,15 @@ default_toolchain {
   cpu: "ppc"
   toolchain_identifier: "local_linux"
 }
+default_toolchain {
+  cpu: "aarch64"
+  toolchain_identifier: "local_linux"
+}
 
 toolchain {
   abi_version: "local"
   abi_libc_version: "local"
-  builtin_sysroot: ""
+  builtin_sysroot: "/test/"
   compiler: "compiler"
   host_system_name: "local"
   needsPic: true
@@ -181,7 +185,7 @@ toolchain {
   needsPic: true
   supports_fission: true
 
-  builtin_sysroot: ""
+  builtin_sysroot: "/usr/grte/v1"
   cxx_flag: "-std=c++0x"
   linker_flag: "-lstdc++"
   cxx_builtin_include_directory: "/usr/lib/gcc/"
@@ -296,7 +300,7 @@ toolchain {
 
   needsPic: false
 
-  builtin_sysroot: ""
+  builtin_sysroot: "/usr/grte/v1"
   cxx_flag: "-std=c++0x"
   linker_flag: "-lstdc++"
   cxx_builtin_include_directory: "/usr/include"
@@ -310,8 +314,7 @@ toolchain {
 }
 
 toolchain {
-  toolchain_identifier: "local_darwin-no-dyn-linker"
-
+  toolchain_identifier: "darwin-no-dyn-linker"
   host_system_name: "local"
   target_system_name: "local"
   target_cpu: "darwin"
@@ -448,7 +451,7 @@ toolchain {
   tool_path { name: "objdump" path: "C:/msys64/mingw64/bin/objdump" }
   tool_path { name: "strip" path: "C:/msys64/mingw64/bin/strip" }
 
-  builtin_sysroot: ""
+  builtin_sysroot: "/usr/grte/v1"
   cxx_flag: "-std=c++0x"
   cxx_builtin_include_directory: "C:/msys64/mingw64/x86_64-w64-mingw32/include"
   objcopy_embed_flag: "-I"
@@ -537,7 +540,7 @@ toolchain {
 toolchain {
    abi_version: "local"
    abi_libc_version: "local"
-   builtin_sysroot: ""
+   builtin_sysroot: "/usr/grte/v1"
    compiler: "windows_msys64"
    host_system_name: "local"
    needsPic: false
@@ -572,6 +575,7 @@ toolchain {
 }
 
 toolchain {
+   toolchain_identifier: "windows_msys64-no-dyn-linker"
    abi_version: "local"
    abi_libc_version: "local"
    builtin_sysroot: ""
@@ -581,7 +585,6 @@ toolchain {
    target_libc: "local"
    target_cpu: "x64_windows"
    target_system_name: "local"
-   toolchain_identifier: "local_windows_msys64-no-dyn-linker"
 
    tool_path { name: "ar" path: "C:/tools/msys64/usr/bin/ar" }
    tool_path { name: "compat-ld" path: "C:/tools/msys64/usr/bin/ld" }

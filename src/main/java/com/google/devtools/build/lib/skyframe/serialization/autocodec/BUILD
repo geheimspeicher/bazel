@@ -14,10 +14,16 @@ java_library(
     exports = [
         ":autocodec-annotation",
         # Generated classes have the following dependencies.
-        ":unsafe-provider",
+        ":registered-singleton",
         "//third_party/protobuf:protobuf_java",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:unsafe-provider",
     ],
+)
+
+java_library(
+    name = "registered-singleton",
+    srcs = ["RegisteredSingletonDoNotUse.java"],
 )
 
 # @AutoCodec annotation only. Used by clients and the processor.
@@ -35,11 +41,6 @@ java_plugin(
     ],
 )
 
-java_library(
-    name = "unsafe-provider",
-    srcs = ["UnsafeProvider.java"],
-)
-
 # @AutoCodec annotation processor implementation.
 java_library(
     name = "autocodec-processor",
@@ -51,14 +52,12 @@ java_library(
     ],
     deps = [
         ":autocodec-annotation",
-        ":unsafe-provider",
-        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
-        "//src/main/java/com/google/devtools/build/lib/collect/nestedset:serialization",
+        ":registered-singleton",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:unsafe-provider",
         "//third_party:auto_service",
         "//third_party:auto_value",
         "//third_party:guava",
-        "//third_party:jsr305",
         "//third_party/java/javapoet",
         "//third_party/protobuf:protobuf_java",
     ],
@@ -75,7 +74,8 @@ pkg_tar(
     files = {
         ":libautocodec-annotation.jar": "third_party/bazel_bootstrap/libautocodec-annotation.jar",
         ":libautocodec-processor.jar": "third_party/bazel_bootstrap/libautocodec-processor.jar",
-        ":libunsafe-provider.jar": "third_party/bazel_bootstrap/libunsafe-provider.jar",
+        ":libregistered-singleton.jar": "third_party/bazel_bootstrap/libregistered-singleton.jar",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:libunsafe-provider.jar": "third_party/bazel_bootstrap/libunsafe-provider.jar",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization:libserialization.jar": "third_party/bazel_bootstrap/libserialization.jar",
     },
     visibility = ["//visibility:public"],

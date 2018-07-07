@@ -16,21 +16,11 @@ package com.google.devtools.build.lib.packages;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.events.Location;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
+import com.google.devtools.build.lib.skylarkbuildapi.SkylarkAspectApi;
 import com.google.devtools.build.lib.syntax.EvalException;
 
 /** Represents an aspect which can be attached to a skylark-defined rule attribute. */
-@SkylarkModule(
-  name = "Aspect",
-  category = SkylarkModuleCategory.NONE,
-  doc =
-      "For more information about Aspects, please consult the <a href=\"globals.html#aspect\">"
-          + "documentation of the aspect function</a> or the "
-          + "<a href=\"../aspects.md\">introduction to Aspects</a>."
-)
-public interface SkylarkAspect extends SkylarkValue {
+public interface SkylarkAspect extends SkylarkAspectApi {
 
   /**
    * Attaches this aspect to an attribute.

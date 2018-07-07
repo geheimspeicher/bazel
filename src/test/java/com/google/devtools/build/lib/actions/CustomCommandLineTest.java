@@ -19,11 +19,11 @@ import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.SpecialArtifactType;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
-import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.CustomMultiArgv;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -68,7 +68,8 @@ public class CustomCommandLineTest {
     assertThat(builder().addDynamicString("--arg").build().arguments())
         .containsExactly("--arg")
         .inOrder();
-    assertThat(builder().addLabel(Label.parseAbsolute("//a:b")).build().arguments())
+    assertThat(
+            builder().addLabel(Label.parseAbsolute("//a:b", ImmutableMap.of())).build().arguments())
         .containsExactly("//a:b")
         .inOrder();
     assertThat(builder().addPath(PathFragment.create("path")).build().arguments())
@@ -94,7 +95,11 @@ public class CustomCommandLineTest {
     assertThat(builder().add("--arg", "val").build().arguments())
         .containsExactly("--arg", "val")
         .inOrder();
-    assertThat(builder().addLabel("--arg", Label.parseAbsolute("//a:b")).build().arguments())
+    assertThat(
+            builder()
+                .addLabel("--arg", Label.parseAbsolute("//a:b", ImmutableMap.of()))
+                .build()
+                .arguments())
         .containsExactly("--arg", "//a:b")
         .inOrder();
     assertThat(builder().addPath("--arg", PathFragment.create("path")).build().arguments())
@@ -132,7 +137,10 @@ public class CustomCommandLineTest {
         .containsExactly("prefix-foo")
         .inOrder();
     assertThat(
-            builder().addPrefixedLabel("prefix-", Label.parseAbsolute("//a:b")).build().arguments())
+            builder()
+                .addPrefixedLabel("prefix-", Label.parseAbsolute("//a:b", ImmutableMap.of()))
+                .build()
+                .arguments())
         .containsExactly("prefix-//a:b")
         .inOrder();
     assertThat(
@@ -813,21 +821,6 @@ public class CustomCommandLineTest {
   }
 
   @Test
-  public void testCustomMultiArgs() {
-    CustomCommandLine cl =
-        builder()
-            .addCustomMultiArgv(
-                new CustomMultiArgv() {
-                  @Override
-                  public ImmutableList<String> argv() {
-                    return ImmutableList.of("--arg1", "--arg2");
-                  }
-                })
-            .build();
-    assertThat(cl.arguments()).containsExactly("--arg1", "--arg2").inOrder();
-  }
-
-  @Test
   public void testCombinedArgs() {
     CustomCommandLine cl =
         builder()
@@ -891,7 +884,6 @@ public class CustomCommandLineTest {
             .addExecPaths("foo", NestedSetBuilder.emptySet(Order.STABLE_ORDER))
             .addAll("foo", VectorArg.of((NestedSet<String>) null))
             .addAll("foo", VectorArg.of(NestedSetBuilder.<String>emptySet(Order.STABLE_ORDER)))
-            .addCustomMultiArgv(null)
             .addPlaceholderTreeArtifactExecPath("foo", null)
             .build();
     assertThat(cl.arguments()).isEmpty();
@@ -984,7 +976,6 @@ public class CustomCommandLineTest {
   private SpecialArtifact createTreeArtifact(String rootRelativePath) {
     PathFragment relpath = PathFragment.create(rootRelativePath);
     return new SpecialArtifact(
-        rootDir.getRoot().getRelative(relpath),
         rootDir,
         rootDir.getExecPath().getRelative(relpath),
         ArtifactOwner.NullArtifactOwner.INSTANCE,

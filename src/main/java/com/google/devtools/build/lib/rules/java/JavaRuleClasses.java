@@ -22,7 +22,6 @@ import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 
@@ -35,13 +34,13 @@ public class JavaRuleClasses {
    */
   public static final class IjarBaseRule implements RuleDefinition {
     @Override
-    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
       return builder
           .add(
               attr(":java_toolchain", LABEL)
                   .useOutputLicenses()
                   .mandatoryProviders(ToolchainInfo.PROVIDER.id())
-                  .value(JavaSemantics.JAVA_TOOLCHAIN))
+                  .value(JavaSemantics.javaToolchainAttribute(env)))
           .setPreferredDependencyPredicate(JavaSemantics.JAVA_SOURCE)
           .build();
     }

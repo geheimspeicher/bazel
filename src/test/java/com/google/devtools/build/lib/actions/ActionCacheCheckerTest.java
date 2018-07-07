@@ -22,7 +22,6 @@ import com.google.devtools.build.lib.actions.ActionCacheChecker.Token;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
 import com.google.devtools.build.lib.actions.cache.CompactPersistentActionCache;
 import com.google.devtools.build.lib.actions.cache.Md5Digest;
-import com.google.devtools.build.lib.actions.cache.Metadata;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics;
 import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics.MissDetail;
@@ -32,9 +31,9 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil.FakeMetadataHa
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil.MissDetailsBuilder;
 import com.google.devtools.build.lib.actions.util.ActionsTestUtil.NullAction;
 import com.google.devtools.build.lib.clock.Clock;
-import com.google.devtools.build.lib.skyframe.FileArtifactValue;
 import com.google.devtools.build.lib.testutil.ManualClock;
 import com.google.devtools.build.lib.testutil.Scratch;
+import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -173,16 +172,16 @@ public class ActionCacheCheckerTest {
     Action action =
         new NullAction() {
           @Override
-          protected String computeKey(ActionKeyContext actionKeyContext) {
-            return "key1";
+          protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+            fp.addString("key1");
           }
         };
     runAction(action);
     action =
         new NullAction() {
           @Override
-          protected String computeKey(ActionKeyContext actionKeyContext) {
-            return "key2";
+          protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+            fp.addString("key2");
           }
         };
     runAction(action);
@@ -334,7 +333,7 @@ public class ActionCacheCheckerTest {
   /** A fake metadata handler that is able to obtain metadata from the file system. */
   private static class FakeMetadataHandler extends FakeMetadataHandlerBase {
     @Override
-    public Metadata getMetadata(Artifact artifact) throws IOException {
+    public FileArtifactValue getMetadata(Artifact artifact) throws IOException {
       return FileArtifactValue.create(artifact);
     }
 

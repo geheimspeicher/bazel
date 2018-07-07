@@ -48,7 +48,6 @@ public class BuildRequestOptions extends OptionsBase {
     name = "jobs",
     abbrev = 'j',
     defaultValue = "auto",
-    category = "strategy",
     documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
     effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS, OptionEffectTag.EXECUTION},
     converter = JobsConverter.class,
@@ -66,7 +65,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "progress_report_interval",
     defaultValue = "0",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     converter = ProgressReportIntervalConverter.class,
@@ -79,7 +77,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "explain",
     defaultValue = "null",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     converter = OptionsUtils.PathFragmentConverter.class,
@@ -92,7 +89,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "verbose_explanations",
     defaultValue = "false",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help =
@@ -105,7 +101,6 @@ public class BuildRequestOptions extends OptionsBase {
     name = "output_filter",
     converter = Converters.RegexPatternConverter.class,
     defaultValue = "null",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help = "Only shows warnings for rules with a name matching the provided regular expression."
@@ -216,7 +211,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "build",
     defaultValue = "true",
-    category = "what",
     documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
     effectTags = {OptionEffectTag.EXECUTION, OptionEffectTag.AFFECTS_OUTPUTS},
     help =
@@ -245,7 +239,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "show_result",
     defaultValue = "1",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help =
@@ -275,7 +268,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "announce",
     defaultValue = "false",
-    category = "verbosity",
     documentationCategory = OptionDocumentationCategory.LOGGING,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help = "Deprecated. No-op.",
@@ -286,7 +278,6 @@ public class BuildRequestOptions extends OptionsBase {
   @Option(
     name = "symlink_prefix",
     defaultValue = "null",
-    category = "misc",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     help =
@@ -301,7 +292,6 @@ public class BuildRequestOptions extends OptionsBase {
     converter = Converters.CommaSeparatedOptionListConverter.class,
     allowMultiple = true,
     defaultValue = "",
-    category = "semantics",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.AFFECTS_OUTPUTS},
     metadataTags = {OptionMetadataTag.EXPERIMENTAL},
@@ -377,6 +367,21 @@ public class BuildRequestOptions extends OptionsBase {
   }
 
   @Option(
+    name = "print_workspace_in_output_paths_if_needed",
+    defaultValue = "false",
+    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+    effectTags = {OptionEffectTag.TERMINAL_OUTPUT},
+    help =
+        "If enabled, when the current working directory is deeper than the workspace (for example, "
+            + "when running from <workspace>/foo instead of <workspace>), printed output paths "
+            + "include the absolute path to the workspace (for example, "
+            + "<workspace>/<symlink_prefix>-bin/foo/binary instead of "
+            + "<symlink_prefix>-bin/foo/binary)."
+  )
+  public boolean printWorkspaceInOutputPathsIfNeeded;
+
+
+  @Option(
     name = "use_action_cache",
     defaultValue = "true",
     documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
@@ -389,29 +394,13 @@ public class BuildRequestOptions extends OptionsBase {
   public boolean useActionCache;
 
   @Option(
-    name = "track_incremental_state",
-    oldName = "keep_incrementality_data",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
-    help =
-        "If false, Blaze will not persist data that allows for invalidation and re-evaluation "
-            + "on incremental builds in order to save memory on this build. Subsequent builds "
-            + "will not have any incrementality with respect to this one. Usually you will want "
-            + "to specify --batch when setting this to false."
-  )
-  public boolean trackIncrementalState;
-
-  @Option(
-    name = "keep_state_after_build",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.BUILD_TIME_OPTIMIZATION,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
-    help =
-        "If false, Blaze will discard the inmemory state from this build when the build finishes. "
-            + "Subsequent builds will not have any incrementality with respect to this one."
-  )
-  public boolean keepStateAfterBuild;
+      name = "discard_actions_after_execution",
+      defaultValue = "true",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      metadataTags = OptionMetadataTag.INCOMPATIBLE_CHANGE,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help = "This option is deprecated and has no effect.")
+  public boolean discardActionsAfterExecution;
 
   /** Converter for jobs: [0, MAX_JOBS] or "auto". */
   public static class JobsConverter extends RangeConverter {

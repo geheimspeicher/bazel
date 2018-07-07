@@ -18,8 +18,10 @@ import com.google.common.base.Throwables;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkSignature;
+import com.google.devtools.build.lib.syntax.Environment.LexicalFrame;
 import com.google.devtools.build.lib.syntax.SkylarkType.SkylarkFunctionType;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -29,7 +31,9 @@ import java.util.NoSuchElementException;
 import javax.annotation.Nullable;
 
 /**
- * A class for Skylark functions provided as builtins by the Skylark implementation
+ * A class for Skylark functions provided as builtins by the Skylark implementation. Instances of
+ * this class do not need to be serializable because they should effectively be treated as
+ * constants.
  */
 public class BuiltinFunction extends BaseFunction {
 
@@ -49,6 +53,10 @@ public class BuiltinFunction extends BaseFunction {
   public static final ExtraArgKind[] USE_AST_ENV =
       new ExtraArgKind[] {ExtraArgKind.SYNTAX_TREE, ExtraArgKind.ENVIRONMENT};
 
+  // Builtins cannot create or modify variable bindings. So it's sufficient to use a shared
+  // instance.
+  private static final LexicalFrame SHARED_LEXICAL_FRAME_FOR_BUILTIN_FUNCTION_CALLS =
+      LexicalFrame.create(Mutability.IMMUTABLE);
 
   // The underlying invoke() method.
   @Nullable private Method invokeMethod;
@@ -130,8 +138,7 @@ public class BuiltinFunction extends BaseFunction {
 
   @Override
   @Nullable
-  public Object call(Object[] args,
-      FuncallExpression ast, Environment env)
+  public Object call(Object[] args, @Nullable FuncallExpression ast, Environment env)
       throws EvalException, InterruptedException {
     Preconditions.checkNotNull(env);
 
@@ -159,10 +166,10 @@ public class BuiltinFunction extends BaseFunction {
       }
     }
 
-    Profiler.instance().startTask(ProfilerTask.SKYLARK_BUILTIN_FN, getName());
     // Last but not least, actually make an inner call to the function with the resolved arguments.
-    try {
-      env.enterScope(this, ast, env.getGlobals());
+    try (SilentCloseable c =
+        Profiler.instance().profile(ProfilerTask.SKYLARK_BUILTIN_FN, getName())) {
+      env.enterScope(this, SHARED_LEXICAL_FRAME_FOR_BUILTIN_FUNCTION_CALLS, ast, env.getGlobals());
       return invokeMethod.invoke(this, args);
     } catch (InvocationTargetException x) {
       Throwable e = x.getCause();
@@ -201,7 +208,6 @@ public class BuiltinFunction extends BaseFunction {
     } catch (IllegalAccessException e) {
       throw badCallException(loc, e, args);
     } finally {
-      Profiler.instance().completeTask(ProfilerTask.SKYLARK_BUILTIN_FN);
       env.exitScope();
     }
   }
@@ -361,8 +367,8 @@ public class BuiltinFunction extends BaseFunction {
     }
 
     @Override
-    public Object call(Object[] args, @Nullable FuncallExpression ast, @Nullable Environment env)
-      throws EvalException {
+    public Object call(Object[] args, @Nullable FuncallExpression ast, Environment env)
+        throws EvalException {
       throw new EvalException(null, "tried to invoke a Factory for function " + this);
     }
 

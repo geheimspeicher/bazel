@@ -14,12 +14,12 @@
 package com.google.devtools.build.lib.analysis.config;
 
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 
-/**
- * Dynamic transition to the host configuration.
- */
+/** Dynamic transition to the host configuration. */
 public final class HostTransition implements PatchTransition {
-  public static final HostTransition INSTANCE = new HostTransition();
+
+  @AutoCodec public static final HostTransition INSTANCE = new HostTransition();
 
   private HostTransition() {}
 
@@ -29,7 +29,7 @@ public final class HostTransition implements PatchTransition {
   }
 
   @Override
-  public BuildOptions apply(BuildOptions options) {
+  public BuildOptions patch(BuildOptions options) {
     if (options.get(BuildConfiguration.Options.class).isHost) {
       // If the input already comes from the host configuration, just return the existing values.
       //

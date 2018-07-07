@@ -19,18 +19,14 @@ import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.LabelListConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
 import java.util.List;
 
 /** Command-line options for platform-related configuration. */
-@AutoCodec(strategy = AutoCodec.Strategy.PUBLIC_FIELDS)
 public class PlatformOptions extends FragmentOptions {
-  public static final ObjectCodec<PlatformOptions> CODEC = new PlatformOptions_AutoCodec();
-
   @Option(
     name = "host_platform",
     oldName = "experimental_host_platform",
@@ -50,7 +46,6 @@ public class PlatformOptions extends FragmentOptions {
     name = "host_platform_remote_properties_override",
     oldName = "experimental_remote_platform_override",
     defaultValue = "null",
-    category = "remote",
     documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
     effectTags = {OptionEffectTag.UNKNOWN},
     help =
@@ -61,16 +56,17 @@ public class PlatformOptions extends FragmentOptions {
 
   @Option(
     name = "extra_execution_platforms",
-    converter = LabelListConverter.class,
+    converter = CommaSeparatedOptionListConverter.class,
     defaultValue = "",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.EXECUTION},
     help =
-        "The labels of platforms that are available as execution platforms to run actions. "
+        "The platforms that are available as execution platforms to run actions. "
+            + "Platforms can be specified by exact target, or as a target pattern. "
             + "These platforms will be considered before those declared in the WORKSPACE file by "
             + "register_execution_platforms()."
   )
-  public List<Label> extraExecutionPlatforms;
+  public List<String> extraExecutionPlatforms;
 
   @Option(
     name = "platforms",
@@ -90,8 +86,8 @@ public class PlatformOptions extends FragmentOptions {
 
   @Option(
     name = "extra_toolchains",
-    converter = LabelListConverter.class,
     defaultValue = "",
+    converter = CommaSeparatedOptionListConverter.class,
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {
       OptionEffectTag.AFFECTS_OUTPUTS,
@@ -99,11 +95,12 @@ public class PlatformOptions extends FragmentOptions {
       OptionEffectTag.LOADING_AND_ANALYSIS
     },
     help =
-        "The labels of toolchain rules to be considered during toolchain resolution. "
+        "The toolchain rules to be considered during toolchain resolution. "
+            + "Toolchains can be specified by exact target, or as a target pattern. "
             + "These toolchains will be considered before those declared in the WORKSPACE file by "
             + "register_toolchains()."
   )
-  public List<Label> extraToolchains;
+  public List<String> extraToolchains;
 
   @Option(
     name = "toolchain_resolution_override",
@@ -140,10 +137,12 @@ public class PlatformOptions extends FragmentOptions {
     name = "enabled_toolchain_types",
     defaultValue = "",
     converter = LabelListConverter.class,
-    category = "semantics",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
-    help = "Signals that the given rule categories use platform-based toolchain resolution"
+    help =
+        "Enable toolchain resolution for the given toolchain type, if the rules used support that. "
+            + "This does not directly change the core Blaze machinery, but is a signal to "
+            + "participating rule implementations that toolchain resolution should be used."
   )
   public List<Label> enabledToolchainTypes;
 

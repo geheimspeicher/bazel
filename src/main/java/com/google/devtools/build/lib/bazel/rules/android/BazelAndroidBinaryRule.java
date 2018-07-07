@@ -15,13 +15,14 @@ package com.google.devtools.build.lib.bazel.rules.android;
 
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
+import com.google.devtools.build.lib.analysis.whitelisting.Whitelist;
 import com.google.devtools.build.lib.bazel.rules.cpp.BazelCppRuleClasses;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaRuleClasses;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.rules.android.AndroidFeatureFlagSetProvider;
 import com.google.devtools.build.lib.rules.android.AndroidRuleClasses;
 import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagTransitionFactory;
+import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 
 /**
  * Rule class definition for {@code android_binary}.
@@ -29,7 +30,7 @@ import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagTransitionFac
 public class BazelAndroidBinaryRule implements RuleDefinition {
 
   @Override
-  public RuleClass build(Builder builder, RuleDefinitionEnvironment environment) {
+  public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
     return builder
         /* <!-- #BLAZE_RULE(android_binary).IMPLICIT_OUTPUTS -->
          <ul>
@@ -66,8 +67,17 @@ public class BazelAndroidBinaryRule implements RuleDefinition {
         </ul>
         <!-- #END_BLAZE_RULE.IMPLICIT_OUTPUTS --> */
         .setImplicitOutputsFunction(AndroidRuleClasses.ANDROID_BINARY_IMPLICIT_OUTPUTS)
+        .add(
+            Whitelist.getAttributeFromWhitelistName("export_deps")
+                .value(environment.getToolsLabel("//tools/android:export_deps_whitelist")))
+        .add(
+            Whitelist.getAttributeFromWhitelistName("allow_deps_without_srcs")
+                .value(
+                    environment.getToolsLabel(
+                        "//tools/android:allow_android_library_deps_without_srcs_whitelist")))
         .cfg(
             new ConfigFeatureFlagTransitionFactory(AndroidFeatureFlagSetProvider.FEATURE_FLAG_ATTR))
+        .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(environment))
         .build();
   }
 

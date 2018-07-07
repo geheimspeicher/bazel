@@ -1,13 +1,11 @@
 package(default_visibility = ["//visibility:public"])
 
-# TODO(lberki): Remove this once java_toolchain_alias and java_runtime_alias are
-# in a Bazel release
-load("//tools/jdk:alias_rules.bzl", "java_host_runtime_alias")
 load(
     "//tools/jdk:default_java_toolchain.bzl",
     "default_java_toolchain",
     "JDK8_JVM_OPTS",
     "JDK9_JVM_OPTS",
+    "DEFAULT_JAVACOPTS",
 )
 
 # Used to distinguish toolchains used for Java development, ie the JavaToolchainProvider.
@@ -48,7 +46,7 @@ filegroup(
 # *before* the transition.
 alias(
     name = "java_runtime_alias",
-    actual = "//tools/jdk:current_java_runtime",
+    actual = "@bazel_tools//tools/jdk:current_java_runtime",
 )
 
 alias(
@@ -184,7 +182,7 @@ alias(
 
 alias(
     name = "host_jdk",
-    actual = "@local_jdk//:jdk",
+    actual = "@embedded_jdk//:jdk",
 )
 
 genrule(
@@ -193,7 +191,7 @@ genrule(
     outs = ["platformclasspath-impl.jar"],
     cmd = """
 set -eu
-TMPDIR=$$(mktemp -d)
+TMPDIR=$$(mktemp -d -t tmp.XXXXXXXX)
 $(JAVABASE)/bin/javac $< -d $$TMPDIR
 $(JAVA) -cp $$TMPDIR DumpPlatformClassPath 8 $@
 rm -rf $$TMPDIR
@@ -212,13 +210,30 @@ genrule(
 )
 
 default_java_toolchain(
-    name = "toolchain_jdk8",
+    name = "toolchain_hostjdk8",
+    bootclasspath = [":bootclasspath"],
+    extclasspath = [":extclasspath"],
     jvm_opts = JDK8_JVM_OPTS,
+    source_version = "8",
+    target_version = "8",
 )
 
 default_java_toolchain(
-    name = "toolchain_jdk9",
+    name = "toolchain_hostjdk9",
+    bootclasspath = [":bootclasspath"],
+    extclasspath = [":extclasspath"],
     jvm_opts = JDK9_JVM_OPTS,
+    source_version = "8",
+    target_version = "8",
+)
+
+default_java_toolchain(
+    name = "toolchain_java9",
+    jvm_opts = JDK9_JVM_OPTS,
+    misc = DEFAULT_JAVACOPTS + [
+        "--release",
+        "9",
+    ],
 )
 
 alias(
@@ -231,7 +246,6 @@ filegroup(
     srcs = [
         "BUILD-jdk",  # Tools are build from the workspace for tests.
         "DumpPlatformClassPath.java",
-        "alias_rules.bzl",
         "default_java_toolchain.bzl",
         "proguard_whitelister.py",
         "proguard_whitelister_test.py",

@@ -1,4 +1,5 @@
 # pylint: disable=g-bad-file-header
+# pylint: disable=superfluous-parens
 # Copyright 2017 The Bazel Authors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +16,7 @@
 
 import locale
 import os
+import socket
 import stat
 import subprocess
 import tempfile
@@ -44,6 +46,9 @@ class TestBase(unittest.TestCase):
   _temp = None
   _tests_root = None
   _test_cwd = None
+  _worker_stdout = None
+  _worker_stderr = None
+  _worker_proc = None
 
   def setUp(self):
     unittest.TestCase.setUp(self)
@@ -56,12 +61,28 @@ class TestBase(unittest.TestCase):
     self._test_cwd = tempfile.mkdtemp(dir=self._tests_root)
     os.chdir(self._test_cwd)
 
-  def AssertExitCode(self, actual_exit_code, expected_exit_code, stderr_lines):
+  def tearDown(self):
+    self.RunBazel(['shutdown'])
+
+  def AssertExitCode(self,
+                     actual_exit_code,
+                     expected_exit_code,
+                     stderr_lines,
+                     stdout_lines=None):
     """Assert that `actual_exit_code` == `expected_exit_code`."""
     if actual_exit_code != expected_exit_code:
+      # If stdout was provided, include it in the output. This is mostly useful
+      # for tests.
+      stdout = '\n'.join([
+          '(start stdout)----------------------------------------',
+      ] + stdout_lines + [
+          '(end stdout)------------------------------------------',
+      ]) if stdout_lines is not None else ''
+
       self.fail('\n'.join([
           'Bazel exited with %d (expected %d), stderr:' % (actual_exit_code,
                                                            expected_exit_code),
+          stdout,
           '(start stderr)----------------------------------------',
       ] + (stderr_lines or []) + [
           '(end stderr)------------------------------------------',
@@ -83,7 +104,7 @@ class TestBase(unittest.TestCase):
     """
     value = os.getenv(name, '__undefined_envvar__')
     if value == '__undefined_envvar__':
-      if default:
+      if default is not None:
         return default
       raise EnvVarUndefinedError(name)
     return value
@@ -194,8 +215,8 @@ class TestBase(unittest.TestCase):
     if os.path.exists(abspath) and not os.path.isfile(abspath):
       raise IOError('"%s" (%s) exists and is not a file' % (dst_path, abspath))
     self.ScratchDir(os.path.dirname(dst_path))
-    with open(src_path, 'r') as s:
-      with open(abspath, 'w') as d:
+    with open(src_path, 'rb') as s:
+      with open(abspath, 'wb') as d:
         d.write(s.read())
     if executable:
       os.chmod(abspath, stat.S_IRWXU)
@@ -214,10 +235,77 @@ class TestBase(unittest.TestCase):
       (int, [string], [string]) tuple: exit code, stdout lines, stderr lines
     """
     return self.RunProgram([
-        self.Rlocation('io_bazel/src/bazel_with_jdk'),
+        self.Rlocation('io_bazel/src/bazel'),
         '--bazelrc=/dev/null',
         '--nomaster_bazelrc',
     ] + args, env_remove, env_add)
+
+  def StartRemoteWorker(self):
+    """Runs a "local remote worker" to run remote builds and tests on.
+
+    Returns:
+      int: port that the local remote worker runs on.
+    """
+    self._worker_stdout = tempfile.TemporaryFile(dir=self._test_cwd)
+    self._worker_stderr = tempfile.TemporaryFile(dir=self._test_cwd)
+    # Ideally we would use something under TEST_TMPDIR here, but the
+    # worker path must be as short as possible so we don't exceed Windows
+    # path length limits, so we run straight in TEMP. This should ideally
+    # be set to something like C:\temp. On CI this is set to D:\temp.
+    worker_path = TestBase.GetEnv('TEMP')
+
+    # Get an open port. Unfortunately this seems to be the best option in
+    # Python.
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', 0))
+    port = s.getsockname()[1]
+    s.close()
+
+    # Tip: To help debug remote build problems, add the --debug flag below.
+    self._worker_proc = subprocess.Popen(
+        [
+            self.Rlocation('io_bazel/src/tools/remote/worker.exe'),
+            '--listen_port=' + str(port),
+            # This path has to be extremely short to avoid Windows path
+            # length restrictions.
+            '--work_path=' + worker_path,
+        ],
+        stdout=self._worker_stdout,
+        stderr=self._worker_stderr,
+        cwd=self._test_cwd,
+        env=self._EnvMap(env_add={
+            'RUNFILES_MANIFEST_FILE': TestBase.GetEnv('RUNFILES_MANIFEST_FILE'),
+        }))
+
+    return port
+
+  def StopRemoteWorker(self):
+    """Stop the "local remote worker" started by StartRemoteWorker.
+
+    Prints its stdout and stderr out for debug purposes.
+    """
+    self._worker_proc.terminate()
+    self._worker_proc.wait()
+
+    self._worker_stdout.seek(0)
+    stdout_lines = [
+        l.decode(locale.getpreferredencoding()).strip()
+        for l in self._worker_stdout.readlines()
+    ]
+    if stdout_lines:
+      print('Local remote worker stdout')
+      print('--------------------------')
+      print('\n'.join(stdout_lines))
+
+    self._worker_stderr.seek(0)
+    stderr_lines = [
+        l.decode(locale.getpreferredencoding()).strip()
+        for l in self._worker_stderr.readlines()
+    ]
+    if stderr_lines:
+      print('Local remote worker stderr')
+      print('--------------------------')
+      print('\n'.join(stderr_lines))
 
   def RunProgram(self, args, env_remove=None, env_add=None):
     """Runs a program (args[0]), waits for it to exit.
@@ -263,14 +351,16 @@ class TestBase(unittest.TestCase):
               TestBase.GetEnv('SYSTEMROOT'),
           # TODO(laszlocsomor): Let Bazel pass BAZEL_SH to tests and use that
           # here instead of hardcoding paths.
+          #
+          # You can override this with
+          # --action_env=BAZEL_SH=C:\path\to\my\bash.exe.
           'BAZEL_SH':
               TestBase.GetEnv('BAZEL_SH',
                               'c:\\tools\\msys64\\usr\\bin\\bash.exe'),
-          # TODO(pcloudy): Remove this after no longer need to debug
-          # https://github.com/bazelbuild/bazel/issues/3273
-          'CC_CONFIGURE_DEBUG':
-              '1'
       }
+      java_home = TestBase.GetEnv('JAVA_HOME', '')
+      if java_home:
+        env['JAVA_HOME'] = java_home
     else:
       env = {'HOME': os.path.join(self._temp, 'home')}
 

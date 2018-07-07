@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.shell;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth8.assertThat;
 
+import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
@@ -40,12 +41,12 @@ public class ExecutionStatisticsTestUtil {
       Duration userTimeToSpend,
       Duration systemTimeToSpend,
       List<String> fullCommandLine,
-      String statisticsFilePath)
+      Path statisticsFilePath)
       throws CommandException, IOException {
     Duration userTimeLowerBound = userTimeToSpend;
-    Duration userTimeUpperBound = userTimeToSpend.plusSeconds(2);
+    Duration userTimeUpperBound = userTimeToSpend.plusSeconds(9);
     Duration systemTimeLowerBound = systemTimeToSpend;
-    Duration systemTimeUpperBound = systemTimeToSpend.plusSeconds(2);
+    Duration systemTimeUpperBound = systemTimeToSpend.plusSeconds(9);
 
     Command command = new Command(fullCommandLine.toArray(new String[0]));
     CommandResult commandResult = command.execute();

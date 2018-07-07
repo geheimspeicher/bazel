@@ -28,7 +28,6 @@ import static com.google.devtools.build.lib.util.FileTypeSet.ANY_FILE;
 import static com.google.devtools.build.lib.util.FileTypeSet.NO_FILE;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedSet;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
@@ -37,7 +36,6 @@ import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
-import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.events.EventHandler;
@@ -46,15 +44,11 @@ import com.google.devtools.build.lib.packages.Attribute.AllowedValueSet;
 import com.google.devtools.build.lib.packages.Attribute.LabelLateBoundDefault;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
-import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
-import com.google.devtools.build.lib.packages.RuleTransitionFactory;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.TriState;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration.AndroidAaptVersion;
-import com.google.devtools.build.lib.rules.android.AndroidConfiguration.AndroidManifestMerger;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration.ConfigurationDistinguisher;
 import com.google.devtools.build.lib.rules.config.ConfigFeatureFlagProvider;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
@@ -62,10 +56,12 @@ import com.google.devtools.build.lib.rules.cpp.CppOptions;
 import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
+import com.google.devtools.build.lib.rules.java.JavaRuleClasses;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.ProguardHelper;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidSplitTransititionApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -114,6 +110,8 @@ public final class AndroidRuleClasses {
       fromTemplates("%{name}_shrunk.ap_");
   public static final SafeImplicitOutputsFunction ANDROID_RESOURCES_ZIP =
       fromTemplates("%{name}_files/resource_files.zip");
+  public static final SafeImplicitOutputsFunction ANDROID_ASSETS_ZIP =
+      fromTemplates("%{name}_files/assets.zip");
   public static final SafeImplicitOutputsFunction ANDROID_RESOURCES_SHRUNK_ZIP =
       fromTemplates("%{name}_files/resource_files_shrunk.zip");
   public static final SafeImplicitOutputsFunction ANDROID_RESOURCE_SHRINKER_LOG =
@@ -139,16 +137,18 @@ public final class AndroidRuleClasses {
       fromTemplates("%{name}_symbols/local.bin");
   public static final SafeImplicitOutputsFunction ANDROID_MERGED_SYMBOLS =
       fromTemplates("%{name}_symbols/merged.bin");
+  public static final SafeImplicitOutputsFunction ANDROID_ASSET_SYMBOLS =
+      fromTemplates("%{name}_symbols/assets.bin");
   public static final SafeImplicitOutputsFunction ANDROID_COMPILED_SYMBOLS =
       fromTemplates("%{name}_symbols/symbols.zip");
+  public static final SafeImplicitOutputsFunction ANDROID_ASSET_COMPILED_SYMBOLS =
+      fromTemplates("%{name}_symbols/assets.zip");
   public static final SafeImplicitOutputsFunction ANDROID_SYMLINKED_MANIFEST =
       fromTemplates("%{name}_symlinked_manifest/AndroidManifest.xml");
   public static final SafeImplicitOutputsFunction ANDROID_PROCESSED_MANIFEST =
       fromTemplates("%{name}_processed_manifest/AndroidManifest.xml");
   public static final SafeImplicitOutputsFunction MOBILE_INSTALL_STUB_APPLICATION_MANIFEST =
       fromTemplates("%{name}_files/mobile_install/AndroidManifest.xml");
-  public static final SafeImplicitOutputsFunction INSTANT_RUN_STUB_APPLICATION_MANIFEST =
-      fromTemplates("%{name}_files/instant_run/AndroidManifest.xml");
   public static final SafeImplicitOutputsFunction FULL_DEPLOY_MARKER =
       fromTemplates("%{name}_files/full_deploy_marker");
   public static final SafeImplicitOutputsFunction INCREMENTAL_DEPLOY_MARKER =
@@ -177,7 +177,6 @@ public final class AndroidRuleClasses {
       fromTemplates("%{name}_files/dexmanifest.txt");
   public static final SafeImplicitOutputsFunction JAVA_RESOURCES_JAR =
       fromTemplates("%{name}_files/java_resources.jar");
-  public static final String MANIFEST_MERGE_TOOL_LABEL = "//tools/android:merge_manifests";
   public static final String BUILD_INCREMENTAL_DEXMANIFEST_LABEL =
       "//tools/android:build_incremental_dexmanifest";
   public static final String STUBIFY_MANIFEST_LABEL = "//tools/android:stubify_manifest";
@@ -206,9 +205,13 @@ public final class AndroidRuleClasses {
         (rule, attributes, configuration) -> configuration.getSdk());
   }
 
-  public static final SplitTransition ANDROID_SPLIT_TRANSITION = new AndroidSplitTransition();
+  @AutoCodec
+  public static final AndroidSplitTransition ANDROID_SPLIT_TRANSITION =
+      new AndroidSplitTransition();
 
-  private static final class AndroidSplitTransition implements SplitTransition, SkylarkValue {
+  /** Android Split configuration transition for properly handling native dependencies */
+  public static final class AndroidSplitTransition
+      implements SplitTransition, AndroidSplitTransititionApi {
     private static void setCrosstoolToAndroid(BuildOptions output, BuildOptions input) {
       AndroidConfiguration.Options inputAndroidOptions =
           input.get(AndroidConfiguration.Options.class);
@@ -240,7 +243,7 @@ public final class AndroidRuleClasses {
         if (androidOptions.cpu.isEmpty()
             || androidCrosstoolTop == null
             || androidCrosstoolTop.equals(cppOptions.crosstoolTop)) {
-          return ImmutableList.of();
+          return ImmutableList.of(buildOptions);
 
         } else {
 
@@ -249,7 +252,6 @@ public final class AndroidRuleClasses {
           splitOptions.get(CppOptions.class).libcTopLabel = androidOptions.androidLibcTopLabel;
           splitOptions.get(BuildConfiguration.Options.class).cpu = androidOptions.cpu;
           splitOptions.get(CppOptions.class).dynamicMode = androidOptions.dynamicMode;
-          splitOptions.get(CppOptions.class).glibc = null;
           setCrosstoolToAndroid(splitOptions, buildOptions);
           return ImmutableList.of(splitOptions);
         }
@@ -269,7 +271,6 @@ public final class AndroidRuleClasses {
           splitOptions.get(CppOptions.class).cppCompiler = androidOptions.cppCompiler;
           splitOptions.get(CppOptions.class).libcTopLabel = androidOptions.androidLibcTopLabel;
           splitOptions.get(CppOptions.class).dynamicMode = androidOptions.dynamicMode;
-          splitOptions.get(CppOptions.class).glibc = null;
           setCrosstoolToAndroid(splitOptions, buildOptions);
           result.add(splitOptions);
         }
@@ -287,25 +288,6 @@ public final class AndroidRuleClasses {
       printer.append("android_common.multi_cpu_configuration");
     }
   }
-
-  /**
-   * Turns off dynamic resource filtering for non-Android targets. This prevents unnecessary build
-   * graph bloat. For example, there's no point analyzing distinct cc_library targets for different
-   * resource filter configurations because cc_library semantics doesn't care about filters.
-   */
-  public static final RuleTransitionFactory REMOVE_DYNAMIC_RESOURCE_FILTERING =
-      new RuleTransitionFactory() {
-        /** Dependencies of these rule class types need to keep resource filtering info. */
-        private final ImmutableSet<String> keepFilterRuleClasses =
-            ImmutableSet.of("android_binary", "android_library");
-
-        @Override
-        public ConfigurationTransition buildTransitionFor(Rule depRule) {
-          return keepFilterRuleClasses.contains(depRule.getRuleClass())
-              ? null
-              : ResourceFilterFactory.REMOVE_DYNAMICALLY_CONFIGURED_RESOURCE_FILTERING_TRANSITION;
-        }
-      };
 
   public static final FileType ANDROID_IDL = FileType.of(".aidl");
 
@@ -372,7 +354,7 @@ public final class AndroidRuleClasses {
               AndroidRuleClasses.ANDROID_LIBRARY_SOURCE_JAR,
               AndroidRuleClasses.ANDROID_LIBRARY_AAR);
 
-          if (LocalResourceContainer.definesAndroidResources(attributes)) {
+          if (AndroidResources.definesAndroidResources(attributes)) {
             implicitOutputs.add(
                 AndroidRuleClasses.ANDROID_JAVA_SOURCE_JAR,
                 AndroidRuleClasses.ANDROID_R_TXT,
@@ -387,91 +369,109 @@ public final class AndroidRuleClasses {
   /** Definition of the {@code android_sdk} rule. */
   public static final class AndroidSdkRule implements RuleDefinition {
     @Override
-    public RuleClass build(Builder builder, RuleDefinitionEnvironment environment) {
+    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
       return builder
           .requiresConfigurationFragments(JavaConfiguration.class, AndroidConfiguration.class)
           .setUndocumented()
           // build_tools_version is assumed to be the latest version if omitted.
           .add(attr("build_tools_version", STRING))
           // This is the Proguard that comes from the --proguard_top attribute.
-          .add(attr(":proguard", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .value(JavaSemantics.PROGUARD).exec())
+          .add(
+              attr(":proguard", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .value(JavaSemantics.PROGUARD)
+                  .exec())
           // This is the Proguard in the BUILD file that contains the android_sdk rule. Used when
           // --proguard_top is not specified.
-          .add(attr("proguard", LABEL).mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("aapt", LABEL).mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("aapt2", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("dx", LABEL).mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
+          .add(
+              attr("proguard", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
+          .add(
+              attr("aapt", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
+          .add(attr("aapt2", LABEL).cfg(HostTransition.INSTANCE).allowedFileTypes(ANY_FILE).exec())
+          .add(
+              attr("dx", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
           .add(
               attr("main_dex_list_creator", LABEL)
                   .mandatory()
                   .cfg(HostTransition.INSTANCE)
                   .allowedFileTypes(ANY_FILE)
                   .exec())
-          .add(attr("adb", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("framework_aidl", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE))
-          .add(attr("aidl", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
+          .add(
+              attr("adb", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
+          .add(
+              attr("framework_aidl", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE))
+          .add(
+              attr("aidl", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
           .add(attr("aidl_lib", LABEL).allowedFileTypes(JavaSemantics.JAR))
-          .add(attr("android_jar", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(JavaSemantics.JAR))
+          .add(
+              attr("android_jar", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(JavaSemantics.JAR))
           // TODO(b/67903726): Make this attribute mandatory after updating all android_sdk rules.
-          .add(attr("source_properties", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE))
-          .add(attr("shrinked_android_jar", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE))
-          .add(attr("annotations_jar", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE))
-          .add(attr("main_dex_classes", LABEL)
-              .mandatory().cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE))
-          .add(attr("apkbuilder", LABEL)
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("apksigner", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE)
-              .exec())
-          .add(attr("zipalign", LABEL)
-              .mandatory()
-              .cfg(HostTransition.INSTANCE)
-              .allowedFileTypes(ANY_FILE).exec())
+          .add(
+              attr("source_properties", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE))
+          .add(
+              attr("shrinked_android_jar", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE))
+          .add(
+              attr("annotations_jar", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE))
+          .add(
+              attr("main_dex_classes", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE))
+          .add(
+              attr("apkbuilder", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
+          .add(
+              attr("apksigner", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
+          .add(
+              attr("zipalign", LABEL)
+                  .mandatory()
+                  .cfg(HostTransition.INSTANCE)
+                  .allowedFileTypes(ANY_FILE)
+                  .exec())
           .add(
               attr(":java_toolchain", LABEL)
                   .useOutputLicenses()
                   .allowedRuleClasses("java_toolchain")
-                  .value(JavaSemantics.JAVA_TOOLCHAIN))
+                  .value(JavaSemantics.javaToolchainAttribute(environment)))
           .advertiseProvider(AndroidSdkProvider.class)
           .build();
     }
@@ -563,13 +563,10 @@ public final class AndroidRuleClasses {
               attr(DataBinding.DATABINDING_ANNOTATION_PROCESSOR_ATTR, LABEL)
                   .cfg(HostTransition.INSTANCE)
                   .value(env.getToolsLabel("//tools/android:databinding_annotation_processor")))
-          // TODO(b/30816740): Remove this once legacy manifest merging is no longer supported.
-          .add(
-              attr("$android_manifest_merge_tool", LABEL)
-                  .cfg(HostTransition.INSTANCE)
-                  .exec()
-                  .value(env.getToolsLabel(AndroidRuleClasses.MANIFEST_MERGE_TOOL_LABEL)))
-          .advertiseSkylarkProvider(AndroidResourcesInfo.PROVIDER.id())
+          .advertiseSkylarkProvider(
+              SkylarkProviderIdentifier.forKey(AndroidResourcesInfo.PROVIDER.getKey()))
+          .advertiseSkylarkProvider(
+              SkylarkProviderIdentifier.forKey(AndroidNativeLibsInfo.PROVIDER.getKey()))
           .build();
     }
 
@@ -675,8 +672,6 @@ public final class AndroidRuleClasses {
           compiled. (This is useful if you need to generate a set of .java files with
           a genrule or build extension.)
           </p>
-          <p>This rule currently forces source and class compatibility with Java 6.
-          </p>
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(
               attr("srcs", LABEL_LIST)
@@ -697,6 +692,10 @@ public final class AndroidRuleClasses {
                   .cfg(ANDROID_SPLIT_TRANSITION)
                   .allowedRuleClasses(ALLOWED_DEPENDENCIES)
                   .allowedFileTypes()
+                  .mandatoryProviders(JavaRuleClasses.CONTAINS_JAVA_PROVIDER)
+                  .mandatoryProviders(
+                      SkylarkProviderIdentifier.forKey(AndroidResourcesInfo.PROVIDER.getKey()),
+                      SkylarkProviderIdentifier.forKey(AndroidAssetsInfo.PROVIDER.getKey()))
                   .aspect(androidNeverlinkAspect)
                   .aspect(dexArchiveAspect, DexArchiveAspect.PARAM_EXTRACTOR))
           /* <!-- #BLAZE_RULE($android_binary_base).ATTRIBUTE(debug_key) -->
@@ -704,8 +703,6 @@ public final class AndroidRuleClasses {
           want to use a key other than the default key, so this attribute should be omitted.
           <p><em class="harmful">WARNING: Do not use your production keys, they should be
           strictly safeguarded and not kept in your source tree</em>.</p>
-          <p>This keystore must contain a single key named "AndroidDebugKey", and
-          have a keystore password of "android".
           <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(
               attr("debug_key", LABEL)
@@ -790,6 +787,11 @@ public final class AndroidRuleClasses {
                   .exec()
                   .value(env.getToolsLabel("//tools/android:dexbuilder")))
           .add(
+              attr("$dexbuilder_after_proguard", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .exec()
+                  .value(env.getToolsLabel("//tools/android:dexbuilder_after_proguard")))
+          .add(
               attr("$dexsharder", LABEL)
                   .cfg(HostTransition.INSTANCE)
                   .exec()
@@ -832,6 +834,17 @@ public final class AndroidRuleClasses {
                   .cfg(HostTransition.INSTANCE)
                   .exec()
                   .value(env.getToolsLabel("//tools/android:desugar_java8")))
+          .add(
+              attr("$java8_legacy_dex", LABEL)
+                  .value(env.getToolsLabel("//tools/android:java8_legacy_dex")))
+          .add(
+              attr("$build_java8_legacy_dex", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .exec()
+                  .value(env.getToolsLabel("//tools/android:build_java8_legacy_dex")))
+          .add(
+              attr("$desugared_java8_legacy_apis", LABEL)
+                  .value(env.getToolsLabel("//tools/android:desugared_java8_legacy_apis")))
           /* <!-- #BLAZE_RULE($android_binary_base).ATTRIBUTE(dexopts) -->
           Additional command-line flags for the dx tool when generating classes.dex.
           Subject to <a href="${link make-variables}">"Make variable"</a> substitution and
@@ -933,6 +946,11 @@ public final class AndroidRuleClasses {
           .add(attr("proguard_apply_dictionary", LABEL).legacyAllowAnyFileType())
           .add(attr(":extra_proguard_specs", LABEL_LIST).value(JavaSemantics.EXTRA_PROGUARD_SPECS))
           .add(
+              attr("$dex_list_obfuscator", LABEL)
+                  .cfg(HostTransition.INSTANCE)
+                  .exec()
+                  .value(env.getToolsLabel("//tools/android:dex_list_obfuscator")))
+          .add(
               attr(":bytecode_optimizers", LABEL_LIST)
                   .cfg(HostTransition.INSTANCE)
                   .value(JavaSemantics.BYTECODE_OPTIMIZERS))
@@ -941,31 +959,6 @@ public final class AndroidRuleClasses {
               attr(":cc_toolchain_split", LABEL)
                   .cfg(AndroidRuleClasses.ANDROID_SPLIT_TRANSITION)
                   .value(CppRuleClasses.ccToolchainAttribute(env)))
-          /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(manifest_merger) -->
-          Select the manifest merger to use for this rule.<br/>
-          Possible values:
-          <ul>
-              <li><code>manifest_merger = "legacy"</code>: Use the legacy manifest merger. Does not
-                allow features of the android merger like placeholder substitution and tools
-                attributes for defining merge behavior. Removes all
-                <code>&lt;uses-permission&gt;</code> and <code>&lt;uses-permission-sdk-23&gt;</code>
-                tags. Performs a tag-level merge.</li>
-              <li><code>manifest_merger = "android"</code>: Use the android manifest merger. Allows
-                features like placeholder substitution and tools attributes for defining merge
-                behavior. Follows the semantics from
-                <a href="https://developer.android.com/studio/build/manifest-merge.html">
-                the documentation</a> except it has been modified to also remove all
-                <code>&lt;uses-permission&gt;</code> and <code>&lt;uses-permission-sdk-23&gt;</code>
-                tags. Performs an attribute-level merge.</li>
-              <li><code>manifest_merger = "auto"</code>: Merger is controlled by the
-                <a href="../user-manual.html#flag--android_manifest_merger">
-                --android_manifest_merger</a> flag.</li>
-          </ul>
-          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
-          .add(
-              attr("manifest_merger", STRING)
-                  .allowedValues(new AllowedValueSet(AndroidManifestMerger.getAttributeValues()))
-                  .value(AndroidManifestMerger.getRuleAttributeDefault()))
           /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(manifest_values) -->
           A dictionary of values to be overridden in the manifest. Any instance of ${name} in the
           manifest will be replaced with the value corresponding to name in this dictionary.
@@ -981,11 +974,10 @@ public final class AndroidRuleClasses {
           Possible values:
           <ul>
               <li><code>aapt_version = "aapt"</code>: Use aapt. This is the current default
-                behaviour, and should be used for production binaries. The android_sdk rule must
-                have an aapt binary to use this option.</li>
+                behaviour, and should be used for production binaries.</li>
               <li><code>aapt_version = "aapt2"</code>: Use aapt2. This is the new resource
                packaging system that provides improved incremental resource processing, smaller apks
-               and more. The android_sdk rule must have the aapt2 binary to use this option.</li>
+               and more.</li>
               <li><code>aapt_version = "auto"</code>: aapt is controlled by the
                 --android_aapt flag.</li>
           </ul>
@@ -1010,9 +1002,15 @@ public final class AndroidRuleClasses {
                   .cfg(HostTransition.INSTANCE)
                   .exec()
                   .value(env.getToolsLabel("//tools/android:resource_extractor")))
+          /* <!-- #BLAZE_RULE(android_binary).ATTRIBUTE(instruments) -->
+          <p>The <code>android_binary</code> target to instrument.</p>
+          <p>If this attribute is set, this <code>android_binary</code> will be treated as a test
+          application for instrumentation tests. An <code>android_instrumentation_test</code>
+          target can then specify this target in its
+           <a href="${link android_instrumentation_test.test_app}">test_app</a> attribute.
+          <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
           .add(
               attr("instruments", LABEL)
-                  .undocumented("blocked by android_instrumentation_test")
                   .allowedRuleClasses("android_binary")
                   .allowedFileTypes(NO_FILE))
           .add(
@@ -1034,7 +1032,7 @@ public final class AndroidRuleClasses {
                   .exec()
                   .value(env.getToolsLabel("//tools/android:zip_filter")))
           .removeAttribute("data")
-          .advertiseSkylarkProvider(ApkInfo.PROVIDER.id())
+          .advertiseSkylarkProvider(SkylarkProviderIdentifier.forKey(ApkInfo.PROVIDER.getKey()))
           .advertiseSkylarkProvider(SkylarkProviderIdentifier.forKey(JavaInfo.PROVIDER.getKey()))
           .build();
     }
@@ -1103,7 +1101,7 @@ public final class AndroidRuleClasses {
     }
 
     @Override
-    public RuleClass build(Builder builder, RuleDefinitionEnvironment environment) {
+    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment environment) {
       builder
           .setUndocumented()
           .add(

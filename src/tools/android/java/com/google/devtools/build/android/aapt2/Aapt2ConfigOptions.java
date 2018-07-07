@@ -63,17 +63,6 @@ public class Aapt2ConfigOptions extends OptionsBase {
   public Path androidJar;
 
   @Option(
-    name = "annotationJar",
-    defaultValue = "null",
-    converter = ExistingPathConverter.class,
-    category = "tool",
-    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-    effectTags = {OptionEffectTag.UNKNOWN},
-    help = "Path to the android jar for resource packaging and building apks."
-  )
-  public Path annotationJar;
-
-  @Option(
     name = "useAaptCruncher",
     defaultValue = "auto",
     category = "config",
@@ -186,4 +175,14 @@ public class Aapt2ConfigOptions extends OptionsBase {
     help = "Generate the resource table as a protocol buffer."
   )
   public boolean resourceTableAsProto;
+
+  @Option(
+    documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    name = "generatePseudoLocale",
+    defaultValue = "true",
+    category = "config",
+    help = "Whether to generate pseudo locales during compilation."
+  )
+  public boolean generatePseudoLocale;
 }

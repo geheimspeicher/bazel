@@ -17,8 +17,8 @@ package com.google.devtools.build.lib.collect.nestedset;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.Multiset;
-import com.google.devtools.build.lib.analysis.actions.CommandLineItem;
-import com.google.devtools.build.lib.analysis.actions.CommandLineItem.MapFn;
+import com.google.devtools.build.lib.actions.CommandLineItem;
+import com.google.devtools.build.lib.actions.CommandLineItem.MapFn;
 import com.google.devtools.build.lib.util.Fingerprint;
 import java.util.HashSet;
 import java.util.Map;
@@ -53,7 +53,7 @@ public class NestedSetFingerprintCache {
     }
     DigestMap digestMap = mapFnToDigestMap.computeIfAbsent(mapFn, this::newDigestMap);
     fingerprint.addInt(nestedSet.getOrder().ordinal());
-    Object children = nestedSet.rawChildren();
+    Object children = nestedSet.getChildren();
     addToFingerprint(mapFn, fingerprint, digestMap, children);
   }
 

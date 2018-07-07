@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
 import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
@@ -33,7 +34,6 @@ import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction;
-import com.google.devtools.build.lib.analysis.actions.AbstractFileWriteAction.DeterministicWriter;
 import com.google.devtools.build.lib.analysis.actions.ByteStringDeterministicWriter;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -46,15 +46,14 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.CachingPackageLocator;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Package;
-import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
-import com.google.devtools.build.lib.pkgcache.FilteringPolicy;
 import com.google.devtools.build.lib.pkgcache.PackageProvider;
-import com.google.devtools.build.lib.pkgcache.TargetPatternEvaluator;
+import com.google.devtools.build.lib.pkgcache.TargetPatternPreloader;
 import com.google.devtools.build.lib.query2.BlazeQueryEnvironment;
 import com.google.devtools.build.lib.query2.QueryEnvironmentFactory;
 import com.google.devtools.build.lib.query2.engine.DigraphQueryEvalResult;
@@ -71,8 +70,6 @@ import com.google.devtools.build.lib.query2.output.QueryOptions.OrderOutput;
 import com.google.devtools.build.lib.query2.output.QueryOutputUtils;
 import com.google.devtools.build.lib.runtime.KeepGoingOption;
 import com.google.devtools.build.lib.skyframe.PackageValue;
-import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
-import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue;
 import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
 import com.google.devtools.build.lib.skyframe.TransitiveTargetKey;
@@ -82,7 +79,6 @@ import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.LegacySkyKey;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.ValueOrException;
@@ -105,13 +101,11 @@ import javax.annotation.Nullable;
 public class GenQuery implements RuleConfiguredTargetFactory {
   private static final QueryEnvironmentFactory QUERY_ENVIRONMENT_FACTORY =
       new QueryEnvironmentFactory();
-  public static final Precomputed<ImmutableList<OutputFormatter>> QUERY_OUTPUT_FORMATTERS =
-      new Precomputed<>(LegacySkyKey.create(SkyFunctions.PRECOMPUTED, "query_output_formatters"));
 
   @Override
   @Nullable
   public ConfiguredTarget create(RuleContext ruleContext)
-      throws InterruptedException, RuleErrorException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     Artifact outputArtifact = ruleContext.createOutputArtifact();
 
     // The query string
@@ -129,6 +123,8 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     // Parsed query options
     QueryOptions queryOptions = optionsParser.getOptions(QueryOptions.class);
+    // If you change the list of options here, also change the documentation of genquery.opts in
+    // GenQueryRule.java .
     if (optionsParser.getOptions(KeepGoingOption.class).keepGoing) {
       ruleContext.attributeError("opts", "option --keep_going is not allowed");
       return null;
@@ -280,20 +276,21 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     ImmutableMap<PackageIdentifier, Package> packageMap = closureInfo.first;
     ImmutableMap<Label, Target> validTargetsMap = closureInfo.second;
-    PackageProvider packageProvider = new PreloadedMapPackageProvider(packageMap, validTargetsMap);
-    TargetPatternEvaluator evaluator = new SkyframeEnvTargetPatternEvaluator(env);
+    PreloadedMapPackageProvider packageProvider =
+        new PreloadedMapPackageProvider(packageMap, validTargetsMap);
+    TargetPatternPreloader preloader = new SkyframeEnvTargetPatternEvaluator(env);
     Predicate<Label> labelFilter = Predicates.in(validTargetsMap.keySet());
 
-    return doQuery(queryOptions, packageProvider, labelFilter, evaluator, query, ruleContext);
+    return doQuery(queryOptions, packageProvider, labelFilter, preloader, query, ruleContext);
   }
 
   @SuppressWarnings("unchecked")
   @Nullable
   private ByteString doQuery(
       QueryOptions queryOptions,
-      PackageProvider packageProvider,
+      PreloadedMapPackageProvider packageProvider,
       Predicate<Label> labelFilter,
-      TargetPatternEvaluator evaluator,
+      TargetPatternPreloader preloader,
       String query,
       RuleContext ruleContext)
       throws InterruptedException {
@@ -315,6 +312,13 @@ public class GenQuery implements RuleConfiguredTargetFactory {
       formatter =
           OutputFormatter.getFormatter(
               OutputFormatter.getDefaultFormatters(), queryOptions.outputFormat);
+      if (formatter == null) {
+        ruleContext.ruleError(String.format(
+            "Invalid output format '%s'. Valid values are: %s",
+            queryOptions.outputFormat,
+            OutputFormatter.formatterNames(OutputFormatter.getDefaultFormatters())));
+        return null;
+      }
       // All the packages are already loaded at this point, so there is no need
       // to start up many threads. 4 are started up to make good use of multiple
       // cores.
@@ -324,7 +328,9 @@ public class GenQuery implements RuleConfiguredTargetFactory {
                   /*transitivePackageLoader=*/ null,
                   /* graphFactory= */ null,
                   packageProvider,
-                  evaluator,
+                  packageProvider,
+                  preloader,
+                  PathFragment.EMPTY_FRAGMENT,
                   /*keepGoing=*/ false,
                   ruleContext.attributes().get("strict", Type.BOOLEAN),
                   /*orderedResults=*/ !QueryOutputUtils.shouldStreamResults(
@@ -381,10 +387,8 @@ public class GenQuery implements RuleConfiguredTargetFactory {
     }
 
     @Override
-    protected String computeKey(ActionKeyContext actionKeyContext) {
-      Fingerprint f = new Fingerprint();
-      f.addBytes(result.toByteArray());
-      return f.hexDigestAndReset();
+    protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+      fp.addBytes(result.toByteArray());
     }
   }
 
@@ -392,7 +396,7 @@ public class GenQuery implements RuleConfiguredTargetFactory {
    * Provide target pattern evaluation to the query operations using Skyframe dep lookup. For thread
    * safety, we must synchronize access to the SkyFunction.Environment.
    */
-  private static final class SkyframeEnvTargetPatternEvaluator implements TargetPatternEvaluator {
+  private static final class SkyframeEnvTargetPatternEvaluator implements TargetPatternPreloader {
     private final SkyFunction.Environment env;
 
     public SkyframeEnvTargetPatternEvaluator(SkyFunction.Environment env) {
@@ -411,9 +415,13 @@ public class GenQuery implements RuleConfiguredTargetFactory {
 
     @Override
     public Map<String, ResolvedTargets<Target>> preloadTargetPatterns(
-        ExtendedEventHandler eventHandler, Collection<String> patterns, boolean keepGoing)
-        throws TargetParsingException, InterruptedException {
+        ExtendedEventHandler eventHandler,
+        PathFragment relativeWorkingDirectory,
+        Collection<String> patterns,
+        boolean keepGoing)
+            throws TargetParsingException, InterruptedException {
       Preconditions.checkArgument(!keepGoing);
+      Preconditions.checkArgument(relativeWorkingDirectory.isEmpty());
       boolean ok = true;
       Map<String, ResolvedTargets<Target>> preloadedPatterns =
           Maps.newHashMapWithExpectedSize(patterns.size());
@@ -494,39 +502,13 @@ public class GenQuery implements RuleConfiguredTargetFactory {
             String.format("recursive target patterns are not permitted: '%s''", pattern));
       }
     }
-
-    @Override
-    public ResolvedTargets<Target> parseTargetPatternList(
-        ExtendedEventHandler eventHandler,
-        List<String> targetPatterns,
-        FilteringPolicy policy,
-        boolean keepGoing)
-        throws TargetParsingException {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public ResolvedTargets<Target> parseTargetPattern(
-        ExtendedEventHandler eventHandler, String pattern, boolean keepGoing)
-        throws TargetParsingException {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void updateOffset(PathFragment relativeWorkingDirectory) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public String getOffset() {
-      throw new UnsupportedOperationException();
-    }
   }
 
   /**
    * Provide packages and targets to the query operations using precomputed transitive closure.
    */
-  private static final class PreloadedMapPackageProvider implements PackageProvider {
+  private static final class PreloadedMapPackageProvider
+      implements PackageProvider, CachingPackageLocator {
 
     private final ImmutableMap<PackageIdentifier, Package> pkgMap;
     private final ImmutableMap<Label, Target> labelToTarget;

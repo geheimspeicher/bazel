@@ -12,18 +12,21 @@ filegroup(
 # Action graph and cache.
 java_library(
     name = "actions",
-    srcs = glob([
-        "*.java",
-        "cache/*.java",
-    ]),
+    srcs = glob(
+        [
+            "*.java",
+            "cache/*.java",
+        ],
+        exclude = ["CommandLineItem.java"],
+    ),
     deps = [
-        "//src/main/java/com/google/devtools/build/lib:commandline_item",
         "//src/main/java/com/google/devtools/build/lib:events",
         "//src/main/java/com/google/devtools/build/lib:io",
         "//src/main/java/com/google/devtools/build/lib:packages-internal",
         "//src/main/java/com/google/devtools/build/lib:skylarkinterface",
         "//src/main/java/com/google/devtools/build/lib:unix",
         "//src/main/java/com/google/devtools/build/lib:util",
+        "//src/main/java/com/google/devtools/build/lib/actions:commandline_item",
         "//src/main/java/com/google/devtools/build/lib/analysis/platform",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
@@ -34,8 +37,9 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/profiler",
         "//src/main/java/com/google/devtools/build/lib/shell",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/skylarkbuildapi",
+        "//src/main/java/com/google/devtools/build/lib/unsafe:string",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/skyframe",
         "//src/main/java/com/google/devtools/build/skyframe:skyframe-objects",
@@ -47,4 +51,9 @@ java_library(
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",
     ],
+)
+
+java_library(
+    name = "commandline_item",
+    srcs = ["CommandLineItem.java"],
 )

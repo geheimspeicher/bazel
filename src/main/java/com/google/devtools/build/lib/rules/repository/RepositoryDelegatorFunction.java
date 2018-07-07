@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.repository;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableMap;
+import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.events.Event;
@@ -25,16 +26,13 @@ import com.google.devtools.build.lib.repository.ExternalPackageException;
 import com.google.devtools.build.lib.repository.ExternalPackageUtil;
 import com.google.devtools.build.lib.repository.ExternalRuleNotFoundException;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction.RepositoryFunctionException;
-import com.google.devtools.build.lib.skyframe.FileValue;
+import com.google.devtools.build.lib.skyframe.PrecomputedValue;
 import com.google.devtools.build.lib.skyframe.PrecomputedValue.Precomputed;
-import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
-import com.google.devtools.build.skyframe.LegacySkyKey;
 import com.google.devtools.build.skyframe.SkyFunction;
-import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunctionException.Transience;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -56,7 +54,13 @@ import javax.annotation.Nullable;
  */
 public final class RepositoryDelegatorFunction implements SkyFunction {
   public static final Precomputed<Map<RepositoryName, PathFragment>> REPOSITORY_OVERRIDES =
-      new Precomputed<>(LegacySkyKey.create(SkyFunctions.PRECOMPUTED, "repository_overrides"));
+      new Precomputed<>(PrecomputedValue.Key.create("repository_overrides"));
+
+  public static final Precomputed<String> DEPENDENCY_FOR_UNCONDITIONAL_FETCHING =
+      new Precomputed<>(
+          PrecomputedValue.Key.create("dependency_for_unconditional_repository_fetching"));
+
+  public static final String DONT_FETCH_UNCONDITIONALLY = "";
 
   // The marker file version is inject in the rule key digest so the rule key is always different
   // when we decide to update the format.
@@ -109,6 +113,10 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     if (env.valuesMissing()) {
       return null;
     }
+    String fetchUnconditionally = DEPENDENCY_FOR_UNCONDITIONAL_FETCHING.get(env);
+    if (env.valuesMissing()) {
+      return null;
+    }
 
     Path repoRoot = RepositoryFunction.getExternalRepositoryDirectory(directories)
         .getRelative(repositoryName.strippedName());
@@ -147,10 +155,10 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     }
     String ruleKey = computeRuleKey(rule, ruleSpecificData);
     Map<String, String> markerData = new TreeMap<>();
-    if (handler.isLocal(rule)) {
-      // Local repositories are always fetched because the operation is generally fast and they do
-      // not depend on non-local data, so it does not make much sense to try to cache from across
-      // server instances.
+     if (isFetch.get() && handler.isLocal(rule)) {
+      // Local repositories are fetched regardless of the marker file because the operation is
+      // generally fast and they do not depend on non-local data, so it does not make much sense to
+      // try to cache from across server instances.
       setupRepositoryRoot(repoRoot);
       RepositoryDirectoryValue.Builder localRepo =
           handler.fetch(rule, repoRoot, directories, env, markerData);
@@ -172,9 +180,11 @@ public final class RepositoryDelegatorFunction implements SkyFunction {
     if (env.valuesMissing()) {
       return null;
     }
-    if (markerHash != null && repoRoot.exists()) {
-      // Now that we know that it exists, we can declare a Skyframe dependency on the repository
-      // root.
+    if (DONT_FETCH_UNCONDITIONALLY.equals(fetchUnconditionally)
+        && markerHash != null
+        && repoRoot.exists()) {
+      // Now that we know that it exists and that we should not fetch unconditionally, we can
+      // declare a Skyframe dependency on the repository root.
       RepositoryFunction.getRepositoryDirectory(repoRoot, env);
       if (env.valuesMissing()) {
         return null;

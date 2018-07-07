@@ -35,6 +35,7 @@ import com.google.common.util.concurrent.SettableFuture;
 import com.google.common.util.concurrent.Uninterruptibles;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
@@ -602,32 +603,31 @@ public final class UnixGlob {
     /** Should only be called by link {@GlobTaskContext}. */
     private void queueGlob(final Path base, final boolean baseIsDir, final int idx,
         final GlobTaskContext context) {
-      enqueue(new Runnable() {
-        @Override
-        public void run() {
-          Profiler.instance().startTask(ProfilerTask.VFS_GLOB, this);
-          try {
-            reallyGlob(base, baseIsDir, idx, context);
-          } catch (IOException e) {
-            ioException.set(e);
-          } catch (RuntimeException e) {
-            runtimeException.set(e);
-          } catch (Error e) {
-            error.set(e);
-          } finally {
-            Profiler.instance().completeTask(ProfilerTask.VFS_GLOB);
-          }
-        }
+      enqueue(
+          new Runnable() {
+            @Override
+            public void run() {
+              try (SilentCloseable c =
+                  Profiler.instance().profile(ProfilerTask.VFS_GLOB, base.getPathString())) {
+                reallyGlob(base, baseIsDir, idx, context);
+              } catch (IOException e) {
+                ioException.set(e);
+              } catch (RuntimeException e) {
+                runtimeException.set(e);
+              } catch (Error e) {
+                error.set(e);
+              }
+            }
 
-        @Override
-        public String toString() {
-          return String.format(
+            @Override
+            public String toString() {
+              return String.format(
                   "%s glob(include=[%s], exclude_directories=%s)",
                   base.getPathString(),
                   "\"" + Joiner.on("\", \"").join(context.patternParts) + "\"",
                   context.excludeDirectories);
-        }
-      });
+            }
+          });
     }
 
     protected void enqueue(final Runnable r) {
@@ -819,15 +819,21 @@ public final class UnixGlob {
         }
         boolean childIsDir = (type == Dirent.Type.DIRECTORY);
         String text = dent.getName();
-        Path child = base.getChild(text);
+        // Optimize allocations for the case where the pattern doesn't match the dirent.
+        Path child = null;
 
         if (isRecursivePattern) {
           // Recurse without shifting the pattern.
           if (childIsDir) {
+            child = base.getChild(text);
             context.queueGlob(child, childIsDir, idx);
           }
         }
         if (matches(pattern, text, cache)) {
+          if (child == null) {
+            child = base.getChild(text);
+          }
+
           // Recurse and consume one segment of the pattern.
           if (childIsDir) {
             context.queueGlob(child, childIsDir, idx + 1);

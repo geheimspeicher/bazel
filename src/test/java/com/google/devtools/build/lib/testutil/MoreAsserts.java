@@ -117,7 +117,15 @@ public class MoreAsserts {
               continue;
             }
 
-            f.setAccessible(true);
+            try {
+              f.setAccessible(true);
+            } catch (RuntimeException e) {
+              // JDK9 can throw InaccessibleObjectException when internal modules are accessed.
+              // This isn't available in JDK8, so catch RuntimeException
+              // We can use a JVM arg --add_opens to suppress that, but that involves every
+              // test adding every JVM module to the target.
+              continue;
+            }
             try {
               Object ref = f.get(current);
               if (ref != null) {
@@ -441,17 +449,12 @@ public class MoreAsserts {
   }
 
   /*
-   * These methods will be in JUnit 4.13. Instead of patching Bazel's JUnit jar to contain the
+   * This method will be in JUnit 4.13. Instead of patching Bazel's JUnit jar to contain the
    * <a href="https://github.com/junit-team/junit4/commit/bdb1799">patch</a>, we define it here.
    * Once JUnit 4.13 is released, we will switcher callers to use org.junit.Assert#assertThrows
    * instead. See https://github.com/bazelbuild/bazel/issues/3729.
    */
-  public static void assertThrows(
-      Class<? extends Throwable> expectedThrowable, ThrowingRunnable runnable) {
-    expectThrows(expectedThrowable, runnable);
-  }
-
-  public static <T extends Throwable> T expectThrows(
+  public static <T extends Throwable> T assertThrows(
       Class<T> expectedThrowable, ThrowingRunnable runnable) {
     try {
       runnable.run();

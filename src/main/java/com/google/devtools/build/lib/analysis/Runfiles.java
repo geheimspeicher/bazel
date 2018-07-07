@@ -1,4 +1,4 @@
-// Copyright 2014 The Bazel Authors. All rights reserved.
+// Copyright 2018 The Bazel Authors. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,9 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -31,12 +33,11 @@ import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.skylarkbuildapi.RunfilesApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
-import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -46,10 +47,8 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
-import java.util.TreeSet;
 import javax.annotation.Nullable;
 
 /**
@@ -62,12 +61,8 @@ import javax.annotation.Nullable;
  * manifests" (see {@link PruningManifest}).
  */
 @Immutable
-@SkylarkModule(
-  name = "runfiles",
-  category = SkylarkModuleCategory.NONE,
-  doc = "An interface for a set of runfiles."
-)
-public final class Runfiles {
+@AutoCodec
+public final class Runfiles implements RunfilesApi {
   private static final Function<SymlinkEntry, Artifact> TO_ARTIFACT =
       new Function<SymlinkEntry, Artifact>() {
         @Override
@@ -76,29 +71,17 @@ public final class Runfiles {
         }
       };
 
-  private static final EmptyFilesSupplier DUMMY_EMPTY_FILES_SUPPLIER =
-      new EmptyFilesSupplier() {
-        @Override
-        public Iterable<PathFragment> getExtraPaths(Set<PathFragment> manifestPaths) {
-          return ImmutableList.of();
-        }
-      };
+  private static class DummyEmptyFilesSupplier implements EmptyFilesSupplier {
+    private DummyEmptyFilesSupplier() {}
 
-  private static final Function<Artifact, PathFragment> GET_ROOT_RELATIVE_PATH =
-      new Function<Artifact, PathFragment>() {
-        @Override
-        public PathFragment apply(Artifact input) {
-          return input.getRootRelativePath();
-        }
-      };
+    @Override
+    public Iterable<PathFragment> getExtraPaths(Set<PathFragment> manifestPaths) {
+      return ImmutableList.of();
+    }
+  }
 
-  private static final Function<PathFragment, String> PATH_FRAGMENT_TO_STRING =
-      new Function<PathFragment, String>() {
-        @Override
-        public String apply(PathFragment input) {
-          return input.toString();
-        }
-      };
+  @AutoCodec @AutoCodec.VisibleForSerialization
+  static final EmptyFilesSupplier DUMMY_EMPTY_FILES_SUPPLIER = new DummyEmptyFilesSupplier();
 
   /**
    * An entry in the runfiles map.
@@ -129,11 +112,14 @@ public final class Runfiles {
   // equals to the third one if they are not the same instance (which they almost never are)
   //
   // Goodnight, prince(ss)?, and sweet dreams.
-  private static final class SymlinkEntry implements SkylarkValue {
+  @AutoCodec
+  @VisibleForSerialization
+  static final class SymlinkEntry implements SkylarkValue {
     private final PathFragment path;
     private final Artifact artifact;
 
-    private SymlinkEntry(PathFragment path, Artifact artifact) {
+    @VisibleForSerialization
+    SymlinkEntry(PathFragment path, Artifact artifact) {
       this.path = Preconditions.checkNotNull(path);
       this.artifact = Preconditions.checkNotNull(artifact);
     }
@@ -239,12 +225,12 @@ public final class Runfiles {
   private ConflictPolicy conflictPolicy = ConflictPolicy.IGNORE;
 
   /**
-   * Defines a set of artifacts that may or may not be included in the runfiles directory and
-   * a manifest file that makes that determination. These are applied on top of any artifacts
+   * Defines a set of artifacts that may or may not be included in the runfiles directory and a
+   * manifest file that makes that determination. These are applied on top of any artifacts
    * specified in {@link #unconditionalArtifacts}.
    *
-   * <p>The incentive behind this is to enable execution-phase "pruning" of runfiles. Anything
-   * set in unconditionalArtifacts is hard-set in Blaze's analysis phase, and thus unchangeable in
+   * <p>The incentive behind this is to enable execution-phase "pruning" of runfiles. Anything set
+   * in unconditionalArtifacts is hard-set in Blaze's analysis phase, and thus unchangeable in
    * response to execution phase results. This isn't always convenient. For example, say we have an
    * action that consumes a set of "possible" runtime dependencies for a source file, parses that
    * file for "import a.b.c" statements, and outputs a manifest of the actual dependencies that are
@@ -256,6 +242,7 @@ public final class Runfiles {
    * superset of the pruned dependencies, so undeclared inclusions (which can break build
    * correctness) aren't possible.
    */
+  @AutoCodec
   public static class PruningManifest {
     private final NestedSet<Artifact> candidateRunfiles;
     private final Artifact manifestFile;
@@ -294,9 +281,11 @@ public final class Runfiles {
    */
   private final boolean legacyExternalRunfiles;
 
-  private Runfiles(
+  @AutoCodec.Instantiator
+  @VisibleForSerialization
+  Runfiles(
       PathFragment suffix,
-      NestedSet<Artifact> artifacts,
+      NestedSet<Artifact> unconditionalArtifacts,
       NestedSet<SymlinkEntry> symlinks,
       NestedSet<SymlinkEntry> rootSymlinks,
       NestedSet<PruningManifest> pruningManifests,
@@ -305,7 +294,7 @@ public final class Runfiles {
       ConflictPolicy conflictPolicy,
       boolean legacyExternalRunfiles) {
     this.suffix = suffix;
-    this.unconditionalArtifacts = Preconditions.checkNotNull(artifacts);
+    this.unconditionalArtifacts = Preconditions.checkNotNull(unconditionalArtifacts);
     this.symlinks = Preconditions.checkNotNull(symlinks);
     this.rootSymlinks = Preconditions.checkNotNull(rootSymlinks);
     this.extraMiddlemen = Preconditions.checkNotNull(extraMiddlemen);
@@ -338,14 +327,10 @@ public final class Runfiles {
    * Returns the collection of runfiles as artifacts, including both unconditional artifacts and
    * pruning manifest candidates.
    */
-  @SkylarkCallable(
-    name = "files",
-    doc = "Returns the set of runfiles as files.",
-    structField = true
-  )
+  @Override
   public NestedSet<Artifact> getArtifacts() {
     NestedSetBuilder<Artifact> allArtifacts = NestedSetBuilder.stableOrder();
-    allArtifacts.addAll(unconditionalArtifacts.toCollection());
+    allArtifacts.addTransitive(unconditionalArtifacts);
     for (PruningManifest manifest : getPruningManifests()) {
       allArtifacts.addTransitive(manifest.getCandidateRunfiles());
     }
@@ -353,23 +338,25 @@ public final class Runfiles {
   }
 
   /** Returns the symlinks. */
-  @SkylarkCallable(name = "symlinks", doc = "Returns the set of symlinks.", structField = true)
+  @Override
   public NestedSet<SymlinkEntry> getSymlinks() {
     return symlinks;
   }
 
-  @SkylarkCallable(
-    name = "empty_filenames",
-    doc = "Returns names of empty files to create.",
-    structField = true
-  )
+  @Override
   public NestedSet<String> getEmptyFilenames() {
-    Set<PathFragment> manifest = new TreeSet<>();
-    Iterables.addAll(
-        manifest, Iterables.transform(getArtifacts().toCollection(), GET_ROOT_RELATIVE_PATH));
-    return NestedSetBuilder.wrap(
-        Order.STABLE_ORDER,
-        Iterables.transform(emptyFilesSupplier.getExtraPaths(manifest), PATH_FRAGMENT_TO_STRING));
+    Set<PathFragment> manifestKeys =
+        Streams.concat(
+                Streams.stream(symlinks).map(SymlinkEntry::getPath),
+                Streams.stream(getArtifacts()).map(Artifact::getRootRelativePath))
+            .collect(ImmutableSet.toImmutableSet());
+    Iterable<PathFragment> emptyKeys = emptyFilesSupplier.getExtraPaths(manifestKeys);
+    return NestedSetBuilder.<String>stableOrder()
+        .addAll(
+            Streams.stream(emptyKeys)
+                .map(PathFragment::toString)
+                .collect(ImmutableList.toImmutableList()))
+        .build();
   }
 
   /**
@@ -394,9 +381,9 @@ public final class Runfiles {
     Map<PathFragment, Artifact> newManifest = new HashMap<>();
 
     outer:
-    for (Iterator<Entry<PathFragment, Artifact>> i = workingManifest.entrySet().iterator();
-         i.hasNext(); ) {
-      Entry<PathFragment, Artifact> entry = i.next();
+    for (Iterator<Map.Entry<PathFragment, Artifact>> i = workingManifest.entrySet().iterator();
+        i.hasNext(); ) {
+      Map.Entry<PathFragment, Artifact> entry = i.next();
       PathFragment source = entry.getKey();
       Artifact symlink = entry.getValue();
       // drop nested entries; warn if this changes anything
@@ -410,11 +397,20 @@ public final class Runfiles {
             continue outer;
           }
           PathFragment suffix = source.subFragment(n - j, n);
-          Path viaAncestor = ancestor.getPath().getRelative(suffix);
-          Path expected = symlink.getPath();
+          PathFragment viaAncestor = ancestor.getExecPath().getRelative(suffix);
+          PathFragment expected = symlink.getExecPath();
           if (!viaAncestor.equals(expected)) {
-            eventHandler.handle(Event.warn(location, "runfiles symlink " + source + " -> "
-                + expected + " obscured by " + prefix + " -> " + ancestor.getPath()));
+            eventHandler.handle(
+                Event.warn(
+                    location,
+                    "runfiles symlink "
+                        + source
+                        + " -> "
+                        + expected
+                        + " obscured by "
+                        + prefix
+                        + " -> "
+                        + ancestor.getExecPath()));
           }
           continue outer;
         }
@@ -718,8 +714,10 @@ public final class Runfiles {
         // Previous and new entry might have value of null
         Artifact previous = map.get(path);
         if (!Objects.equals(previous, artifact)) {
-          String previousStr = (previous == null) ? "empty file" : previous.getPath().toString();
-          String artifactStr = (artifact == null) ? "empty file" : artifact.getPath().toString();
+          String previousStr =
+              (previous == null) ? "empty file" : previous.getExecPath().toString();
+          String artifactStr =
+              (artifact == null) ? "empty file" : artifact.getExecPath().toString();
           String message =
               String.format(
                   "overwrote runfile %s, was symlink to %s, now symlink to %s",
@@ -995,7 +993,8 @@ public final class Runfiles {
      * Collects runfiles from data dependencies of a target.
      */
     public Builder addDataDeps(RuleContext ruleContext) {
-      addTargets(getPrerequisites(ruleContext, "data", Mode.DATA), RunfilesProvider.DATA_RUNFILES);
+      addTargets(getPrerequisites(ruleContext, "data", Mode.DONT_CHECK),
+          RunfilesProvider.DATA_RUNFILES);
       return this;
     }
 
@@ -1155,17 +1154,11 @@ public final class Runfiles {
     }
   }
 
-  /** Provides a Skylark-visible way to merge two Runfiles objects. */
-  @SkylarkCallable(
-    name = "merge",
-    doc =
-        "Returns a new runfiles object that includes all the contents of this one and the "
-            + "argument."
-  )
-  public Runfiles merge(Runfiles other) {
+  @Override
+  public Runfiles merge(RunfilesApi other) {
     Runfiles.Builder builder = new Runfiles.Builder(suffix, false);
     builder.merge(this);
-    builder.merge(other);
+    builder.merge((Runfiles) other);
     return builder.build();
   }
 }

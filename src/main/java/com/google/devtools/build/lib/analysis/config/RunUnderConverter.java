@@ -14,11 +14,11 @@
 package com.google.devtools.build.lib.analysis.config;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.common.options.Converter;
 import com.google.devtools.common.options.OptionsParsingException;
@@ -46,7 +46,7 @@ public class RunUnderConverter implements Converter<RunUnder> {
         ImmutableList.copyOf(runUnderList.subList(1, runUnderList.size()));
     if (runUnderCommand.startsWith("//")) {
       try {
-        final Label runUnderLabel = Label.parseAbsolute(runUnderCommand);
+        final Label runUnderLabel = Label.parseAbsolute(runUnderCommand, ImmutableMap.of());
         return new RunUnderLabel(input, runUnderLabel, runUnderSuffix);
       } catch (LabelSyntaxException e) {
         throw new OptionsParsingException("Not a valid label " + e.getMessage());
@@ -58,9 +58,6 @@ public class RunUnderConverter implements Converter<RunUnder> {
 
   @AutoCodec
   static final class RunUnderLabel implements RunUnder {
-    public static final ObjectCodec<RunUnderLabel> CODEC =
-        new RunUnderConverter_RunUnderLabel_AutoCodec();
-
     private final String input;
     private final Label runUnderLabel;
     private final ImmutableList<String> runUnderList;
@@ -119,9 +116,6 @@ public class RunUnderConverter implements Converter<RunUnder> {
 
   @AutoCodec
   static final class RunUnderCommand implements RunUnder {
-    public static final ObjectCodec<RunUnderCommand> CODEC =
-        new RunUnderConverter_RunUnderCommand_AutoCodec();
-
     private final String input;
     private final String runUnderCommand;
     private final ImmutableList<String> runUnderList;

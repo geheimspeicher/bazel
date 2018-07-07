@@ -15,27 +15,22 @@ package com.google.devtools.build.lib.rules.android;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.packages.BuiltinProvider;
 import com.google.devtools.build.lib.packages.NativeInfo;
-import com.google.devtools.build.lib.packages.NativeProvider;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.android.AndroidInstrumentationInfoApi;
+import com.google.devtools.build.lib.syntax.EvalException;
 
 /**
  * A provider for targets that create Android instrumentations. Consumed by Android testing rules.
  */
- @SkylarkModule(
-    name = "AndroidInstrumentationInfo",
-    doc = "Android instrumentation and target APKs to run in a test",
-    category = SkylarkModuleCategory.PROVIDER
-)
 @Immutable
-public class AndroidInstrumentationInfo extends NativeInfo {
+public class AndroidInstrumentationInfo extends NativeInfo
+    implements AndroidInstrumentationInfoApi<Artifact> {
 
   private static final String SKYLARK_NAME = "AndroidInstrumentationInfo";
-  public static final NativeProvider<AndroidInstrumentationInfo> PROVIDER =
-      new NativeProvider<AndroidInstrumentationInfo>(
-          AndroidInstrumentationInfo.class, SKYLARK_NAME) {};
+
+  public static final AndroidInstrumentationInfoProvider PROVIDER =
+      new AndroidInstrumentationInfoProvider();
 
   private final Artifact targetApk;
   private final Artifact instrumentationApk;
@@ -46,21 +41,29 @@ public class AndroidInstrumentationInfo extends NativeInfo {
     this.instrumentationApk = instrumentationApk;
   }
 
-  @SkylarkCallable(
-      name = "target_apk",
-      doc = "Returns the target APK of the instrumentation test.",
-      structField = true
-  )
+  @Override
   public Artifact getTargetApk() {
     return targetApk;
   }
 
-  @SkylarkCallable(
-      name = "instrumentation_apk",
-      doc = "Returns the instrumentation APK that should be executed.",
-      structField = true
-  )
+  @Override
   public Artifact getInstrumentationApk() {
     return instrumentationApk;
+  }
+
+  /** Provider for {@link AndroidInstrumentationInfo}. */
+  public static class AndroidInstrumentationInfoProvider
+      extends BuiltinProvider<AndroidInstrumentationInfo>
+      implements AndroidInstrumentationInfoApiProvider<Artifact> {
+
+    private AndroidInstrumentationInfoProvider() {
+      super(SKYLARK_NAME, AndroidInstrumentationInfo.class);
+    }
+
+    @Override
+    public AndroidInstrumentationInfoApi<Artifact> createInfo(
+        Artifact targetApk, Artifact instrumentationApk) throws EvalException {
+      return new AndroidInstrumentationInfo(targetApk, instrumentationApk);
+    }
   }
 }

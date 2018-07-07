@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
-import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
 import com.google.devtools.build.lib.bazel.repository.downloader.HttpDownloader;
@@ -32,7 +31,9 @@ import com.google.devtools.build.lib.rules.repository.LocalRepositoryRule;
 import com.google.devtools.build.lib.rules.repository.RepositoryDelegatorFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryFunction;
 import com.google.devtools.build.lib.rules.repository.RepositoryLoaderFunction;
+import com.google.devtools.build.lib.skyframe.ConfiguredTargetAndData;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
+import com.google.devtools.build.lib.skylarkbuildapi.repository.RepositoryBootstrap;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
@@ -106,7 +107,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
     if (ruleProvider == null) {
       ConfiguredRuleClassProvider.Builder builder = new ConfiguredRuleClassProvider.Builder();
       TestRuleClassProvider.addStandardRules(builder);
-      builder.addSkylarkModule(SkylarkRepositoryModule.class);
+      builder.addSkylarkBootstrap(new RepositoryBootstrap(new SkylarkRepositoryModule()));
       ruleProvider = builder.build();
     }
     return ruleProvider;
@@ -142,7 +143,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
             .add("repo(name='foo', path='/repo2')")
             .build());
     invalidatePackages();
-    ConfiguredTarget target = getConfiguredTarget("@foo//:bar");
+    ConfiguredTargetAndData target = getConfiguredTargetAndData("@foo//:bar");
     Object path = target.getTarget().getAssociatedRule().getAttributeContainer().getAttr("path");
     assertThat(path).isEqualTo("foo");
   }
@@ -170,7 +171,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
             .add("repo(name='foo')")
             .build());
     invalidatePackages();
-    ConfiguredTarget target = getConfiguredTarget("@foo//:bar");
+    ConfiguredTargetAndData target = getConfiguredTargetAndData("@foo//:bar");
     Object path = target.getTarget().getAssociatedRule().getAttributeContainer().getAttr("path");
     assertThat(path).isEqualTo("foo");
   }
@@ -199,7 +200,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
             .add("repo(name='foo')")
             .build());
     invalidatePackages();
-    ConfiguredTarget target = getConfiguredTarget("@foo//:bar");
+    ConfiguredTargetAndData target = getConfiguredTargetAndData("@foo//:bar");
     Object path = target.getTarget().getAssociatedRule().getAttributeContainer().getAttr("path");
     assertThat(path).isEqualTo("foo");
   }
@@ -229,7 +230,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
             .add("repo(name='foobar')")
             .build());
     invalidatePackages();
-    ConfiguredTarget target = getConfiguredTarget("@foobar//:bar");
+    ConfiguredTargetAndData target = getConfiguredTargetAndData("@foobar//:bar");
     Object path = target.getTarget().getAssociatedRule().getAttributeContainer().getAttr("path");
     assertThat(path).isEqualTo("foobar");
   }
@@ -284,7 +285,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testCycleErrorInWorkspaceFileWithExternalRepo() throws Exception {
-    try (OutputStream output = scratch.resolve("WORKSPACE").getOutputStream(true /* append */)) {
+    try (OutputStream output = scratch.resolve("WORKSPACE").getOutputStream(/* append= */ true)) {
       output.write((
           "\nload('//foo:bar.bzl', 'foobar')"
               + "\ngit_repository(name = 'git_repo')").getBytes(StandardCharsets.UTF_8));
@@ -432,7 +433,7 @@ public class SkylarkRepositoryIntegrationTest extends BuildViewTestCase {
     invalidatePackages();
     getConfiguredTarget("//:x");
     assertContainsEvent(
-        "Target '//external:zlib' is not visible from target '//:x'. "
+        "target '//external:zlib' is not visible from target '//:x'. "
             + "Check the visibility declaration of the former target if you think the "
             + "dependency is legitimate");
   }

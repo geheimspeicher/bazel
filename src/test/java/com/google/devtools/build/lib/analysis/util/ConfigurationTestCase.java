@@ -79,7 +79,6 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.NO_OP},
       defaultValue = "",
-      category = "semantics",
       help = "Additional target CPUs."
     )
     public List<String> multiCpus;
@@ -106,16 +105,16 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
     final PackageFactory pkgFactory;
     BlazeDirectories directories =
         new BlazeDirectories(
-            new ServerDirectories(outputBase, outputBase),
+            new ServerDirectories(outputBase, outputBase, outputBase),
             rootDirectory,
+            /* defaultSystemJavabase= */ null,
             analysisMock.getProductName());
     pkgFactory =
         analysisMock
             .getPackageFactoryBuilderForTesting(directories)
-            .build(ruleClassProvider, scratch.getFileSystem());
+            .build(ruleClassProvider);
     AnalysisTestUtil.DummyWorkspaceStatusActionFactory workspaceStatusActionFactory =
         new AnalysisTestUtil.DummyWorkspaceStatusActionFactory(directories);
-
     skyframeExecutor =
         SequencedSkyframeExecutor.create(
             pkgFactory,
@@ -131,11 +130,17 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
             BazelSkyframeExecutorConstants.ADDITIONAL_BLACKLISTED_PACKAGE_PREFIXES_FILE,
             BazelSkyframeExecutorConstants.CROSS_REPOSITORY_LABEL_VIOLATION_STRATEGY,
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY,
-            BazelSkyframeExecutorConstants.ACTION_ON_IO_EXCEPTION_READING_BUILD_FILE);
+            BazelSkyframeExecutorConstants.ACTION_ON_IO_EXCEPTION_READING_BUILD_FILE,
+            DefaultBuildOptionsForTesting.getDefaultBuildOptionsForTest(ruleClassProvider));
     TestConstants.processSkyframeExecutorForTesting(skyframeExecutor);
-    skyframeExecutor.injectExtraPrecomputedValues(ImmutableList.of(PrecomputedValue.injected(
-        RepositoryDelegatorFunction.REPOSITORY_OVERRIDES,
-        ImmutableMap.<RepositoryName, PathFragment>of())));
+    skyframeExecutor.injectExtraPrecomputedValues(
+        ImmutableList.of(
+            PrecomputedValue.injected(
+                RepositoryDelegatorFunction.REPOSITORY_OVERRIDES,
+                ImmutableMap.<RepositoryName, PathFragment>of()),
+            PrecomputedValue.injected(
+                RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_FETCHING,
+                RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY)));
     PackageCacheOptions packageCacheOptions = Options.getDefaults(PackageCacheOptions.class);
     packageCacheOptions.showLoadingProgress = true;
     packageCacheOptions.globbingThreads = 7;
@@ -204,16 +209,19 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
       BuildConfigurationCollection configCollection) throws Exception {
     Map<ArtifactRoot, BuildConfiguration> outputPaths = new HashMap<>();
     for (BuildConfiguration config : configCollection.getTargetConfigurations()) {
-      if (config.isActionsEnabled()) {
-        BuildConfiguration otherConfig = outputPaths.get(
-            config.getOutputDirectory(RepositoryName.MAIN));
-        if (otherConfig != null) {
-          throw new IllegalStateException("The output path '"
-              + config.getOutputDirectory(RepositoryName.MAIN)
-              + "' is the same for configurations '" + config + "' and '" + otherConfig + "'");
-        } else {
-          outputPaths.put(config.getOutputDirectory(RepositoryName.MAIN), config);
-        }
+      BuildConfiguration otherConfig =
+          outputPaths.get(config.getOutputDirectory(RepositoryName.MAIN));
+      if (otherConfig != null) {
+        throw new IllegalStateException(
+            "The output path '"
+                + config.getOutputDirectory(RepositoryName.MAIN)
+                + "' is the same for configurations '"
+                + config
+                + "' and '"
+                + otherConfig
+                + "'");
+      } else {
+        outputPaths.put(config.getOutputDirectory(RepositoryName.MAIN), config);
       }
     }
   }

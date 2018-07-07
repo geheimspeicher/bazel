@@ -16,10 +16,11 @@ package com.google.devtools.build.lib.analysis;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.analysis.MakeVariableSupplier.MapBackedMakeVariableSupplier;
-import com.google.devtools.build.lib.analysis.MakeVariableSupplier.PackageBackedMakeVariableSupplier;
+import com.google.devtools.build.lib.analysis.MakeVariableSupplier.TemplateVariableInfoBackedMakeVariableSupplier;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.stringtemplate.ExpansionException;
 import com.google.devtools.build.lib.analysis.stringtemplate.TemplateContext;
 import com.google.devtools.build.lib.packages.Package;
@@ -34,6 +35,21 @@ import java.util.Map;
  */
 public class ConfigurationMakeVariableContext implements TemplateContext {
 
+  private static ImmutableList<TemplateVariableInfo> getRuleTemplateVariableProviders(
+      RuleContext ruleContext, Iterable<String> attributeNames) {
+
+    return Streams.stream(attributeNames)
+        // Only process this attribute it if is present in the rule.
+        .filter(attrName -> ruleContext.attributes().has(attrName))
+        // Get the TemplateVariableInfo providers from this attribute.
+        .flatMap(
+            attrName ->
+                Streams.stream(
+                    ruleContext.getPrerequisites(
+                        attrName, Mode.DONT_CHECK, TemplateVariableInfo.PROVIDER)))
+        .collect(ImmutableList.toImmutableList());
+  }
+
   private final ImmutableList<? extends MakeVariableSupplier> allMakeVariableSuppliers;
 
   // TODO(b/37567440): Remove when Skylark callers can be updated to get this from
@@ -44,18 +60,7 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
 
   public ConfigurationMakeVariableContext(
       RuleContext ruleContext, Package pkg, BuildConfiguration configuration) {
-    this(
-        ruleContext.getMakeVariables(DEFAULT_MAKE_VARIABLE_ATTRIBUTES),
-        pkg,
-        configuration,
-        ImmutableList.<MakeVariableSupplier>of());
-  }
-
-  public ConfigurationMakeVariableContext(
-      ImmutableMap<String, String> ruleMakeVariables,
-      Package pkg,
-      BuildConfiguration configuration) {
-    this(ruleMakeVariables, pkg, configuration, ImmutableList.of());
+    this(ruleContext, pkg, configuration, ImmutableList.<MakeVariableSupplier>of());
   }
 
   public ConfigurationMakeVariableContext(
@@ -64,23 +69,29 @@ public class ConfigurationMakeVariableContext implements TemplateContext {
       BuildConfiguration configuration,
       Iterable<? extends MakeVariableSupplier> makeVariableSuppliers) {
     this(
-        ruleContext.getMakeVariables(DEFAULT_MAKE_VARIABLE_ATTRIBUTES),
+        getRuleTemplateVariableProviders(ruleContext, DEFAULT_MAKE_VARIABLE_ATTRIBUTES),
         pkg,
         configuration,
         makeVariableSuppliers);
   }
 
-  public ConfigurationMakeVariableContext(
-      ImmutableMap<String, String> ruleMakeVariables,
+  private ConfigurationMakeVariableContext(
+      ImmutableList<TemplateVariableInfo> ruleTemplateVariableProviders,
       Package pkg,
       BuildConfiguration configuration,
       Iterable<? extends MakeVariableSupplier> extraMakeVariableSuppliers) {
     this.allMakeVariableSuppliers =
         ImmutableList.<MakeVariableSupplier>builder()
+            // These should be in priority order:
+            // 1) extra suppliers passed in (assume the caller knows what they are doing)
+            // 2) variables from the command-line
+            // 3) package-level overrides (ie, vardef)
+            // 4) variables from the rule (and thus the toolchains)
+            // 5) variables from the global configuration
             .addAll(Preconditions.checkNotNull(extraMakeVariableSuppliers))
-            .add(new MapBackedMakeVariableSupplier(ruleMakeVariables))
             .add(new MapBackedMakeVariableSupplier(configuration.getCommandLineBuildVariables()))
-            .add(new PackageBackedMakeVariableSupplier(pkg, configuration.getPlatformName()))
+            .add(new MapBackedMakeVariableSupplier(pkg.getMakeEnvironment()))
+            .add(new TemplateVariableInfoBackedMakeVariableSupplier(ruleTemplateVariableProviders))
             .add(new MapBackedMakeVariableSupplier(configuration.getGlobalMakeEnvironment()))
             .build();
   }

@@ -26,10 +26,12 @@ import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.bazel.rules.java.BazelJavaRuleClasses.BaseJavaBinaryRule;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
 import com.google.devtools.build.lib.packages.TriState;
+import com.google.devtools.build.lib.rules.cpp.CppConfiguration;
+import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 
@@ -39,7 +41,7 @@ import com.google.devtools.build.lib.rules.java.JavaSemantics;
 public final class BazelJavaTestRule implements RuleDefinition {
 
   @Override
-  public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+  public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
     /* <!-- #BLAZE_RULE(java_test).IMPLICIT_OUTPUTS -->
     <ul>
       <li><code><var>name</var>.jar</code>: A Java archive.</li>
@@ -50,14 +52,15 @@ public final class BazelJavaTestRule implements RuleDefinition {
     </ul>
     <!-- #END_BLAZE_RULE.IMPLICIT_OUTPUTS --> */
     return builder
-        .requiresConfigurationFragments(JavaConfiguration.class)
+        .requiresConfigurationFragments(JavaConfiguration.class, CppConfiguration.class)
         .setImplicitOutputsFunction(BazelJavaRuleClasses.JAVA_BINARY_IMPLICIT_OUTPUTS)
         // Proguard can be run over java_test targets using the --java_optimization_mode flag.
         // Primarily this is intended to help test changes to Proguard.
-        .add(attr(":proguard", LABEL)
-            .cfg(HostTransition.INSTANCE)
-            .value(JavaSemantics.PROGUARD)
-            .exec())
+        .add(
+            attr(":proguard", LABEL)
+                .cfg(HostTransition.INSTANCE)
+                .value(JavaSemantics.PROGUARD)
+                .exec())
         .add(attr(":extra_proguard_specs", LABEL_LIST).value(JavaSemantics.EXTRA_PROGUARD_SPECS))
         .override(attr("stamp", TRISTATE).value(TriState.NO))
         .override(attr("use_testrunner", BOOLEAN).value(true))
@@ -65,12 +68,12 @@ public final class BazelJavaTestRule implements RuleDefinition {
         // Input files for test actions collecting code coverage
         .add(
             attr("$lcov_merger", LABEL)
-                .value(env.getLabel("@bazel_tools//tools/test:LcovMerger")))
+                .value(
+                    Label.parseAbsoluteUnchecked(
+                        "@bazel_tools//tools/test/LcovMerger/java/com/google/devtools/lcovmerger:Main")))
         .add(
             attr("$jacocorunner", LABEL)
-                .value(
-                    env.getLabel(
-                        "@bazel_tools//tools/jdk:JacocoCoverage")))
+                .value(Label.parseAbsoluteUnchecked("@bazel_tools//tools/jdk:JacocoCoverage")))
         /* <!-- #BLAZE_RULE(java_test).ATTRIBUTE(test_class) -->
         The Java class to be loaded by the test runner.<br/>
         <p>
@@ -104,6 +107,7 @@ public final class BazelJavaTestRule implements RuleDefinition {
         </p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */
         .add(attr("test_class", STRING))
+        .addRequiredToolchains(CppRuleClasses.ccToolchainTypeAttribute(env))
         .build();
   }
 

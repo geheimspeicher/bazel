@@ -19,6 +19,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skylarkinterface.Param;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
@@ -114,7 +116,7 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
   @Override
   public boolean equals(Object object) {
     return (this == object)
-        || ((this.getClass() == object.getClass())
+        || ((object != null) && (this.getClass() == object.getClass())
             && getContentsUnsafe().equals(((SkylarkList) object).getContentsUnsafe()));
   }
 
@@ -186,8 +188,10 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
   /**
    * Creates an immutable Skylark list with the given elements.
    *
-   * It is unspecified whether this is a Skylark list or tuple. For more control, use one of the
+   * <p>It is unspecified whether this is a Skylark list or tuple. For more control, use one of the
    * factory methods in {@link MutableList} or {@link Tuple}.
+   *
+   * <p>The caller must ensure that the elements of {@code contents} are not mutable.
    */
   // TODO(bazel-team): Eliminate this function in favor of a new MutableList factory method. With
   // such a method, we may no longer need to take null as a possible value for the Mutability or
@@ -222,28 +226,19 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
 
     private final ArrayList<E> contents;
 
-    // Treat GlobList specially: external code depends on it.
-    // TODO(bazel-team): make data structures *and binary operators* extensible
-    // (via e.g. interface classes for each binary operator) so that GlobList
-    // can be implemented outside of the core of Skylark.
-    // TODO(bazel-team): move GlobList out of Skylark, into an extension.
-    @Nullable private GlobList<E> globList;
-
-    private final Mutability mutability;
+    /** Final except for {@link #unsafeShallowFreeze}; must not be modified any other way. */
+    private Mutability mutability;
 
     private MutableList(
         ArrayList<E> rawContents,
-        @Nullable GlobList<E> globList,
         @Nullable Mutability mutability) {
       this.contents = Preconditions.checkNotNull(rawContents);
-      this.globList = globList;
       this.mutability = mutability == null ? Mutability.IMMUTABLE : mutability;
     }
 
     /**
      * Creates an instance, taking ownership of the supplied {@link ArrayList}. This is exposed for
-     * performance reasons. May be used when the supplied list is certainly not a {@link GlobList}
-     * (should be enforced by type system) and the calling code will not modify the supplied list
+     * performance reasons. May be used when the calling code will not modify the supplied list
      * after calling (honor system).
      */
     static <T> MutableList<T> wrapUnsafe(@Nullable Environment env, ArrayList<T> rawContents) {
@@ -252,13 +247,12 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
 
     /**
      * Create an instance, taking ownership of the supplied {@link ArrayList}. This is exposed for
-     * performance reasons. May be used when the supplied list is certainly not a {@link GlobList}
-     * (enforced by type system as long as {@link GlobList} doesn't extend {@link ArrayList}) and
-     * the calling code will not modify the supplied list after calling (honor system).
+     * performance reasons. May be used when the calling code will not modify the supplied list
+     * after calling (honor system).
      */
     static <T> MutableList<T> wrapUnsafe(
         @Nullable Mutability mutability, ArrayList<T> rawContents) {
-      return new MutableList<>(rawContents, /*globList=*/ null, mutability);
+      return new MutableList<>(rawContents, mutability);
     }
 
     /**
@@ -281,12 +275,10 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
      * Returns a {@code MutableList} whose items are given by an iterable and which has the given
      * {@link Mutability}. If {@code mutability} is null, the list is immutable.
      */
-    @SuppressWarnings("unchecked")  // GlobList cast.
     public static <T> MutableList<T> copyOf(
         @Nullable Mutability mutability, Iterable<? extends T> contents) {
       return new MutableList<>(
           Lists.newArrayList(contents),
-          contents instanceof GlobList ? (GlobList<T>) contents : null,
           mutability);
     }
 
@@ -307,10 +299,9 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
      * {@link Environment}. If {@code env} is null, the list is immutable.
      */
     public static <T> MutableList<T> of(@Nullable Environment env, T... contents) {
-      // Safe since it's definitely not a GlobList, and we're taking a copy of the input.
+      // Safe since we're taking a copy of the input.
       return MutableList.wrapUnsafe(
-          env == null ? null : env.mutability(),
-          Lists.newArrayList(contents));
+          env == null ? null : env.mutability(), Lists.newArrayList(contents));
     }
 
     @Override
@@ -319,14 +310,9 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
     }
 
     @Override
-    protected void checkMutable(Location loc, Mutability mutability) throws EvalException {
-      super.checkMutable(loc, mutability);
-      globList = null; // If you're going to mutate it, invalidate the underlying GlobList.
-    }
-
-    /** Returns the {@link GlobList} if there is one, or else null. */
-    @Nullable public GlobList<E> getGlobList() {
-      return globList;
+    public void unsafeShallowFreeze() {
+      Mutability.Freezable.checkUnsafeShallowFreezePrecondition(this);
+      this.mutability = Mutability.IMMUTABLE;
     }
 
     @Override
@@ -344,11 +330,6 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
       return contents;
     }
 
-    /** Returns the {@link GlobList} if there is one, otherwise the regular contents. */
-    private List<E> getGlobListOrContentsUnsafe() {
-      return globList != null ? globList : contents;
-    }
-
     /**
      * Returns a new {@code MutableList} that is the concatenation of two {@code MutableList}s. The
      * new list will have the given {@link Mutability}.
@@ -357,18 +338,11 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
         MutableList<? extends T> left,
         MutableList<? extends T> right,
         Mutability mutability) {
-      if (left.getGlobList() == null && right.getGlobList() == null) {
-        ArrayList<T> newContents = new ArrayList<>(left.size() + right.size());
-        addAll(newContents, left.contents);
-        addAll(newContents, right.contents);
-        return new MutableList<>(newContents, /*globList=*/ null, mutability);
-      } else {
-        // Preserve glob criteria.
-        GlobList<T> newGlobList = GlobList.concat(
-            left.getGlobListOrContentsUnsafe(),
-            right.getGlobListOrContentsUnsafe());
-        return new MutableList<>(new ArrayList<>(newGlobList), newGlobList, mutability);
-      }
+
+      ArrayList<T> newContents = new ArrayList<>(left.size() + right.size());
+      addAll(newContents, left.contents);
+      addAll(newContents, right.contents);
+      return new MutableList<>(newContents, mutability);
     }
 
     /**  More efficient {@link List#addAll} replacement when both lists are {@link ArrayList}s. */
@@ -385,21 +359,11 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
         return MutableList.wrapUnsafe(mutability, new ArrayList<>());
       }
 
-      if (getGlobList() == null) {
-        ArrayList<E> repeated = new ArrayList<>(this.size() * times);
-        for (int i = 0; i < times; i++) {
-          repeated.addAll(this);
-        }
-        return MutableList.wrapUnsafe(mutability, repeated);
-      } else {
-        // Preserve glob criteria.
-        List<? extends E> globs = getGlobListOrContentsUnsafe();
-        List<? extends E> original = globs;
-        for (int i = 1; i < times; i++) {
-          globs = GlobList.concat(globs, original);
-        }
-        return MutableList.copyOf(mutability, globs);
+      ArrayList<E> repeated = new ArrayList<>(this.size() * times);
+      for (int i = 0; i < times; i++) {
+        repeated.addAll(this);
       }
+      return MutableList.wrapUnsafe(mutability, repeated);
     }
 
     @Override
@@ -466,6 +430,28 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
       contents.remove(index);
     }
 
+    @SkylarkCallable(
+        name = "remove",
+        doc =
+            "Removes the first item from the list whose value is x. "
+                + "It is an error if there is no such item.",
+        parameters = {
+            @Param(name = "x", type = Object.class, doc = "The object to remove.")
+        },
+        useLocation = true,
+        useEnvironment = true
+    )
+    public Runtime.NoneType removeObject(Object x, Location loc, Environment env)
+        throws EvalException {
+      for (int i = 0; i < size(); i++) {
+        if (get(i).equals(x)) {
+          remove(i, loc, env.mutability());
+          return Runtime.NONE;
+        }
+      }
+      throw new EvalException(loc, Printer.format("item %r not found in list", x));
+    }
+
     /**
      * Sets the position at the given index to contain the given value. The index must already have
      * been validated to be in range.
@@ -478,6 +464,106 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
     public void set(int index, E value, Location loc, Mutability mutability) throws EvalException {
       checkMutable(loc, mutability);
       contents.set(index, value);
+    }
+
+    @SkylarkCallable(
+      name = "append",
+      doc = "Adds an item to the end of the list.",
+      parameters = {
+          @Param(name = "item",
+            type = Object.class,
+            doc = "Item to add at the end.",
+            noneable = true)
+      },
+      useLocation = true,
+      useEnvironment = true
+    )
+    public Runtime.NoneType append(
+        E item, Location loc, Environment env)
+        throws EvalException {
+      add(item, loc, env.mutability());
+      return Runtime.NONE;
+    }
+
+    @SkylarkCallable(
+      name = "insert",
+      doc = "Inserts an item at a given position.",
+      parameters = {
+          @Param(name = "index", type = Integer.class, doc = "The index of the given position."),
+          @Param(name = "item", type = Object.class, doc = "The item.", noneable = true)
+      },
+      useLocation = true,
+      useEnvironment = true
+    )
+    public Runtime.NoneType insert(
+        Integer index, E item, Location loc, Environment env)
+        throws EvalException {
+      add(EvalUtils.clampRangeEndpoint(index, size()), item, loc, env.mutability());
+      return Runtime.NONE;
+    }
+
+    @SkylarkCallable(
+      name = "extend",
+      doc = "Adds all items to the end of the list.",
+      parameters = {
+          @Param(name = "items", type = SkylarkList.class, doc = "Items to add at the end.")
+      },
+      useLocation = true,
+      useEnvironment = true
+    )
+    public Runtime.NoneType extend(
+        SkylarkList<E> items, Location loc, Environment env)
+        throws EvalException {
+      addAll(items, loc, env.mutability());
+      return Runtime.NONE;
+    }
+
+    @SkylarkCallable(
+      name = "index",
+      doc =
+          "Returns the index in the list of the first item whose value is x. "
+              + "It is an error if there is no such item.",
+      parameters = {
+          @Param(name = "x", type = Object.class, doc = "The object to search.")
+      },
+      useLocation = true
+    )
+    public Integer index(Object x, Location loc) throws EvalException {
+      int i = 0;
+      for (Object obj : this) {
+        if (obj.equals(x)) {
+          return i;
+        }
+        i++;
+      }
+      throw new EvalException(loc, Printer.format("item %r not found in list", x));
+    }
+
+    @SkylarkCallable(
+      name = "pop",
+      doc =
+          "Removes the item at the given position in the list, and returns it. "
+              + "If no <code>index</code> is specified, "
+              + "it removes and returns the last item in the list.",
+      parameters = {
+          @Param(
+              name = "i",
+              type = Integer.class,
+              noneable = true,
+              defaultValue = "None",
+              doc = "The index of the item."
+          )
+      },
+      useLocation = true,
+      useEnvironment = true
+    )
+    public Object pop(Object i, Location loc, Environment env)
+        throws EvalException {
+      int arg = i == Runtime.NONE ? -1 : (Integer) i;
+      int index = EvalUtils.getSequenceIndex(arg, size(), loc);
+      Object result = get(index);
+      remove(index, loc, env.mutability());
+      return result;
     }
   }
 
@@ -545,6 +631,8 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
       return Tuple.create(ImmutableList.copyOf(elements));
     }
 
+    // Overridden to recurse over children, since tuples use SHALLOW_IMMUTABLE and other
+    // SkylarkMutable subclasses do not.
     @Override
     public boolean isImmutable() {
       for (Object item : this) {
@@ -557,7 +645,7 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
 
     @Override
     public Mutability mutability() {
-      return Mutability.IMMUTABLE;
+      return Mutability.SHALLOW_IMMUTABLE;
     }
 
     @Override
@@ -579,10 +667,11 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
     public static <T> Tuple<T> concat(Tuple<? extends T> left, Tuple<? extends T> right) {
       // Build the ImmutableList directly rather than use Iterables.concat, to avoid unnecessary
       // array resizing.
-      return create(ImmutableList.<T>builder()
-          .addAll(left)
-          .addAll(right)
-          .build());
+      return create(
+          ImmutableList.<T>builderWithExpectedSize(left.size() + right.size())
+              .addAll(left)
+              .addAll(right)
+              .build());
     }
 
     @Override
@@ -590,7 +679,7 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
         Object start, Object end, Object step, Location loc, Mutability mutability)
         throws EvalException {
       List<Integer> sliceIndices = EvalUtils.getSliceIndices(start, end, step, this.size(), loc);
-      ImmutableList.Builder<E> builder = ImmutableList.builder();
+      ImmutableList.Builder<E> builder = ImmutableList.builderWithExpectedSize(sliceIndices.size());
       for (int pos : sliceIndices) {
         builder.add(this.get(pos));
       }
@@ -599,7 +688,11 @@ public abstract class SkylarkList<E> extends BaseMutableList<E>
 
     @Override
     public Tuple<E> repeat(int times, Mutability mutability) {
-      ImmutableList.Builder<E> builder = ImmutableList.builder();
+      if (times <= 0) {
+        return empty();
+      }
+
+      ImmutableList.Builder<E> builder = ImmutableList.builderWithExpectedSize(this.size() * times);
       for (int i = 0; i < times; i++) {
         builder.addAll(this);
       }

@@ -28,6 +28,7 @@ cc_library(
     srcs = ["launcher.cc"],
     hdrs = ["launcher.h"],
     deps = [
+        "//src/main/cpp/util:filesystem",
         "//src/tools/launcher/util",
         "//src/tools/launcher/util:data_parser",
     ],

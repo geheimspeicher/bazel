@@ -16,7 +16,10 @@ package com.google.devtools.build.lib.runtime.commands;
 
 import static java.util.stream.Collectors.toList;
 
+import com.google.devtools.build.lib.actions.CommandLineExpansionException;
+import com.google.devtools.build.lib.analysis.AnalysisProtos.ActionGraphContainer;
 import com.google.devtools.build.lib.events.Event;
+import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.PackageFactory;
 import com.google.devtools.build.lib.packages.RuleClass;
@@ -32,7 +35,7 @@ import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor.RuleStat;
 import com.google.devtools.build.lib.util.ExitCode;
-import com.google.devtools.build.lib.vfs.FileSystemUtils;
+import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -40,6 +43,7 @@ import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionsBase;
 import com.google.devtools.common.options.OptionsParser;
 import com.google.devtools.common.options.OptionsProvider;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.util.ArrayList;
@@ -74,7 +78,6 @@ public class DumpCommand implements BlazeCommand {
     @Option(
       name = "packages",
       defaultValue = "false",
-      category = "verbosity",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
       help = "Dump package cache content."
@@ -82,19 +85,8 @@ public class DumpCommand implements BlazeCommand {
     public boolean dumpPackages;
 
     @Option(
-      name = "vfs",
-      defaultValue = "false",
-      category = "verbosity",
-      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
-      effectTags = {OptionEffectTag.BAZEL_MONITORING},
-      help = "Dump virtual filesystem cache content."
-    )
-    public boolean dumpVfs;
-
-    @Option(
       name = "action_cache",
       defaultValue = "false",
-      category = "verbosity",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
       help = "Dump action cache content."
@@ -102,9 +94,40 @@ public class DumpCommand implements BlazeCommand {
     public boolean dumpActionCache;
 
     @Option(
+      name = "action_graph",
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING},
+      help = "Dump action graph to the specified path."
+    )
+    public String dumpActionGraph;
+
+    @Option(
+      name = "action_graph:targets",
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "...",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING},
+      help =
+          "Comma separated list of targets to include in action graph dump. "
+              + "Defaults to all attributes. This option does only apply to --action_graph."
+    )
+    public List<String> actionGraphTargets;
+
+    @Option(
+      name = "action_graph:include_cmdline",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
+      effectTags = {OptionEffectTag.BAZEL_MONITORING},
+      help =
+          "Include command line of actions in the action graph dump. "
+              + "This option does only apply to --action_graph."
+    )
+    public boolean actionGraphIncludeCmdLine;
+
+    @Option(
       name = "rule_classes",
       defaultValue = "false",
-      category = "verbosity",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
       help = "Dump rule classes."
@@ -114,7 +137,6 @@ public class DumpCommand implements BlazeCommand {
     @Option(
       name = "rules",
       defaultValue = "false",
-      category = "verbosity",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
       help = "Dump rules, including counts and memory usage (if memory is tracked)."
@@ -124,7 +146,6 @@ public class DumpCommand implements BlazeCommand {
     @Option(
       name = "skylark_memory",
       defaultValue = "null",
-      category = "verbosity",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
       help =
@@ -136,7 +157,6 @@ public class DumpCommand implements BlazeCommand {
     @Option(
       name = "skyframe",
       defaultValue = "off",
-      category = "verbosity",
       converter = SkyframeDumpEnumConverter.class,
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.BAZEL_MONITORING},
@@ -173,24 +193,26 @@ public class DumpCommand implements BlazeCommand {
 
     boolean anyOutput =
         dumpOptions.dumpPackages
-            || dumpOptions.dumpVfs
             || dumpOptions.dumpActionCache
+            || dumpOptions.dumpActionGraph != null
             || dumpOptions.dumpRuleClasses
             || dumpOptions.dumpRules
             || dumpOptions.skylarkMemory != null
             || (dumpOptions.dumpSkyframe != SkyframeDumpOption.OFF);
     if (!anyOutput) {
-      Map<String, String> categories = new HashMap<>();
-      categories.put("verbosity", "Options that control what internal state is dumped");
       Collection<Class<? extends OptionsBase>> optionList = new ArrayList<>();
       optionList.add(DumpOptions.class);
 
-      env.getReporter().getOutErr().printErrLn(BlazeCommandUtils.expandHelpTopic(
-          getClass().getAnnotation(Command.class).name(),
-          getClass().getAnnotation(Command.class).help(),
-          getClass(),
-          optionList, categories, OptionsParser.HelpVerbosity.LONG,
-          runtime.getProductName()));
+      env.getReporter()
+          .getOutErr()
+          .printErrLn(
+              BlazeCommandUtils.expandHelpTopic(
+                  getClass().getAnnotation(Command.class).name(),
+                  getClass().getAnnotation(Command.class).help(),
+                  getClass(),
+                  optionList,
+                  OptionsParser.HelpVerbosity.LONG,
+                  runtime.getProductName()));
       return BlazeCommandResult.exitCode(ExitCode.ANALYSIS_FAILURE);
     }
     PrintStream out = new PrintStream(env.getReporter().getOutErr().getOutputStream());
@@ -205,15 +227,27 @@ public class DumpCommand implements BlazeCommand {
         out.println();
       }
 
-      if (dumpOptions.dumpVfs) {
-        out.println("Filesystem cache");
-        FileSystemUtils.dump(env.getOutputBase().getFileSystem(), out);
-        out.println();
-      }
-
       if (dumpOptions.dumpActionCache) {
         success &= dumpActionCache(env, out);
         out.println();
+      }
+
+      if (dumpOptions.dumpActionGraph != null) {
+        try {
+          success &=
+              dumpActionGraph(
+                  env.getSkyframeExecutor(),
+                  dumpOptions.dumpActionGraph,
+                  dumpOptions.actionGraphTargets,
+                  dumpOptions.actionGraphIncludeCmdLine,
+                  out);
+        } catch (CommandLineExpansionException e) {
+          env.getReporter().handle(Event.error(null, "Error expanding command line: " + e));
+        } catch (IOException e) {
+          env.getReporter()
+              .error(
+                  null, "Could not dump action graph to '" + dumpOptions.dumpActionGraph + "'", e);
+        }
       }
 
       if (dumpOptions.dumpRuleClasses) {
@@ -222,7 +256,7 @@ public class DumpCommand implements BlazeCommand {
       }
 
       if (dumpOptions.dumpRules) {
-        dumpRuleStats(env.getBlazeWorkspace(), env.getSkyframeExecutor(), out);
+        dumpRuleStats(env.getReporter(), env.getBlazeWorkspace(), env.getSkyframeExecutor(), out);
         out.println();
       }
 
@@ -259,6 +293,22 @@ public class DumpCommand implements BlazeCommand {
     return true;
   }
 
+  private boolean dumpActionGraph(
+      SkyframeExecutor executor,
+      String path,
+      List<String> actionGraphTargets,
+      boolean includeActionCmdLine,
+      PrintStream out)
+      throws CommandLineExpansionException, IOException {
+    out.println("Dumping action graph to '" + path + "'");
+    ActionGraphContainer actionGraphContainer =
+        executor.getActionGraphContainer(actionGraphTargets, includeActionCmdLine);
+    FileOutputStream protoOutputStream = new FileOutputStream(path);
+    actionGraphContainer.writeTo(protoOutputStream);
+    protoOutputStream.close();
+    return true;
+  }
+
   private boolean dumpSkyframe(SkyframeExecutor executor, boolean summarize, PrintStream out) {
     executor.dump(summarize, out);
     return true;
@@ -290,8 +340,12 @@ public class DumpCommand implements BlazeCommand {
     }
   }
 
-  private void dumpRuleStats(BlazeWorkspace workspace, SkyframeExecutor executor, PrintStream out) {
-    List<RuleStat> ruleStats = executor.getRuleStats();
+  private void dumpRuleStats(
+      ExtendedEventHandler eventHandler,
+      BlazeWorkspace workspace,
+      SkyframeExecutor executor,
+      PrintStream out) {
+    List<RuleStat> ruleStats = executor.getRuleStats(eventHandler);
     if (ruleStats.isEmpty()) {
       out.print("No rules in Blaze server, please run a build command first.");
       return;

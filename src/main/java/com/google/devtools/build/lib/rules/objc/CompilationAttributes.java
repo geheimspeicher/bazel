@@ -274,14 +274,6 @@ final class CompilationAttributes {
             moduleMaps.addTransitive(provider.get(TOP_LEVEL_MODULE_MAP));
           }
         }
-        if (ruleContext.attributes().has("non_propagated_deps", BuildType.LABEL_LIST)) {
-          Iterable<ObjcProvider> providers =
-              ruleContext.getPrerequisites(
-                  "non_propagated_deps", Mode.TARGET, ObjcProvider.SKYLARK_CONSTRUCTOR);
-          for (ObjcProvider provider : providers) {
-            moduleMaps.addTransitive(provider.get(TOP_LEVEL_MODULE_MAP));
-          }
-        }
       }
 
       builder.addModuleMapsForDirectDeps(moduleMaps.build());
@@ -403,7 +395,7 @@ final class CompilationAttributes {
           Iterables.filter(includes(), Predicates.not(PathFragment::isAbsolute));
       for (PathFragment include : relativeIncludes) {
         for (PathFragment rootFragment : rootFragments) {
-          paths.add(rootFragment.getRelative(include).normalize());
+          paths.add(rootFragment.getRelative(include));
         }
       }
     }

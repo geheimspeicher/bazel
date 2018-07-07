@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -24,16 +25,20 @@ import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.build.lib.syntax.Mutability.Freezable;
 import com.google.devtools.build.lib.syntax.Mutability.MutabilityException;
+import com.google.devtools.build.lib.syntax.Parser.ParsingLevel;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.SpellChecker;
+import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -74,7 +79,7 @@ import javax.annotation.Nullable;
  * that the words "dynamic" and "static" refer to the point of view of the source code, and here we
  * have a dual point of view.
  */
-public final class Environment implements Freezable {
+public final class Environment implements Freezable, Debuggable {
 
   /**
    * A phase for enabling or disabling certain builtin functions
@@ -82,29 +87,173 @@ public final class Environment implements Freezable {
   public enum Phase { WORKSPACE, LOADING, ANALYSIS }
 
   /**
-   * A mapping of bindings, along with a {@link Mutability} and a parent {@code Frame} from which to
-   * inherit bindings. The order of the bindings within a single {@code Frame} is deterministic but
-   * unspecified.
+   * A mapping of bindings, either mutable or immutable according to an associated
+   * {@link Mutability}. The order of the bindings within a single {@link Frame} is deterministic
+   * but unspecified.
    *
-   * <p>Each {@code Frame} can be thought of as either a lexical scope or a scope containing
-   * predefined variables. Bindings in a {@code Frame} may shadow those inherited from its parents.
-   * Thus, the chain of {@code Frame}s can represent a hierarchy of enclosing scopes, or a
-   * collection of builtin modules with a linear precedence ordering.
-   *
-   * <p>Any non-frozen {@code Frame} must have the same {@code Mutability} as the current {@link
+   * <p>Any non-frozen {@link Frame} must have the same {@link Mutability} as the current {@link
    * Environment}, to avoid interference from other evaluation contexts. For example, a {@link
-   * UserDefinedFunction} will close over the global frame of the {@code Environment} in which it
-   * was defined. When the function is called from other {@code Environment}s (possibly
-   * simultaneously), that global frame must already be frozen; a new local {@code Frame} is created
+   * UserDefinedFunction} will close over the global frame of the {@link Environment} in which it
+   * was defined. When the function is called from other {@link Environment}s (possibly
+   * simultaneously), that global frame must already be frozen; a new local {@link Frame} is created
    * to represent the lexical scope of the function.
    *
-   * A {@code Frame} can also be constructed in a two-phase process. To do this, call the nullary
-   * constructor to create an uninitialized {@code Frame}, then call {@link #initialize}. It is
-   * illegal to use any other method in-between these two calls, or to call {@link #initialize} on
-   * an already initialized {@code Frame}.
+   * <p>A {@link Frame} can have an associated "parent" {@link Frame}, which is used in {@link #get}
+   * and {@link #getTransitiveBindings()}
    */
-  public static final class Frame implements Freezable {
+  public interface Frame extends Freezable {
+    /**
+     * Gets a binding from this {@link Frame} or one of its transitive parents.
+     *
+     * <p>In case of conflicts, the binding found in the {@link Frame} closest to the current one is
+     * used; the remaining bindings are shadowed.
+     *
+     * @param varname the name of the variable whose value should be retrieved
+     * @return the value bound to the variable, or null if no binding is found
+     */
+    @Nullable
+    Object get(String varname);
 
+    /**
+     * Assigns or reassigns a binding in the current {@code Frame}.
+     *
+     * <p>If the binding has the same name as one in a transitive parent, the parent binding is
+     * shadowed (i.e., the parent is unaffected).
+     *
+     * @param env the {@link Environment} attempting the mutation
+     * @param varname the name of the variable to be bound
+     * @param value the value to bind to the variable
+     */
+    void put(Environment env, String varname, Object value) throws MutabilityException;
+
+    /**
+     * TODO(laurentlb): Remove this method when possible. It should probably not
+     * be part of the public interface.
+     */
+    void remove(Environment env, String varname) throws MutabilityException;
+
+    /**
+     * Returns a map containing all bindings of this {@link Frame} and of its transitive
+     * parents, taking into account shadowing precedence.
+     *
+     * <p>The bindings are returned in a deterministic order (for a given sequence of initial values
+     * and updates).
+     */
+    Map<String, Object> getTransitiveBindings();
+  }
+
+  interface LexicalFrame extends Frame {
+    static LexicalFrame create(Mutability mutability) {
+      return mutability.isFrozen()
+          ? ImmutableEmptyLexicalFrame.INSTANCE
+          : new MutableLexicalFrame(mutability);
+    }
+
+    static LexicalFrame createForUserDefinedFunctionCall(Mutability mutability, int numArgs) {
+      Preconditions.checkState(!mutability.isFrozen());
+      return new MutableLexicalFrame(mutability, /*initialCapacity=*/ numArgs);
+    }
+  }
+
+  private static final class ImmutableEmptyLexicalFrame implements LexicalFrame {
+    private static final ImmutableEmptyLexicalFrame INSTANCE = new ImmutableEmptyLexicalFrame();
+
+    @Override
+    public Mutability mutability() {
+      return Mutability.IMMUTABLE;
+    }
+
+    @Nullable
+    @Override
+    public Object get(String varname) {
+      return null;
+    }
+
+    @Override
+    public void put(Environment env, String varname, Object value) throws MutabilityException {
+      Mutability.checkMutable(this, env.mutability());
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public void remove(Environment env, String varname) throws MutabilityException {
+      Mutability.checkMutable(this, env.mutability());
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public Map<String, Object> getTransitiveBindings() {
+      return ImmutableMap.of();
+    }
+
+    @Override
+    public String toString() {
+      return "<ImmutableEmptyLexicalFrame>";
+    }
+  }
+
+  private static final class MutableLexicalFrame implements LexicalFrame {
+    private final Mutability mutability;
+    /** Bindings are maintained in order of creation. */
+    private final LinkedHashMap<String, Object> bindings;
+
+    private MutableLexicalFrame(Mutability mutability, int initialCapacity) {
+      this.mutability = mutability;
+      this.bindings = new LinkedHashMap<>(initialCapacity);
+    }
+
+    private MutableLexicalFrame(Mutability mutability) {
+      this.mutability = mutability;
+      this.bindings = new LinkedHashMap<>();
+    }
+
+    @Override
+    public Mutability mutability() {
+      return mutability;
+    }
+
+    @Nullable
+    @Override
+    public Object get(String varname) {
+      return bindings.get(varname);
+    }
+
+    @Override
+    public void put(Environment env, String varname, Object value) throws MutabilityException {
+      Mutability.checkMutable(this, env.mutability());
+      bindings.put(varname, value);
+    }
+
+    @Override
+    public void remove(Environment env, String varname) throws MutabilityException {
+      Mutability.checkMutable(this, env.mutability());
+      bindings.remove(varname);
+    }
+
+    @Override
+    public Map<String, Object> getTransitiveBindings() {
+      return bindings;
+    }
+
+    @Override
+    public String toString() {
+      return String.format("<MutableLexicalFrame%s>", mutability());
+    }
+  }
+
+  /**
+   * A {@link Frame} that can have a parent {@link GlobalFrame} from which it inherits bindings.
+   *
+   * <p>Bindings in a {@link GlobalFrame} may shadow those inherited from its parents. A chain of
+   * {@link GlobalFrame}s can represent different builtin scopes with a linear precedence ordering.
+   *
+   * <p>A {@link GlobalFrame} can also be constructed in a two-phase process. To do this, call the
+   * nullary constructor to create an uninitialized {@link GlobalFrame}, then call
+   * {@link #initialize}. It is illegal to use any other method in-between these two calls, or to
+   * call {@link #initialize} on an already initialized {@link GlobalFrame}.
+   */
+
+  public static final class GlobalFrame implements Frame {
     /**
      * Final, except that it may be initialized after instantiation. Null mutability indicates that
      * this Frame is uninitialized.
@@ -114,7 +263,7 @@ public final class Environment implements Freezable {
 
     /** Final, except that it may be initialized after instantiation. */
     @Nullable
-    private Frame parent;
+    private GlobalFrame parent;
 
     /**
      * If this frame is a global frame, the label for the corresponding target, e.g. {@code
@@ -125,29 +274,47 @@ public final class Environment implements Freezable {
     @Nullable
     private Label label;
 
-    private final Map<String, Object> bindings;
+    /** Bindings are maintained in order of creation. */
+    private final LinkedHashMap<String, Object> bindings;
 
     /** Constructs an uninitialized instance; caller must call {@link #initialize} before use. */
-    public Frame() {
+    public GlobalFrame() {
       this.mutability = null;
       this.parent = null;
       this.label = null;
       this.bindings = new LinkedHashMap<>();
     }
 
-    public Frame(Mutability mutability, @Nullable Frame parent, @Nullable Label label) {
+    public GlobalFrame(
+        Mutability mutability,
+        @Nullable GlobalFrame parent,
+        @Nullable Label label,
+        @Nullable Map<String, Object> bindings) {
       this.mutability = Preconditions.checkNotNull(mutability);
       this.parent = parent;
       this.label = label;
       this.bindings = new LinkedHashMap<>();
+      if (bindings != null) {
+        this.bindings.putAll(bindings);
+      }
     }
 
-    public Frame(Mutability mutability) {
-      this(mutability, null, null);
+    public GlobalFrame(Mutability mutability) {
+      this(mutability, null, null, null);
     }
 
-    public Frame(Mutability mutability, Frame parent) {
-      this(mutability, parent, null);
+    public GlobalFrame(Mutability mutability, @Nullable GlobalFrame parent) {
+      this(mutability, parent, null, null);
+    }
+
+    public GlobalFrame(Mutability mutability, @Nullable GlobalFrame parent, @Nullable Label label) {
+      this(mutability, parent, label, null);
+    }
+
+    /** Constructs a global frame for the given builtin bindings. */
+    public static GlobalFrame createForBuiltins(Map<String, Object> bindings) {
+      Mutability mutability = Mutability.create("<builtins>").freeze();
+      return new GlobalFrame(mutability, null, null, bindings);
     }
 
     private void checkInitialized() {
@@ -155,7 +322,7 @@ public final class Environment implements Freezable {
     }
 
     public void initialize(
-        Mutability mutability, @Nullable Frame parent,
+        Mutability mutability, @Nullable GlobalFrame parent,
         @Nullable Label label, Map<String, Object> bindings) {
       Preconditions.checkState(this.mutability == null,
           "Attempted to initialize an already initialized Frame");
@@ -166,16 +333,16 @@ public final class Environment implements Freezable {
     }
 
     /**
-     * Returns a new {@code Frame} that is a copy of this one, but with {@code label} set to the
-     * given value.
+     * Returns a new {@link GlobalFrame} that is a descendant of this one with {@link #label} set to
+     * the given value.
      */
-    public Frame withLabel(Label label) {
+    public GlobalFrame withLabel(Label label) {
       checkInitialized();
-      return new Frame(mutability, this, label);
+      return new GlobalFrame(mutability, this, label);
     }
 
     /**
-     * Returns the {@link Mutability} of this {@code Frame}, which may be different from its
+     * Returns the {@link Mutability} of this {@link GlobalFrame}, which may be different from its
      * parent's.
      */
     @Override
@@ -184,9 +351,9 @@ public final class Environment implements Freezable {
       return mutability;
     }
 
-    /** Returns the parent {@code Frame}, if it exists. */
+    /** Returns the parent {@link GlobalFrame}, if it exists. */
     @Nullable
-    public Frame getParent() {
+    public GlobalFrame getParent() {
       checkInitialized();
       return parent;
     }
@@ -204,8 +371,8 @@ public final class Environment implements Freezable {
     }
 
     /**
-     * Walks from this {@code Frame} up through transitive parents, and returns the first non-null
-     * label found, or null if all labels are null.
+     * Walks from this {@link GlobalFrame} up through transitive parents, and returns the first
+     * non-null label found, or null if all labels are null.
      */
     @Nullable
     public Label getTransitiveLabel() {
@@ -220,29 +387,29 @@ public final class Environment implements Freezable {
     }
 
     /**
-     * Returns a map of direct bindings of this {@code Frame}, ignoring parents.
+     * Returns a map of direct bindings of this {@link GlobalFrame}, ignoring parents.
+     *
+     * <p>The bindings are returned in a deterministic order (for a given sequence of initial values
+     * and updates).
      *
      * <p>For efficiency an unmodifiable view is returned. Callers should assume that the view is
-     * invalidated by any subsequent modification to the {@code Frame}'s bindings.
+     * invalidated by any subsequent modification to the {@link GlobalFrame}'s bindings.
      */
     public Map<String, Object> getBindings() {
       checkInitialized();
       return Collections.unmodifiableMap(bindings);
     }
 
-    /**
-     * Returns a map containing all bindings of this {@code Frame} and of its transitive parents,
-     * taking into account shadowing precedence.
-     */
+    @Override
     public Map<String, Object> getTransitiveBindings() {
       checkInitialized();
       // Can't use ImmutableMap.Builder because it doesn't allow duplicates.
-      HashMap<String, Object> collectedBindings = new HashMap<>();
+      LinkedHashMap<String, Object> collectedBindings = new LinkedHashMap<>();
       accumulateTransitiveBindings(collectedBindings);
       return collectedBindings;
     }
 
-    private void accumulateTransitiveBindings(Map<String, Object> accumulator) {
+    private void accumulateTransitiveBindings(LinkedHashMap<String, Object> accumulator) {
       checkInitialized();
       // Put parents first, so child bindings take precedence.
       if (parent != null) {
@@ -251,19 +418,12 @@ public final class Environment implements Freezable {
       accumulator.putAll(bindings);
     }
 
-    /**
-     * Gets a binding from the current {@code Frame} or one of its transitive parents.
-     *
-     * <p>In case of conflicts, the binding found in the {@code Frame} closest to the current one is
-     * used; the remaining bindings are shadowed.
-     *
-     * @param varname the name of the variable to be bound
-     * @return the value bound to the variable, or null if no binding is found
-     */
+    @Override
     public Object get(String varname) {
       checkInitialized();
-      if (bindings.containsKey(varname)) {
-        return bindings.get(varname);
+      Object val = bindings.get(varname);
+      if (val != null) {
+        return val;
       }
       if (parent != null) {
         return parent.get(varname);
@@ -271,16 +431,7 @@ public final class Environment implements Freezable {
       return null;
     }
 
-    /**
-     * Assigns or reassigns a binding in the current {@code Frame}.
-     *
-     * <p>If the binding has the same name as one in a transitive parent, the parent binding is
-     * shadowed (i.e., the parent is unaffected).
-     *
-     * @param env the {@link Environment} attempting the mutation
-     * @param varname the name of the variable to be bound
-     * @param value the value to bind to the variable
-     */
+    @Override
     public void put(Environment env, String varname, Object value)
         throws MutabilityException {
       checkInitialized();
@@ -288,11 +439,8 @@ public final class Environment implements Freezable {
       bindings.put(varname, value);
     }
 
-    /**
-     * TODO(laurentlb): Remove this method when possible. It should probably not
-     * be part of the public interface.
-     */
-    void remove(Environment env, String varname) throws MutabilityException {
+    @Override
+    public void remove(Environment env, String varname) throws MutabilityException {
       checkInitialized();
       Mutability.checkMutable(this, env.mutability());
       bindings.remove(varname);
@@ -301,9 +449,9 @@ public final class Environment implements Freezable {
     @Override
     public String toString() {
       if (mutability == null) {
-        return "<Uninitialized Frame>";
+        return "<Uninitialized GlobalFrame>";
       } else {
-        return String.format("<Frame%s>", mutability());
+        return String.format("<GlobalFrame%s>", mutability());
       }
     }
   }
@@ -316,27 +464,27 @@ public final class Environment implements Freezable {
     final BaseFunction function;
 
     /** The {@link FuncallExpression} to which this Continuation will return. */
-    final FuncallExpression caller;
+    @Nullable final FuncallExpression caller;
 
     /** The next Continuation after this Continuation. */
     @Nullable final Continuation continuation;
 
     /** The lexical Frame of the caller. */
-    final Frame lexicalFrame;
+    final LexicalFrame lexicalFrame;
 
     /** The global Frame of the caller. */
-    final Frame globalFrame;
+    final GlobalFrame globalFrame;
 
     /** The set of known global variables of the caller. */
-    @Nullable final Set<String> knownGlobalVariables;
+    @Nullable final LinkedHashSet<String> knownGlobalVariables;
 
     Continuation(
-        Continuation continuation,
+        @Nullable Continuation continuation,
         BaseFunction function,
-        FuncallExpression caller,
-        Frame lexicalFrame,
-        Frame globalFrame,
-        Set<String> knownGlobalVariables) {
+        @Nullable FuncallExpression caller,
+        LexicalFrame lexicalFrame,
+        GlobalFrame globalFrame,
+        @Nullable LinkedHashSet<String> knownGlobalVariables) {
       this.continuation = continuation;
       this.function = function;
       this.caller = caller;
@@ -348,6 +496,9 @@ public final class Environment implements Freezable {
 
   /** An Extension to be imported with load() into a BUILD or .bzl file. */
   @Immutable
+  // TODO(janakr,brandjon): Do Extensions actually have to start their own memoization? Or can we
+  // have a node higher up in the hierarchy inject the mutability?
+  @AutoCodec
   public static final class Extension {
 
     private final ImmutableMap<String, Object> bindings;
@@ -360,6 +511,7 @@ public final class Environment implements Freezable {
     private final String transitiveContentHashCode;
 
     /** Constructs with the given hash code and bindings. */
+    @AutoCodec.Instantiator
     public Extension(ImmutableMap<String, Object> bindings, String transitiveContentHashCode) {
       this.bindings = bindings;
       this.transitiveContentHashCode = transitiveContentHashCode;
@@ -377,6 +529,7 @@ public final class Environment implements Freezable {
       return transitiveContentHashCode;
     }
 
+    /** Retrieves all bindings, in a deterministic order. */
     public ImmutableMap<String, Object> getBindings() {
       return bindings;
     }
@@ -392,6 +545,14 @@ public final class Environment implements Freezable {
       Extension other = (Extension) obj;
       return transitiveContentHashCode.equals(other.getTransitiveContentHashCode())
           && bindings.equals(other.getBindings());
+    }
+
+    private static boolean skylarkObjectsProbablyEqual(Object obj1, Object obj2) {
+      // TODO(b/76154791): check this more carefully.
+      return obj1.equals(obj2)
+          || (obj1 instanceof SkylarkValue
+              && obj2 instanceof SkylarkValue
+              && Printer.repr(obj1).equals(Printer.repr(obj2)));
     }
 
     /**
@@ -425,15 +586,50 @@ public final class Environment implements Freezable {
       for (String name : names) {
         Object value = bindings.get(name);
         Object otherValue = otherBindings.get(name);
-        if (!value.equals(otherValue)) {
-          badEntries.add(String.format(
-              "%s: this one has %s (class %s), but given one has %s (class %s)",
-              name,
-              Printer.repr(value),
-              value.getClass().getName(),
-              Printer.repr(otherValue),
-              otherValue.getClass().getName()));
+        if (value.equals(otherValue)) {
+          continue;
         }
+        if (value instanceof SkylarkNestedSet) {
+          if (otherValue instanceof SkylarkNestedSet
+              && ((SkylarkNestedSet) value)
+                  .toCollection()
+                  .equals(((SkylarkNestedSet) otherValue).toCollection())) {
+            continue;
+          }
+        } else if (value instanceof SkylarkDict) {
+          if (otherValue instanceof SkylarkDict) {
+            @SuppressWarnings("unchecked")
+            SkylarkDict<Object, Object> thisDict = (SkylarkDict<Object, Object>) value;
+            @SuppressWarnings("unchecked")
+            SkylarkDict<Object, Object> otherDict = (SkylarkDict<Object, Object>) otherValue;
+            if (thisDict.size() == otherDict.size()
+                && thisDict.keySet().equals(otherDict.keySet())) {
+              boolean foundProblem = false;
+              for (Object key : thisDict.keySet()) {
+                if (!skylarkObjectsProbablyEqual(
+                    Preconditions.checkNotNull(thisDict.get(key), key),
+                    Preconditions.checkNotNull(otherDict.get(key), key))) {
+                  foundProblem = true;
+                }
+              }
+              if (!foundProblem) {
+                continue;
+              }
+            }
+          }
+        } else if (skylarkObjectsProbablyEqual(value, otherValue)) {
+          continue;
+        }
+        badEntries.add(
+            String.format(
+                "%s: this one has %s (class %s, %s), but given one has %s (class %s, %s)",
+                name,
+                Printer.repr(value),
+                value.getClass().getName(),
+                value,
+                Printer.repr(otherValue),
+                otherValue.getClass().getName(),
+                otherValue));
       }
       if (!badEntries.isEmpty()) {
         throw new IllegalStateException(
@@ -459,7 +655,7 @@ public final class Environment implements Freezable {
    * Static Frame for lexical variables that are always looked up in the current Environment
    * or for the definition Environment of the function currently being evaluated.
    */
-  private Frame lexicalFrame;
+  private LexicalFrame lexicalFrame;
 
   /**
    * Static Frame for global variables; either the current lexical Frame if evaluation is currently
@@ -467,7 +663,7 @@ public final class Environment implements Freezable {
    * definition if evaluation is currently happening in the body of a function. Thus functions can
    * close over other functions defined in the same file.
    */
-  private Frame globalFrame;
+  private GlobalFrame globalFrame;
 
   /**
    * Dynamic Frame for variables that are always looked up in the runtime Environment,
@@ -507,7 +703,7 @@ public final class Environment implements Freezable {
    * reads a global variable after which a local variable with the same name is assigned an
    * Exception needs to be thrown.
    */
-  @Nullable private Set<String> knownGlobalVariables;
+  @Nullable private LinkedHashSet<String> knownGlobalVariables;
 
   /**
    * When in a lexical (Skylark) frame, this lists the names of the functions in the call stack.
@@ -524,20 +720,23 @@ public final class Environment implements Freezable {
 
   /**
    * Enters a scope by saving state to a new Continuation
+   *
    * @param function the function whose scope to enter
+   * @param lexical the lexical frame to use
    * @param caller the source AST node for the caller
    * @param globals the global Frame that this function closes over from its definition Environment
    */
-  void enterScope(BaseFunction function, FuncallExpression caller, Frame globals) {
+  void enterScope(
+      BaseFunction function,
+      LexicalFrame lexical,
+      @Nullable FuncallExpression caller,
+      GlobalFrame globals) {
     continuation =
         new Continuation(
             continuation, function, caller, lexicalFrame, globalFrame, knownGlobalVariables);
-    // TODO(bazel-team): What if instead of tracking both the lexical and global frames from the
-    // Environment, we instead just tracked the current lexical frame, and made the global frame its
-    // parent?
-    lexicalFrame = new Frame(mutability(), null);
+    lexicalFrame = lexical;
     globalFrame = globals;
-    knownGlobalVariables = new HashSet<>();
+    knownGlobalVariables = new LinkedHashSet<>();
   }
 
   /**
@@ -592,15 +791,13 @@ public final class Environment implements Freezable {
     return dynamicFrame.mutability();
   }
 
-  /** @return the current Frame, in which variable side-effects happen. */
+  /** Returns the current Frame, in which variable side-effects happen. */
   private Frame currentFrame() {
     return isGlobal() ? globalFrame : lexicalFrame;
   }
 
-  /**
-   * @return the global variables for the Environment (not including dynamic bindings).
-   */
-  public Frame getGlobals() {
+  /** Returns the global variables for the Environment (not including dynamic bindings). */
+  public GlobalFrame getGlobals() {
     return globalFrame;
   }
 
@@ -658,8 +855,8 @@ public final class Environment implements Freezable {
    * @param callerLabel the label this environment came from
    */
   private Environment(
-      Frame globalFrame,
-      Frame dynamicFrame,
+      GlobalFrame globalFrame,
+      LexicalFrame dynamicFrame,
       SkylarkSemantics semantics,
       EventHandler eventHandler,
       Map<String, Extension> importedExtensions,
@@ -688,7 +885,7 @@ public final class Environment implements Freezable {
   public static class Builder {
     private final Mutability mutability;
     private Phase phase = Phase.ANALYSIS;
-    @Nullable private Frame parent;
+    @Nullable private GlobalFrame parent;
     @Nullable private SkylarkSemantics semantics;
     @Nullable private EventHandler eventHandler;
     @Nullable private Map<String, Extension> importedExtensions;
@@ -699,14 +896,6 @@ public final class Environment implements Freezable {
       this.mutability = mutability;
     }
 
-    /**
-     * Obsolete, doesn't do anything.
-     * TODO(laurentlb): To be removed once call-sites have been updated
-     */
-    public Builder setSkylark() {
-      return this;
-    }
-
     /** Enables loading or workspace phase only functions in this Environment. */
     public Builder setPhase(Phase phase) {
       Preconditions.checkState(this.phase == Phase.ANALYSIS);
@@ -715,7 +904,7 @@ public final class Environment implements Freezable {
     }
 
     /** Inherits global bindings from the given parent Frame. */
-    public Builder setGlobals(Frame parent) {
+    public Builder setGlobals(GlobalFrame parent) {
       Preconditions.checkState(this.parent == null);
       this.parent = parent;
       return this;
@@ -755,10 +944,10 @@ public final class Environment implements Freezable {
     public Environment build() {
       Preconditions.checkArgument(!mutability.isFrozen());
       if (parent != null) {
-        Preconditions.checkArgument(parent.mutability().isFrozen());
+        Preconditions.checkArgument(parent.mutability().isFrozen(), "parent frame must be frozen");
       }
-      Frame globalFrame = new Frame(mutability, parent);
-      Frame dynamicFrame = new Frame(mutability, null);
+      GlobalFrame globalFrame = new GlobalFrame(mutability, parent);
+      LexicalFrame dynamicFrame = LexicalFrame.create(mutability);
       if (semantics == null) {
         throw new IllegalArgumentException("must call either setSemantics or useDefaultSemantics");
       }
@@ -907,7 +1096,7 @@ public final class Environment implements Freezable {
   }
 
   /**
-   * @return the value from the environment whose name is "varname" if it exists, otherwise null.
+   * Returns the value from the environment whose name is "varname" if it exists, otherwise null.
    */
   public Object lookup(String varname) {
     // Lexical frame takes precedence, then globals, then dynamics.
@@ -932,8 +1121,8 @@ public final class Environment implements Freezable {
   }
 
   /**
-   * @return true if varname is a known global variable,
-   * because it has been read in the context of the current function.
+   * Returns true if varname is a known global variable (i.e., it has been read in the context of
+   * the current function).
    */
   boolean isKnownGlobalVariable(String varname) {
     return knownGlobalVariables != null && knownGlobalVariables.contains(varname);
@@ -947,15 +1136,120 @@ public final class Environment implements Freezable {
     eventHandler.handle(event);
   }
 
-  /** Returns a set of all names of variables that are accessible in this {@code Environment}. */
+  /**
+   * Returns a set of all names of variables that are accessible in this {@code Environment}, in a
+   * deterministic order.
+   */
   public Set<String> getVariableNames() {
-    Set<String> vars = new HashSet<>();
+    LinkedHashSet<String> vars = new LinkedHashSet<>();
     if (lexicalFrame != null) {
       vars.addAll(lexicalFrame.getTransitiveBindings().keySet());
     }
     vars.addAll(globalFrame.getTransitiveBindings().keySet());
     vars.addAll(dynamicFrame.getTransitiveBindings().keySet());
     return vars;
+  }
+
+  private static final class EvalEventHandler implements EventHandler {
+    List<String> messages = new ArrayList<>();
+
+    @Override
+    public void handle(Event event) {
+      if (event.getKind() == EventKind.ERROR) {
+        messages.add(event.getMessage());
+      }
+    }
+  }
+
+  @Override
+  public Object evaluate(String contents) throws EvalException, InterruptedException {
+    ParserInputSource input =
+        ParserInputSource.create(contents, PathFragment.create("<debug eval>"));
+    EvalEventHandler eventHandler = new EvalEventHandler();
+    Statement statement = Parser.parseStatement(input, eventHandler, ParsingLevel.LOCAL_LEVEL);
+    if (!eventHandler.messages.isEmpty()) {
+      throw new EvalException(statement.getLocation(), eventHandler.messages.get(0));
+    }
+    // TODO(bazel-team): move statement handling code to Eval
+    // deal with the most common case first
+    if (statement.kind() == Statement.Kind.EXPRESSION) {
+      return ((ExpressionStatement) statement).getExpression().doEval(this);
+    }
+    // all other statement types are executed directly
+    Eval.fromEnvironment(this).exec(statement);
+    switch (statement.kind()) {
+      case ASSIGNMENT:
+      case AUGMENTED_ASSIGNMENT:
+        return ((AssignmentStatement) statement).getLValue().getExpression().doEval(this);
+      case RETURN:
+        Expression expr = ((ReturnStatement) statement).getReturnExpression();
+        return expr != null ? expr.doEval(this) : Runtime.NONE;
+      default:
+        return Runtime.NONE;
+    }
+  }
+
+  @Override
+  public ImmutableList<DebugFrame> listFrames(Location currentLocation) {
+    ImmutableList.Builder<DebugFrame> frameListBuilder = ImmutableList.builder();
+
+    Continuation currentContinuation = continuation;
+    Frame currentFrame = currentFrame();
+
+    // if there's a continuation then the current frame is a lexical frame
+    while (currentContinuation != null) {
+      frameListBuilder.add(
+          DebugFrame.builder()
+              .setLexicalFrameBindings(ImmutableMap.copyOf(currentFrame.getTransitiveBindings()))
+              .setGlobalBindings(ImmutableMap.copyOf(getGlobals().getTransitiveBindings()))
+              .setFunctionName(currentContinuation.function.getFullName())
+              .setLocation(currentLocation)
+              .build());
+
+      currentFrame = currentContinuation.lexicalFrame;
+      currentLocation =
+          currentContinuation.caller != null ? currentContinuation.caller.getLocation() : null;
+      currentContinuation = currentContinuation.continuation;
+    }
+
+    frameListBuilder.add(
+        DebugFrame.builder()
+            .setGlobalBindings(ImmutableMap.copyOf(getGlobals().getTransitiveBindings()))
+            .setFunctionName("<top level>")
+            .setLocation(currentLocation)
+            .build());
+
+    return frameListBuilder.build();
+  }
+
+  @Override
+  @Nullable
+  public ReadyToPause stepControl(Stepping stepping) {
+    final Continuation pausedContinuation = continuation;
+
+    switch (stepping) {
+      case NONE:
+        return null;
+      case INTO:
+        // pause at the very next statement
+        return env -> true;
+      case OVER:
+        return env -> isAt(env, pausedContinuation) || isOutside(env, pausedContinuation);
+      case OUT:
+        // if we're at the outer-most frame, same as NONE
+        return pausedContinuation == null ? null : env -> isOutside(env, pausedContinuation);
+    }
+    throw new IllegalArgumentException("Unsupported stepping type: " + stepping);
+  }
+
+  /** Returns true if {@code env} is in a parent frame of {@code pausedContinuation}. */
+  private static boolean isOutside(Environment env, @Nullable Continuation pausedContinuation) {
+    return pausedContinuation != null && env.continuation == pausedContinuation.continuation;
+  }
+
+  /** Returns true if {@code env} is at the same frame as {@code pausedContinuation. */
+  private static boolean isAt(Environment env, @Nullable Continuation pausedContinuation) {
+    return env.continuation == pausedContinuation;
   }
 
   @Override
@@ -1016,6 +1310,10 @@ public final class Environment implements Freezable {
     }
   }
 
+  /**
+   * Computes a deterministic hash for the given base hash code and extension map (the map's order
+   * does not matter).
+   */
   private static String computeTransitiveContentHashCode(
       @Nullable String baseHashCode, Map<String, Extension> importedExtensions) {
     // Calculate a new hash from the hash of the loaded Extension-s.
@@ -1038,34 +1336,29 @@ public final class Environment implements Freezable {
     return transitiveHashCode;
   }
 
-  /** A read-only Environment.Frame with global constants in it only */
-  static final Frame CONSTANTS_ONLY = createConstantsGlobals();
+  /** A read-only {@link Environment.GlobalFrame} with False/True/None constants only. */
+  static final GlobalFrame CONSTANTS_ONLY = createConstantsGlobals();
 
-  /** A read-only Environment.Frame with initial globals */
-  public static final Frame DEFAULT_GLOBALS = createDefaultGlobals();
+  /**
+   * A read-only {@link Environment.GlobalFrame} with initial globals as defined in
+   * MethodLibrary.
+   */
+  public static final GlobalFrame DEFAULT_GLOBALS = createDefaultGlobals();
 
   /** To be removed when all call-sites are updated. */
-  public static final Frame SKYLARK = DEFAULT_GLOBALS;
+  public static final GlobalFrame SKYLARK = DEFAULT_GLOBALS;
 
-  private static Environment.Frame createConstantsGlobals() {
-    try (Mutability mutability = Mutability.create("CONSTANTS")) {
-      Environment env = Environment.builder(mutability)
-          .useDefaultSemantics()
-          .build();
-      Runtime.setupConstants(env);
-      return env.getGlobals();
-    }
+  private static Environment.GlobalFrame createConstantsGlobals() {
+    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    Runtime.addConstantsToBuilder(builder);
+    return GlobalFrame.createForBuiltins(builder.build());
   }
 
-  private static Environment.Frame createDefaultGlobals() {
-    try (Mutability mutability = Mutability.create("BUILD")) {
-      Environment env = Environment.builder(mutability)
-          .useDefaultSemantics()
-          .build();
-      Runtime.setupConstants(env);
-      Runtime.setupMethodEnvironment(env, MethodLibrary.defaultGlobalFunctions);
-      return env.getGlobals();
-    }
+  private static Environment.GlobalFrame createDefaultGlobals() {
+    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    Runtime.addConstantsToBuilder(builder);
+    MethodLibrary.addBindingsToBuilder(builder);
+    return GlobalFrame.createForBuiltins(builder.build());
   }
 
   /** An exception thrown by {@link #FAIL_FAST_HANDLER}. */

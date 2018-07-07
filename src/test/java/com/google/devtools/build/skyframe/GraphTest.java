@@ -41,8 +41,6 @@ import org.junit.Test;
 
 /** Base class for sanity tests on {@link EvaluableGraph} implementations. */
 public abstract class GraphTest {
-
-  private static final SkyFunctionName SKY_FUNCTION_NAME = SkyFunctionName.FOR_TESTING;
   protected ProcessableGraph graph;
   protected TestRunnableWrapper wrapper;
   private final Version startingVersion = getStartingVersion();
@@ -71,7 +69,7 @@ public abstract class GraphTest {
   }
 
   protected SkyKey key(String name) {
-    return LegacySkyKey.create(SKY_FUNCTION_NAME, name);
+    return GraphTester.toSkyKey(name);
   }
 
   @Test
@@ -224,7 +222,7 @@ public abstract class GraphTest {
     graph = getGraph(getNextVersion(startingVersion));
     NodeEntry sameEntry = Preconditions.checkNotNull(graph.get(null, Reason.OTHER, key));
     // Mark the node as dirty again and check that the reverse deps have been preserved.
-    sameEntry.markDirty(true);
+    assertThat(sameEntry.markDirty(true).wasCallRedundant()).isFalse();
     startEvaluation(sameEntry);
     sameEntry.markRebuilding();
     sameEntry.setValue(new StringValue("foo2"), getNextVersion(startingVersion));
@@ -370,7 +368,7 @@ public abstract class GraphTest {
                 throw new IllegalStateException(e);
               }
               try {
-                entry.markDirty(true);
+                assertThat(entry.markDirty(true).wasCallRedundant()).isFalse();
 
                 // Make some changes, like adding a dep and rdep.
                 entry.addReverseDepAndCheckIfDone(key("rdep"));

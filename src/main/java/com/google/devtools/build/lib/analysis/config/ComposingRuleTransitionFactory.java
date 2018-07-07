@@ -15,15 +15,15 @@
 
 package com.google.devtools.build.lib.analysis.config;
 
-import com.google.devtools.build.lib.analysis.config.transitions.ComposingPatchTransition;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.packages.Rule;
 import com.google.devtools.build.lib.packages.RuleTransitionFactory;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 
-/**
- * A {@link RuleTransitionFactory} that composes other {@link RuleTransitionFactory}s.
- */
+/** A {@link RuleTransitionFactory} that composes other {@link RuleTransitionFactory}s. */
+@AutoCodec
 public class ComposingRuleTransitionFactory implements RuleTransitionFactory {
 
   private final RuleTransitionFactory rtf1;
@@ -39,20 +39,43 @@ public class ComposingRuleTransitionFactory implements RuleTransitionFactory {
   }
 
   @Override
-  public ConfigurationTransition buildTransitionFor(Rule rule) {
-    PatchTransition transition1 = (PatchTransition) rtf1.buildTransitionFor(rule);
-    PatchTransition transition2 = (PatchTransition) rtf2.buildTransitionFor(rule);
+  public PatchTransition buildTransitionFor(Rule rule) {
+    ConfigurationTransition composed = TransitionResolver.composeTransitions(
+        rtf1.buildTransitionFor(rule), rtf2.buildTransitionFor(rule));
+    if (composed instanceof PatchTransition) {
+      // This is one of the two input transitions. Especially if it's a NoTransition or
+      // HostTransition, we should give it back so it can be specially identified as described
+      // in composeTransitions.
+      return (PatchTransition) composed;
+    } else {
+      // This is a composed transition, but we need a composed transition which is both a
+      // PatchTransition and can be registered as equal to another instance of the same composed
+      // transition.
+      return new AsPatchTransition(composed);
+    }
+  }
 
-    if (transition1 == null) {
-      return transition2;
+  private static final class AsPatchTransition implements PatchTransition {
+    private final ConfigurationTransition wrapped;
+
+    private AsPatchTransition(ConfigurationTransition wrapped) {
+      this.wrapped = wrapped;
     }
 
-    if (transition2 == null) {
-      return transition1;
+    @Override
+    public BuildOptions patch(BuildOptions options) {
+      return Iterables.getOnlyElement(wrapped.apply(options));
     }
 
-    return new ComposingPatchTransition(
-        (PatchTransition) rtf1.buildTransitionFor(rule),
-        (PatchTransition) rtf2.buildTransitionFor(rule));
+    @Override
+    public int hashCode() {
+      return wrapped.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object other) {
+      return other instanceof AsPatchTransition
+          && this.wrapped.equals(((AsPatchTransition) other).wrapped);
+    }
   }
 }

@@ -18,13 +18,14 @@ import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Evaluation code for the Skylark AST. At the moment, it can execute only statements (and defers to
  * Expression.eval for evaluating expressions).
  */
 public class Eval {
-  private final Environment env;
+  protected final Environment env;
 
   /** An exception that signals changes in the control flow (e.g. break or continue) */
   private static class FlowException extends EvalException {
@@ -38,11 +39,31 @@ public class Eval {
     }
   }
 
+  public static Eval fromEnvironment(Environment env) {
+    return evalSupplier.apply(env);
+  }
+
+  public static void setEvalSupplier(Function<Environment, Eval> evalSupplier) {
+    Eval.evalSupplier = evalSupplier;
+  }
+
+  /** Reset Eval supplier to the default. */
+  public static void removeCustomEval() {
+    evalSupplier = Eval::new;
+  }
+
+  // TODO(bazel-team): remove this static state in favor of storing Eval instances in Environment
+  private static Function<Environment, Eval> evalSupplier = Eval::new;
+
   private static final FlowException breakException = new FlowException("FlowException - break");
   private static final FlowException continueException =
       new FlowException("FlowException - continue");
 
-  public Eval(Environment env) {
+  /**
+   * This constructor should never be called directly. Call {@link #fromEnvironment(Environment)}
+   * instead.
+   */
+  protected Eval(Environment env) {
     this.env = env;
   }
 
@@ -94,13 +115,10 @@ public class Eval {
       }
     }
 
+    // TODO(laurentlb): Could be moved to the Parser or the ValidationEnvironment?
     FunctionSignature sig = node.getSignature().getSignature();
-    if (env.getSemantics().incompatibleDisallowKeywordOnlyArgs()
-        && sig.getShape().getMandatoryNamedOnly() > 0) {
-      throw new EvalException(
-          node.getLocation(),
-          "Keyword-only argument is forbidden. You can temporarily disable this "
-              + "error using the flag --incompatible_disallow_keyword_only_args=false");
+    if (sig.getShape().getMandatoryNamedOnly() > 0) {
+      throw new EvalException(node.getLocation(), "Keyword-only argument is forbidden.");
     }
 
     env.update(
@@ -114,7 +132,10 @@ public class Eval {
   }
 
   void execIf(IfStatement node) throws EvalException, InterruptedException {
-    for (IfStatement.ConditionalStatements stmt : node.getThenBlocks()) {
+    ImmutableList<IfStatement.ConditionalStatements> thenBlocks = node.getThenBlocks();
+    // Avoid iterator overhead - most of the time there will be one or few "if"s.
+    for (int i = 0; i < thenBlocks.size(); i++) {
+      IfStatement.ConditionalStatements stmt = thenBlocks.get(i);
       if (EvalUtils.toBoolean(stmt.getCondition().eval(env))) {
         exec(stmt);
         return;
@@ -124,21 +145,10 @@ public class Eval {
   }
 
   void execLoad(LoadStatement node) throws EvalException, InterruptedException {
-    if (env.getSemantics().incompatibleLoadArgumentIsLabel()) {
-      String s = node.getImport().getValue();
-      if (!s.startsWith("//") && !s.startsWith(":") && !s.startsWith("@")) {
-        throw new EvalException(
-            node.getLocation(),
-            "First argument of 'load' must be a label and start with either '//', ':', or '@'. "
-                + "Use --incompatible_load_argument_is_label=false to temporarily disable this "
-                + "check.");
-      }
-    }
-
     for (Map.Entry<Identifier, String> entry : node.getSymbolMap().entrySet()) {
       try {
         Identifier name = entry.getKey();
-        Identifier declared = new Identifier(entry.getValue());
+        Identifier declared = Identifier.of(entry.getValue());
 
         if (declared.isPrivate()) {
           throw new EvalException(

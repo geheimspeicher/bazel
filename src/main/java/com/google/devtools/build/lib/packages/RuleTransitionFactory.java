@@ -14,19 +14,24 @@
 
 package com.google.devtools.build.lib.packages;
 
-import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
-import javax.annotation.Nullable;
+import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 
 /**
- * Customizable transition which accepts the rule's nonconfigurable attributes.
+ * Customizable transition which accepts the rule it will be executing on.
  */
 public interface RuleTransitionFactory {
   /**
    * Generates a transition to be used when entering the given rule.
    *
-   * <p>This transition must be a PatchTransition, but that class is not accessible in this package.
-   * If this class determines that no transition should be performed, it should return {@code null}.
+   * <p>This cannot be a
+   * {@link com.google.devtools.build.lib.analysis.config.transitions.SplitTransition} because
+   * splits are conceptually a property of the <i>parent<i> rule. In other words, it makes sense for
+   * a parent to say "build my deps in configurations A and B". But it doesn't make sense for a dep
+   * to say "build myself in configurations A and B" if its parent doesn't know how to intelligently
+   * handle the results.
+   *
+   * <p>If this class determines that no transition should be performed, it should return
+   * {@code NoTransition.INSTANCE}.
    */
-  @Nullable
-  ConfigurationTransition buildTransitionFor(Rule rule);
+  PatchTransition buildTransitionFor(Rule rule);
 }

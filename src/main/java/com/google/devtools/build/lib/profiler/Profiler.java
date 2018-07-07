@@ -20,6 +20,7 @@ import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.clock.Clock;
+import com.google.devtools.build.lib.collect.Extrema;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.profiler.PredicateBasedStatRecorder.RecorderAndPredicate;
@@ -29,19 +30,20 @@ import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.PriorityQueue;
-import java.util.Queue;
-import java.util.Timer;
-import java.util.TimerTask;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
@@ -130,26 +132,28 @@ public final class Profiler {
   // EOF marker. Must be < 0.
   public static final int EOF_MARKER = -1;
 
-  // Profiler will check for gathered data and persist all of it in the
-  // separate thread every SAVE_DELAY ms.
-  private static final int SAVE_DELAY = 2000; // ms
-
-  /**
-   * The profiler (a static singleton instance). Inactive by default.
-   */
+  /** The profiler (a static singleton instance). Inactive by default. */
   private static final Profiler instance = new Profiler();
 
   private static final int HISTOGRAM_BUCKETS = 20;
 
+  private static final TaskData POISON_PILL = new TaskData(0, 0, null, null, "poison pill");
+
+  /** File format enum. */
+  public static enum Format {
+    BINARY_BAZEL_FORMAT,
+    JSON_TRACE_FILE_FORMAT;
+  }
+
   /** A task that was very slow. */
   public static final class SlowTask implements Comparable<SlowTask> {
     final long durationNanos;
-    final Object object;
-    ProfilerTask type;
+    final String description;
+    final ProfilerTask type;
 
     private SlowTask(TaskData taskData) {
       this.durationNanos = taskData.duration;
-      this.object = taskData.object;
+      this.description = taskData.description;
       this.type = taskData.type;
     }
 
@@ -170,7 +174,7 @@ public final class Profiler {
     }
 
     public String getDescription() {
-      return toDescription(object);
+      return description;
     }
 
     public ProfilerTask getType() {
@@ -186,32 +190,29 @@ public final class Profiler {
    * methods is.
    */
   @ThreadCompatible
-  private final class TaskData {
+  private static final class TaskData {
     final long threadId;
-    final long startTime;
-    long duration = 0L;
+    final long startTimeNanos;
     final int id;
     final int parentId;
+    final ProfilerTask type;
+    final String description;
+
+    long duration;
     int[] counts; // number of invocations per ProfilerTask type
     long[] durations; // time spend in the task per ProfilerTask type
-    final ProfilerTask type;
-    final Object object;
 
-    TaskData(long startTime, TaskData parent,
-             ProfilerTask eventType, Object object) {
-      threadId = Thread.currentThread().getId();
-      counts = null;
-      durations = null;
-      id = taskId.incrementAndGet();
-      parentId = (parent == null  ? 0 : parent.id);
-      this.startTime = startTime;
+    TaskData(
+        int id, long startTimeNanos, TaskData parent, ProfilerTask eventType, String description) {
+      this.id = id;
+      this.threadId = Thread.currentThread().getId();
+      this.parentId = (parent == null  ? 0 : parent.id);
+      this.startTimeNanos = startTimeNanos;
       this.type = eventType;
-      this.object = Preconditions.checkNotNull(object);
+      this.description = Preconditions.checkNotNull(description);
     }
 
-    /**
-     * Aggregates information about an *immediate* subtask.
-     */
+    /** Aggregates information about an *immediate* subtask. */
     public void aggregateChild(ProfilerTask type, long duration) {
       int index = type.ordinal();
       if (counts == null) {
@@ -225,7 +226,7 @@ public final class Profiler {
 
     @Override
     public String toString() {
-      return "Thread " + threadId + ", task " + id + ", type " + type + ", " + object;
+      return "Thread " + threadId + ", task " + id + ", type " + type + ", " + description;
     }
   }
 
@@ -240,7 +241,6 @@ public final class Profiler {
    */
   @ThreadSafe
   private final class TaskStack extends ThreadLocal<List<TaskData>> {
-
     @Override
     public List<TaskData> initialValue() {
       return new ArrayList<>();
@@ -263,12 +263,12 @@ public final class Profiler {
       return get().isEmpty();
     }
 
-    public void push(ProfilerTask eventType, Object object) {
-      get().add(create(clock.nanoTime(), eventType, object));
+    public void push(ProfilerTask eventType, String description) {
+      get().add(create(clock.nanoTime(), eventType, description));
     }
 
-    public TaskData create(long startTime, ProfilerTask eventType, Object object) {
-      return new TaskData(startTime, peek(), eventType, object);
+    public TaskData create(long startTimeNanos, ProfilerTask eventType, String description) {
+      return new TaskData(taskId.incrementAndGet(), startTimeNanos, peek(), eventType, description);
     }
 
     @Override
@@ -284,12 +284,6 @@ public final class Profiler {
     }
   }
 
-  private static String toDescription(Object object) {
-    return (object instanceof Describable)
-        ? ((Describable) object).describe()
-        : object.toString();
-  }
-
   /**
    * Implements datastore for object description indices. Intended to be used only by the
    * Profiler.save() method.
@@ -301,21 +295,24 @@ public final class Profiler {
 
     ObjectDescriber() { }
 
-    int getDescriptionIndex(Object object) {
-      Integer index = descMap.get(object);
+    int getDescriptionIndex(String description) {
+      Integer index = descMap.get(description);
       return (index != null) ? index : -1;
     }
 
-    String getDescription(Object object) {
-      String description = toDescription(object);
-
-      Integer oldIndex = descMap.put(object, indexCounter++);
+    String memoizeDescription(String description) {
+      Integer oldIndex = descMap.put(description, indexCounter++);
       // Do not use Preconditions class below due to the rather expensive
       // toString() calls used in the message.
       if (oldIndex != null) {
-        throw new IllegalStateException(" Object '" + description + "' @ "
-            + System.identityHashCode(object) + " already had description index "
-            + oldIndex + " while assigning index " + descMap.get(object));
+        throw new IllegalStateException(
+            description
+                + "' @ "
+                + System.identityHashCode(description)
+                + " already had description index "
+                + oldIndex
+                + " while assigning index "
+                + descMap.get(description));
       } else if (description.length() > 20000) {
         // Note size 64k byte limitation in DataOutputStream#writeUTF().
         description = description.substring(0, 20000);
@@ -331,51 +328,40 @@ public final class Profiler {
   /**
    * Aggregator class that keeps track of the slowest tasks of the specified type.
    *
-   * <p><code>priorityQueues</p> is sharded so that all threads need not compete for the same
-   * lock if they do the same operation at the same time. Access to the individual queues is
-   * synchronized on the queue objects themselves.
+   * <p><code>extremaAggregators</p> is sharded so that all threads need not compete for the same
+   * lock if they do the same operation at the same time. Access to an individual {@link Extrema}
+   * is synchronized on the {@link Extrema} instance itself.
    */
   private static final class SlowestTaskAggregator {
     private static final int SHARDS = 16;
     private final int size;
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private final PriorityQueue<SlowTask>[] priorityQueues = new PriorityQueue[SHARDS];
+    private final Extrema<SlowTask>[] extremaAggregators = new Extrema[SHARDS];
 
     SlowestTaskAggregator(int size) {
       this.size = size;
 
       for (int i = 0; i < SHARDS; i++) {
-        priorityQueues[i] = new PriorityQueue<>(size + 1);
+        extremaAggregators[i] = Extrema.max(size);
       }
     }
 
     // @ThreadSafe
     void add(TaskData taskData) {
-      PriorityQueue<SlowTask> queue =
-          priorityQueues[(int) (Thread.currentThread().getId() % SHARDS)];
-      synchronized (queue) {
-        if (queue.size() == size) {
-          // Optimization: check if we are faster than the fastest element. If we are, we would
-          // be the ones to fall off the end of the queue, therefore, we can safely return early.
-          if (queue.peek().getDurationNanos() > taskData.duration) {
-            return;
-          }
-
-          queue.add(new SlowTask(taskData));
-          queue.remove();
-        } else {
-          queue.add(new SlowTask(taskData));
-        }
+      Extrema<SlowTask> extrema =
+          extremaAggregators[(int) (Thread.currentThread().getId() % SHARDS)];
+      synchronized (extrema) {
+        extrema.aggregate(new SlowTask(taskData));
       }
     }
 
     // @ThreadSafe
     void clear() {
       for (int i = 0; i < SHARDS; i++) {
-        PriorityQueue<SlowTask> queue = priorityQueues[i];
-        synchronized (queue) {
-          queue.clear();
+        Extrema<SlowTask> extrema = extremaAggregators[i];
+        synchronized (extrema) {
+          extrema.clear();
         }
       }
     }
@@ -383,19 +369,16 @@ public final class Profiler {
     // @ThreadSafe
     Iterable<SlowTask> getSlowestTasks() {
       // This is slow, but since it only happens during the end of the invocation, it's OK
-      PriorityQueue<SlowTask> merged = new PriorityQueue<>(size * SHARDS);
+      Extrema<SlowTask> mergedExtrema = Extrema.max(size);
       for (int i = 0; i < SHARDS; i++) {
-        PriorityQueue<SlowTask> queue = priorityQueues[i];
-        synchronized (queue) {
-          merged.addAll(queue);
+        Extrema<SlowTask> extrema = extremaAggregators[i];
+        synchronized (extrema) {
+          for (SlowTask task : extrema.getExtremeElements()) {
+            mergedExtrema.aggregate(task);
+          }
         }
       }
-
-      while (merged.size() > size) {
-        merged.remove();
-      }
-
-      return merged;
+      return mergedExtrema.getExtremeElements();
     }
   }
 
@@ -429,6 +412,17 @@ public final class Profiler {
       }
     },
 
+    /** A set of tasks that's useful for the Json trace output. */
+    ALL_FOR_TRACE {
+      @Override
+      boolean isProfiling(ProfilerTask type) {
+        return !type.isVfs()
+            // Exclude the critical path - it's not useful in the Json trace output.
+            && type != ProfilerTask.CRITICAL_PATH
+            && type != ProfilerTask.CRITICAL_PATH_COMPONENT;
+      }
+    },
+
     /**
      * Profile all tasks.
      *
@@ -447,19 +441,29 @@ public final class Profiler {
 
   private Clock clock;
   private ProfiledTaskKinds profiledTaskKinds;
-  private volatile long profileStartTime = 0L;
+  private volatile long profileStartTime;
   private volatile boolean recordAllDurations = false;
+
+  /** This counter provides a unique id for every task, used to provide a parent/child relation. */
   private AtomicInteger taskId = new AtomicInteger();
 
+  /**
+   * The reference to the current writer, if any. If the referenced writer is null, then disk writes
+   * are disabled. This can happen when slowest task recording is enabled.
+   */
+  private AtomicReference<FileWriter> writerRef = new AtomicReference<>();
+
+  /**
+   * This is a per-thread data structure that's used to track the current stack of open tasks, the
+   * purpose of which is to track the parent id of every task. This is also used to ensure that
+   * {@link #profile} and {@link #completeTask} calls always occur in pairs.
+   */
+  // TODO(ulfjack): We can infer the parent/child relationship after the fact instead of tracking it
+  // at runtime. That would allow us to remove this data structure entirely.
   private TaskStack taskStack;
-  private Queue<TaskData> taskQueue;
-  private DataOutputStream out;
-  private Timer timer;
-  private IOException saveException;
-  private ObjectDescriber describer;
-  @SuppressWarnings("unchecked")
+
   private final SlowestTaskAggregator[] slowestTasks =
-  new SlowestTaskAggregator[ProfilerTask.values().length];
+      new SlowestTaskAggregator[ProfilerTask.values().length];
 
   private final StatRecorder[] tasksHistograms = new StatRecorder[ProfilerTask.values().length];
 
@@ -478,7 +482,7 @@ public final class Profiler {
         Map<String, ? extends Predicate<? super String>> vfsHeuristics =
             VfsHeuristics.vfsTypeHeuristics;
         List<RecorderAndPredicate> recorders = new ArrayList<>(vfsHeuristics.size());
-        for (Entry<String, ? extends Predicate<? super String>> e : vfsHeuristics.entrySet()) {
+        for (Map.Entry<String, ? extends Predicate<? super String>> e : vfsHeuristics.entrySet()) {
           recorders.add(new RecorderAndPredicate(
               new SingleStatRecorder(task + " " + e.getKey(), HISTOGRAM_BUCKETS), e.getValue()));
         }
@@ -489,6 +493,16 @@ public final class Profiler {
     }
   }
 
+  /**
+   * Returns task histograms. This must be called between calls to {@link #start} and {@link #stop},
+   * or the returned recorders are all empty. Note that the returned recorders may still be modified
+   * concurrently (but at least they are thread-safe, so that's good).
+   *
+   * <p>The stat recorders are indexed by {@code ProfilerTask#ordinal}.
+   */
+  // TODO(ulfjack): This returns incomplete data by design. Maybe we should return the histograms on
+  // stop instead? However, this is currently only called from one location in a module, and that
+  // can't call stop itself. What to do?
   public ImmutableList<StatRecorder> getTasksHistograms() {
     return ImmutableList.copyOf(tasksHistograms);
   }
@@ -524,13 +538,16 @@ public final class Profiler {
    * @param clock a {@code BlazeClock.instance()}
    * @param execStartTimeNanos execution start time in nanos obtained from {@code clock.nanoTime()}
    */
-  public synchronized void start(ProfiledTaskKinds profiledTaskKinds, OutputStream stream,
-      String comment, boolean recordAllDurations, Clock clock, long execStartTimeNanos)
-      throws IOException {
+  public synchronized void start(
+      ProfiledTaskKinds profiledTaskKinds,
+      OutputStream stream,
+      Format format,
+      String comment,
+      boolean recordAllDurations,
+      Clock clock,
+      long execStartTimeNanos) {
     Preconditions.checkState(!isActive(), "Profiler already active");
-    taskStack = new TaskStack();
-    taskQueue = new ConcurrentLinkedQueue<>();
-    describer = new ObjectDescriber();
+    initHistograms();
 
     this.profiledTaskKinds = profiledTaskKinds;
     this.clock = clock;
@@ -543,38 +560,28 @@ public final class Profiler {
     // reset state for the new profiling session
     taskId.set(0);
     this.recordAllDurations = recordAllDurations;
-    this.saveException = null;
+    this.taskStack = new TaskStack();
+    FileWriter writer = null;
     if (stream != null) {
-      this.timer = new Timer("ProfilerTimer", true);
-      // Wrapping deflater stream in the buffered stream proved to reduce CPU consumption caused by
-      // the save() method. Values for buffer sizes were chosen by running small amount of tests
-      // and identifying point of diminishing returns - but I have not really tried to optimize
-      // them.
-      this.out = new DataOutputStream(new BufferedOutputStream(new DeflaterOutputStream(
-          stream, new Deflater(Deflater.BEST_SPEED, false), 65536), 262144));
-
-      this.out.writeInt(MAGIC); // magic
-      this.out.writeInt(VERSION); // protocol_version
-      this.out.writeUTF(comment);
-      // ProfileTask.values() method sorts enums using their ordinal() value, so
-      // there there is no need to store ordinal() value for each entry.
-      this.out.writeInt(TASK_COUNT);
-      for (ProfilerTask type : ProfilerTask.values()) {
-        this.out.writeUTF(type.toString());
+      if (format == Format.BINARY_BAZEL_FORMAT) {
+        writer = new BinaryFormatWriter(stream, execStartTimeNanos, comment);
+        writer.start();
+      } else if (format == Format.JSON_TRACE_FILE_FORMAT) {
+        writer = new JsonTraceFileWriter(stream, execStartTimeNanos);
+        writer.start();
       }
-
-      // Start save thread
-      timer.schedule(new TimerTask() {
-        @Override public void run() { save(); }
-      }, SAVE_DELAY, SAVE_DELAY);
-    } else {
-      this.out = null;
     }
+    this.writerRef.set(writer);
 
     // activate profiler
     profileStartTime = execStartTimeNanos;
   }
 
+  /**
+   * Returns task histograms. This must be called between calls to {@link #start} and {@link #stop},
+   * or the returned list is empty.
+   */
+  // TODO(ulfjack): This returns incomplete data by design. Also see getTasksHistograms.
   public synchronized Iterable<SlowTask> getSlowestTasks() {
     List<Iterable<SlowTask>> slowestTasksByType = new ArrayList<>();
 
@@ -593,30 +600,24 @@ public final class Profiler {
    * be recorded in the profile.
    */
   public synchronized void stop() throws IOException {
-    if (saveException != null) {
-      throw saveException;
-    }
     if (!isActive()) {
       return;
     }
     // Log a final event to update the duration of ProfilePhase.FINISH.
     logEvent(ProfilerTask.INFO, "Finishing");
-    save();
-    clear();
+    FileWriter writer = writerRef.getAndSet(null);
+    if (writer != null) {
+      writer.shutdown();
+      writer = null;
+    }
+    taskStack = null;
+    initHistograms();
+    profileStartTime = 0L;
 
     for (SlowestTaskAggregator aggregator : slowestTasks) {
       if (aggregator != null) {
         aggregator.clear();
       }
-    }
-
-    if (saveException != null) {
-      throw saveException;
-    }
-    if (out != null) {
-      out.writeInt(EOF_MARKER);
-      out.close();
-      out = null;
     }
   }
 
@@ -632,81 +633,6 @@ public final class Profiler {
   }
 
   /**
-   * Saves all gathered information from taskQueue queue to the file.
-   * Method is invoked internally by the Timer-based thread and at the end of
-   * profiling session.
-   */
-  private synchronized void save() {
-    if (out == null) {
-      return;
-    }
-    try {
-      // Allocate the sink once to avoid GC
-      ByteBuffer sink = ByteBuffer.allocate(1024);
-      while (!taskQueue.isEmpty()) {
-        sink.clear();
-        TaskData data = taskQueue.poll();
-
-        VarInt.putVarLong(data.threadId, sink);
-        VarInt.putVarInt(data.id, sink);
-        VarInt.putVarInt(data.parentId, sink);
-        VarInt.putVarLong(data.startTime - profileStartTime, sink);
-        VarInt.putVarLong(data.duration, sink);
-
-        // To save space (and improve performance), convert all description
-        // strings to the canonical object and use IdentityHashMap to assign
-        // unique numbers for each string.
-        int descIndex = describer.getDescriptionIndex(data.object);
-        VarInt.putVarInt(descIndex + 1, sink); // Add 1 to avoid encoding negative values.
-
-        // Save types using their ordinal() value
-        sink.put((byte) data.type.ordinal());
-
-        // Save aggregated data stats.
-        if (data.counts != null) {
-          for (int i = 0; i < TASK_COUNT; i++) {
-            if (data.counts[i] > 0) {
-              sink.put((byte) i); // aggregated type ordinal value
-              VarInt.putVarInt(data.counts[i], sink);
-              VarInt.putVarLong(data.durations[i], sink);
-            }
-          }
-        }
-
-        this.out.writeInt(sink.position());
-        this.out.write(sink.array(), 0, sink.position());
-        if (describer.isUnassigned(descIndex)) {
-          this.out.writeUTF(describer.getDescription(data.object));
-        }
-      }
-      this.out.flush();
-    } catch (IOException e) {
-      saveException = e;
-      clear();
-      try {
-        out.close();
-      } catch (IOException e2) {
-        // ignore it
-      }
-    }
-  }
-
-  private synchronized void clear() {
-    initHistograms();
-    profileStartTime = 0L;
-    if (timer != null) {
-      timer.cancel();
-      timer = null;
-    }
-    taskStack = null;
-    taskQueue = null;
-    describer = null;
-
-    // Note that slowest task aggregator are not cleared here because clearing happens
-    // periodically over the course of a command invocation.
-  }
-
-  /**
    * Unless --record_full_profiler_data is given we drop small tasks and add their time to the
    * parents duration.
    */
@@ -715,28 +641,28 @@ public final class Profiler {
   }
 
   /**
-   * Adds task directly to the main queue bypassing task stack. Used for simple
-   * tasks that are known to not have any subtasks.
+   * Adds task directly to the main queue bypassing task stack. Used for simple tasks that are known
+   * to not have any subtasks.
    *
-   * @param startTime task start time (obtained through {@link Profiler#nanoTimeMaybe()})
+   * @param startTimeNanos task start time (obtained through {@link Profiler#nanoTimeMaybe()})
    * @param duration task duration
    * @param type task type
-   * @param object object associated with that task. Can be String object that
-   *               describes it.
+   * @param description task description. May be stored until end of build.
    */
-  private void logTask(long startTime, long duration, ProfilerTask type, Object object) {
-    Preconditions.checkNotNull(object);
-    Preconditions.checkState(startTime > 0, "startTime was %s", startTime);
+  private void logTask(long startTimeNanos, long duration, ProfilerTask type, String description) {
+    Preconditions.checkNotNull(description);
+    Preconditions.checkState(startTimeNanos > 0, "startTime was %s", startTimeNanos);
     if (duration < 0) {
       // See note in Clock#nanoTime, which is used by Profiler#nanoTimeMaybe.
       duration = 0;
     }
 
-    tasksHistograms[type.ordinal()].addStat((int) TimeUnit.NANOSECONDS.toMillis(duration), object);
+    tasksHistograms[type.ordinal()].addStat(
+        (int) TimeUnit.NANOSECONDS.toMillis(duration), description);
     // Store instance fields as local variables so they are not nulled out from under us by #clear.
     TaskStack localStack = taskStack;
-    Queue<TaskData> localQueue = taskQueue;
-    if (localStack == null || localQueue == null) {
+    FileWriter currentWriter = writerRef.get();
+    if (localStack == null) {
       // Variables have been nulled out by #clear in between the check the caller made and this
       // point in the code. Probably due to an asynchronous crash.
       logger.severe("Variables null in profiler for " + type + ", probably due to async crash");
@@ -747,10 +673,10 @@ public final class Profiler {
       parent.aggregateChild(type, duration);
     }
     if (wasTaskSlowEnoughToRecord(type, duration)) {
-      TaskData data = localStack.create(startTime, type, object);
+      TaskData data = localStack.create(startTimeNanos, type, description);
       data.duration = duration;
-      if (out != null) {
-        localQueue.add(data);
+      if (currentWriter != null) {
+        currentWriter.enqueue(data);
       }
 
       SlowestTaskAggregator aggregator = slowestTasks[type.ordinal()];
@@ -762,93 +688,121 @@ public final class Profiler {
   }
 
   /**
-   * Used externally to submit simple task (one that does not have any subtasks).
-   * Depending on the minDuration attribute of the task type, task may be
-   * just aggregated into the parent task and not stored directly.
+   * Used externally to submit simple task (one that does not have any subtasks). Depending on the
+   * minDuration attribute of the task type, task may be just aggregated into the parent task and
+   * not stored directly.
    *
-   * @param startTime task start time (obtained through {@link
-   *        Profiler#nanoTimeMaybe()})
+   * @param startTime task start time (obtained through {@link Profiler#nanoTimeMaybe()})
    * @param type task type
-   * @param object object associated with that task. Can be String object that
-   *               describes it.
+   * @param description task description. May be stored until the end of the build.
    */
-  public void logSimpleTask(long startTime, ProfilerTask type, Object object) {
+  public void logSimpleTask(long startTime, ProfilerTask type, String description) {
     if (isActive() && isProfiling(type)) {
-      logTask(startTime, clock.nanoTime() - startTime, type, object);
+      logTask(startTime, clock.nanoTime() - startTime, type, description);
     }
   }
 
   /**
-   * Used externally to submit simple task (one that does not have any
-   * subtasks). Depending on the minDuration attribute of the task type, task
-   * may be just aggregated into the parent task and not stored directly.
+   * Used externally to submit simple task (one that does not have any subtasks). Depending on the
+   * minDuration attribute of the task type, task may be just aggregated into the parent task and
+   * not stored directly.
    *
-   * <p>Note that start and stop time must both be acquired from the same clock
-   * instance.
+   * <p>Note that start and stop time must both be acquired from the same clock instance.
    *
-   * @param startTime task start time
-   * @param stopTime task stop time
+   * @param startTimeNanos task start time
+   * @param stopTimeNanos task stop time
    * @param type task type
-   * @param object object associated with that task. Can be String object that
-   *               describes it.
+   * @param description task description. May be stored until the end of the build.
    */
-  public void logSimpleTask(long startTime, long stopTime, ProfilerTask type, Object object) {
+  public void logSimpleTask(
+      long startTimeNanos, long stopTimeNanos, ProfilerTask type, String description) {
     if (isActive() && isProfiling(type)) {
-      logTask(startTime, stopTime - startTime, type, object);
+      logTask(startTimeNanos, stopTimeNanos - startTimeNanos, type, description);
     }
   }
 
   /**
-   * Used externally to submit simple task (one that does not have any
-   * subtasks). Depending on the minDuration attribute of the task type, task
-   * may be just aggregated into the parent task and not stored directly.
+   * Used externally to submit simple task (one that does not have any subtasks). Depending on the
+   * minDuration attribute of the task type, task may be just aggregated into the parent task and
+   * not stored directly.
    *
-   * @param startTime task start time (obtained through {@link
-   *        Profiler#nanoTimeMaybe()})
+   * @param startTimeNanos task start time (obtained through {@link Profiler#nanoTimeMaybe()})
    * @param duration the duration of the task
    * @param type task type
-   * @param object object associated with that task. Can be String object that
-   *               describes it.
+   * @param description task description. May be stored until the end of the build.
    */
-  public void logSimpleTaskDuration(long startTime, long duration, ProfilerTask type,
-                                    Object object) {
+  public void logSimpleTaskDuration(
+      long startTimeNanos, Duration duration, ProfilerTask type, String description) {
     if (isActive() && isProfiling(type)) {
-      logTask(startTime, duration, type, object);
+      logTask(startTimeNanos, duration.toNanos(), type, description);
+    }
+  }
+
+  /** Used to log "events" - tasks with zero duration. */
+  void logEvent(ProfilerTask type, String description) {
+    if (isActive() && isProfiling(type)) {
+      logTask(clock.nanoTime(), 0, type, description);
     }
   }
 
   /**
-   * Used to log "events" - tasks with zero duration.
-   */
-  public void logEvent(ProfilerTask type, Object object) {
-    if (isActive() && isProfiling(type)) {
-      logTask(clock.nanoTime(), 0, type, object);
-    }
-  }
-
-  /**
-   * Records the beginning of the task specified by the parameters. This method
-   * should always be followed by completeTask() invocation to mark the end of
-   * task execution (usually ensured by try {} finally {} block). Failure to do
-   * so will result in task stack corruption.
+   * Records the beginning of a task as specified, and returns a {@link SilentCloseable} instance
+   * that ends the task. This lets the system do the work of ending the task, with the compiler
+   * giving a warning if the returned instance is not closed.
    *
-   * Use of this method allows to support nested task monitoring. For tasks that
-   * are known to not have any subtasks, logSimpleTask() should be used instead.
+   * <p>Use of this method allows to support nested task monitoring. For tasks that are known to not
+   * have any subtasks, logSimpleTask() should be used instead.
+   *
+   * <p>Use like this:
+   * <pre>
+   * {@code
+   * try (SilentCloseable c = Profiler.instance().profile(type, "description")) {
+   *   // Your code here.
+   * }
+   * }
+   * </pre>
    *
    * @param type predefined task type - see ProfilerTask for available types.
-   * @param object object associated with that task. Can be String object that
-   *               describes it.
+   * @param description task description. May be stored until the end of the build.
    */
-  public void startTask(ProfilerTask type, Object object) {
+  public SilentCloseable profile(ProfilerTask type, String description) {
     // ProfilerInfo.allTasksById is supposed to be an id -> Task map, but it is in fact a List,
     // which means that we cannot drop tasks to which we had already assigned ids. Therefore,
     // non-leaf tasks must not have a minimum duration. However, we don't quite consistently
     // enforce this, and Blaze only works because we happen not to add child tasks to those parent
     // tasks that have a minimum duration.
-    Preconditions.checkNotNull(object);
+    Preconditions.checkNotNull(description);
     if (isActive() && isProfiling(type)) {
-      taskStack.push(type, object);
+      taskStack.push(type, description);
+      return () -> completeTask(type);
+    } else {
+      return () -> {};
     }
+  }
+
+  /**
+   * Records the beginning of a task as specified, and returns a {@link SilentCloseable} instance
+   * that ends the task. This lets the system do the work of ending the task, with the compiler
+   * giving a warning if the returned instance is not closed.
+   *
+   * <p>Use of this method allows to support nested task monitoring. For tasks that are known to not
+   * have any subtasks, logSimpleTask() should be used instead.
+   *
+   * <p>This is a convenience method that uses {@link ProfilerTask#INFO}.
+   *
+   * <p>Use like this:
+   * <pre>
+   * {@code
+   * try (SilentCloseable c = Profiler.instance().profile("description")) {
+   *   // Your code here.
+   * }
+   * }
+   * </pre>
+   *
+   * @param description task description. May be stored until the end of the build.
+   */
+  public SilentCloseable profile(String description) {
+    return profile(ProfilerTask.INFO, description);
   }
 
   /**
@@ -858,7 +812,7 @@ public final class Profiler {
    *
    * @param type task type.
    */
-  public void completeTask(ProfilerTask type) {
+  private void completeTask(ProfilerTask type) {
     if (isActive() && isProfiling(type)) {
       long endTime = clock.nanoTime();
       TaskData data = taskStack.pop();
@@ -869,18 +823,18 @@ public final class Profiler {
           type,
           data,
           taskStack);
-      data.duration = endTime - data.startTime;
+      data.duration = endTime - data.startTimeNanos;
       if (data.parentId > 0) {
         taskStack.peek().aggregateChild(data.type, data.duration);
       }
       boolean shouldRecordTask = wasTaskSlowEnoughToRecord(type, data.duration);
-      if (out != null && (shouldRecordTask || data.counts != null)) {
-        taskQueue.add(data);
+      FileWriter writer = writerRef.get();
+      if ((shouldRecordTask || data.counts != null) && writer != null) {
+        writer.enqueue(data);
       }
 
       if (shouldRecordTask) {
         SlowestTaskAggregator aggregator = slowestTasks[type.ordinal()];
-
         if (aggregator != null) {
           aggregator.add(data);
         }
@@ -888,10 +842,8 @@ public final class Profiler {
     }
   }
 
-  /**
-   * Convenience method to log phase marker tasks.
-   */
-  public void markPhase(ProfilePhase phase) {
+  /** Convenience method to log phase marker tasks. */
+  public void markPhase(ProfilePhase phase) throws InterruptedException {
     MemoryProfiler.instance().markPhase(phase);
     if (isActive() && isProfiling(ProfilerTask.PHASE)) {
       Preconditions.checkState(taskStack.isEmpty(), "Phase tasks must not be nested");
@@ -899,18 +851,223 @@ public final class Profiler {
     }
   }
 
-  /**
-   * Convenience method to log spawn tasks.
-   *
-   * TODO(bazel-team): Right now method expects single string of the spawn action
-   * as task description (usually either argv[0] or a name of the main executable
-   * in case of complex shell commands). Maybe it should accept Command object
-   * and create more user friendly description.
-   */
-  public void logSpawn(long startTime, String arg0) {
-    if (isActive() && isProfiling(ProfilerTask.SPAWN)) {
-      logTask(startTime, clock.nanoTime() - startTime, ProfilerTask.SPAWN, arg0);
+  private abstract static class FileWriter implements Runnable {
+    protected final BlockingQueue<TaskData> queue;
+    protected final Thread thread;
+    protected IOException savedException;
+
+    FileWriter() {
+      this.queue = new LinkedBlockingDeque<>();
+      this.thread = new Thread(this);
+    }
+
+    public void shutdown() throws IOException {
+      // Add poison pill to queue and then wait for writer thread to shut down.
+      queue.add(POISON_PILL);
+      try {
+        thread.join();
+      } catch (InterruptedException e) {
+        thread.interrupt();
+        Thread.currentThread().interrupt();
+      }
+      if (savedException != null) {
+        throw savedException;
+      }
+    }
+
+    public void start() {
+      thread.start();
+    }
+
+    public void enqueue(TaskData data) {
+      queue.add(data);
     }
   }
 
+  /** Writes the profile in the binary Bazel profile format. */
+  private static class BinaryFormatWriter extends FileWriter {
+    private final DataOutputStream out;
+    private final long profileStartTime;
+    private final String comment;
+
+    BinaryFormatWriter(
+        OutputStream out,
+        long profileStartTime,
+        String comment) {
+      // Wrapping deflater stream in the buffered stream proved to reduce CPU consumption caused by
+      // the write() method. Values for buffer sizes were chosen by running small amount of tests
+      // and identifying point of diminishing returns - but I have not really tried to optimize
+      // them.
+      this.out =
+          new DataOutputStream(
+              new BufferedOutputStream(
+                  new DeflaterOutputStream(
+                      // the DeflaterOutputStream has its own output buffer of 65k, chosen at random
+                      out, new Deflater(Deflater.BEST_SPEED, false), 65536),
+                  262144)); // buffer size, basically chosen at random
+      this.profileStartTime = profileStartTime;
+      this.comment = comment;
+    }
+
+    private void writeHeader() throws IOException {
+      out.writeInt(MAGIC); // magic
+      out.writeInt(VERSION); // protocol_version
+      out.writeUTF(comment);
+      // ProfileTask.values() method sorts enums using their ordinal() value, so
+      // there there is no need to store ordinal() value for each entry.
+      out.writeInt(TASK_COUNT);
+      for (ProfilerTask type : ProfilerTask.values()) {
+        out.writeUTF(type.toString());
+      }
+    }
+
+    /**
+     * Saves all gathered information from taskQueue queue to the file.
+     * Method is invoked internally by the Timer-based thread and at the end of
+     * profiling session.
+     */
+    @Override
+    public void run() {
+      try {
+        boolean receivedPoisonPill = false;
+        try {
+          writeHeader();
+          // Allocate the sink once to avoid GC
+          ByteBuffer sink = ByteBuffer.allocate(1024);
+          ObjectDescriber describer = new ObjectDescriber();
+          TaskData data;
+          while ((data = queue.take()) != POISON_PILL) {
+            sink.clear();
+
+            VarInt.putVarLong(data.threadId, sink);
+            VarInt.putVarInt(data.id, sink);
+            VarInt.putVarInt(data.parentId, sink);
+            VarInt.putVarLong(data.startTimeNanos - profileStartTime, sink);
+            VarInt.putVarLong(data.duration, sink);
+
+            // To save space (and improve performance), convert all description
+            // strings to the canonical object and use IdentityHashMap to assign
+            // unique numbers for each string.
+            int descIndex = describer.getDescriptionIndex(data.description);
+            VarInt.putVarInt(descIndex + 1, sink); // Add 1 to avoid encoding negative values.
+
+            // Save types using their ordinal() value
+            sink.put((byte) data.type.ordinal());
+
+            // Save aggregated data stats.
+            if (data.counts != null) {
+              for (int i = 0; i < TASK_COUNT; i++) {
+                if (data.counts[i] > 0) {
+                  sink.put((byte) i); // aggregated type ordinal value
+                  VarInt.putVarInt(data.counts[i], sink);
+                  VarInt.putVarLong(data.durations[i], sink);
+                }
+              }
+            }
+
+            out.writeInt(sink.position());
+            out.write(sink.array(), 0, sink.position());
+            if (describer.isUnassigned(descIndex)) {
+              out.writeUTF(describer.memoizeDescription(data.description));
+            }
+          }
+          receivedPoisonPill = true;
+          out.writeInt(EOF_MARKER);
+          out.close();
+        } catch (IOException e) {
+          this.savedException = e;
+          try {
+            out.close();
+          } catch (IOException e2) {
+            // ignore it
+          }
+          if (!receivedPoisonPill) {
+            while (queue.take() != POISON_PILL) {
+              // We keep emptying the queue, but we can't write anything.
+            }
+          }
+        }
+      } catch (InterruptedException e) {
+        // Exit silently.
+      }
+    }
+  }
+
+  /** Writes the profile in Json Trace file format. */
+  private static class JsonTraceFileWriter extends FileWriter {
+    private final Writer out;
+    private final long profileStartTimeNanos;
+
+    JsonTraceFileWriter(
+        OutputStream out,
+        long profileStartTimeNanos) {
+      this.out =
+          // The buffer size of 262144 is chosen at random. We might also want to use compression
+          // in the future.
+          new OutputStreamWriter(new BufferedOutputStream(out, 262144), StandardCharsets.UTF_8);
+      this.profileStartTimeNanos = profileStartTimeNanos;
+    }
+
+    /**
+     * Saves all gathered information from taskQueue queue to the file.
+     * Method is invoked internally by the Timer-based thread and at the end of
+     * profiling session.
+     */
+    @Override
+    public void run() {
+      try {
+        boolean receivedPoisonPill = false;
+        try {
+          out.append("[");
+          boolean first = true;
+          TaskData data;
+          while ((data = queue.take()) != POISON_PILL) {
+            if (data.duration == 0) {
+              continue;
+            }
+            if (first) {
+              first = false;
+            } else {
+              out.append(",");
+            }
+            char eventType = data.duration == 0 ? 'i' : 'X';
+            out.append("{");
+            out.append("\"cat\":\"").append(data.type.description).append("\",");
+            out.append("\"name\":\"").append(data.description).append("\",");
+            out.append("\"ph\":\"").append(eventType).append("\",");
+            out.append("\"ts\":")
+                .append(
+                    Long.toString(
+                        TimeUnit.NANOSECONDS.toMicros(data.startTimeNanos - profileStartTimeNanos)))
+                .append(",");
+            if (data.duration != 0) {
+              out.append("\"dur\":")
+                  .append(Long.toString(TimeUnit.NANOSECONDS.toMicros(data.duration)))
+                  .append(",");
+            }
+            out.append("\"pid\":1,");
+            out.append("\"tid\":").append(Long.toString(data.threadId));
+            out.append("}\n");
+          }
+          receivedPoisonPill = true;
+          out.append("]");
+          out.close();
+        } catch (IOException e) {
+          this.savedException = e;
+          try {
+            out.close();
+          } catch (IOException e2) {
+            // ignore it
+          }
+          if (!receivedPoisonPill) {
+            while (queue.take() != POISON_PILL) {
+              // We keep emptying the queue, but we can't write anything.
+            }
+          }
+        }
+      } catch (InterruptedException e) {
+        // Exit silently.
+      }
+    }
+  }
 }

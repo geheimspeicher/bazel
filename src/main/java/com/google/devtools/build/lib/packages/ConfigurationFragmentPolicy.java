@@ -20,14 +20,17 @@ import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.SetMultimap;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.NoTransition;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import java.util.Collection;
 import java.util.Set;
 
 /**
- * Policy used to express the set of configuration fragments which are legal for a rule or aspect
- * to access.
+ * Policy used to express the set of configuration fragments which are legal for a rule or aspect to
+ * access.
  */
+@AutoCodec
 public final class ConfigurationFragmentPolicy {
 
   /**
@@ -188,7 +191,8 @@ public final class ConfigurationFragmentPolicy {
    */
   private final MissingFragmentPolicy missingFragmentPolicy;
 
-  private ConfigurationFragmentPolicy(
+  @AutoCodec.VisibleForSerialization
+  ConfigurationFragmentPolicy(
       ImmutableSetMultimap<ConfigurationTransition, Class<?>> requiredConfigurationFragments,
       ImmutableSetMultimap<ConfigurationTransition, String> requiredConfigurationFragmentNames,
       MissingFragmentPolicy missingFragmentPolicy) {
@@ -233,8 +237,11 @@ public final class ConfigurationFragmentPolicy {
    */
   private boolean hasLegalFragmentName(
       Class<?> configurationFragment, ConfigurationTransition transition) {
-    return requiredConfigurationFragmentNames
-        .containsEntry(transition, SkylarkModule.Resolver.resolveName(configurationFragment));
+    SkylarkModule fragmentModule = SkylarkInterfaceUtils.getSkylarkModule(configurationFragment);
+
+    return fragmentModule != null
+        ? requiredConfigurationFragmentNames.containsEntry(transition, fragmentModule.name())
+        : false;
   }
 
   /**
@@ -242,8 +249,11 @@ public final class ConfigurationFragmentPolicy {
    * configuration.
    */
   private boolean hasLegalFragmentName(Class<?> configurationFragment) {
-    return requiredConfigurationFragmentNames.containsValue(
-        SkylarkModule.Resolver.resolveName(configurationFragment));
+    SkylarkModule fragmentModule = SkylarkInterfaceUtils.getSkylarkModule(configurationFragment);
+
+    return fragmentModule != null
+        ? requiredConfigurationFragmentNames.containsValue(fragmentModule.name())
+        : false;
   }
 
   /**

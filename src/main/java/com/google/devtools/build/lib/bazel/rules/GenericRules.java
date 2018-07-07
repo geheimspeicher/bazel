@@ -14,7 +14,7 @@
 package com.google.devtools.build.lib.bazel.rules;
 
 import com.google.common.collect.ImmutableList;
-import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.Builder;
+import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider.RuleSet;
 import com.google.devtools.build.lib.analysis.constraints.EnvironmentRule;
 import com.google.devtools.build.lib.bazel.rules.common.BazelFilegroupRule;
@@ -36,7 +36,7 @@ public class GenericRules implements RuleSet {
   }
 
   @Override
-  public void init(Builder builder) {
+  public void init(ConfiguredRuleClassProvider.Builder builder) {
     builder.addRuleDefinition(new EnvironmentRule());
 
     builder.addRuleDefinition(new AliasRule());
@@ -53,8 +53,8 @@ public class GenericRules implements RuleSet {
               .replace(
                   "%java_toolchain%",
                   isJdk8OrEarlier()
-                      ? "@bazel_tools//tools/jdk:toolchain_jdk8"
-                      : "@bazel_tools//tools/jdk:toolchain_jdk9"));
+                      ? "@bazel_tools//tools/jdk:toolchain_hostjdk8"
+                      : "@bazel_tools//tools/jdk:toolchain_hostjdk9"));
 
     } catch (IOException e) {
       throw new IllegalStateException(e);

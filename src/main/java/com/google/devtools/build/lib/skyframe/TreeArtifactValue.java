@@ -21,8 +21,9 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
+import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.cache.DigestUtils;
-import com.google.devtools.build.lib.actions.cache.Metadata;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -36,6 +37,7 @@ import javax.annotation.Nullable;
  * Value for TreeArtifacts, which contains a digest and the {@link FileArtifactValue}s of its child
  * {@link TreeFileArtifact}s.
  */
+@AutoCodec
 class TreeArtifactValue implements SkyValue {
   private static final Function<Artifact, PathFragment> PARENT_RELATIVE_PATHS =
       new Function<Artifact, PathFragment>() {
@@ -48,7 +50,8 @@ class TreeArtifactValue implements SkyValue {
   private final byte[] digest;
   private final Map<TreeFileArtifact, FileArtifactValue> childData;
 
-  private TreeArtifactValue(byte[] digest, Map<TreeFileArtifact, FileArtifactValue> childData) {
+  @AutoCodec.VisibleForSerialization
+  TreeArtifactValue(byte[] digest, Map<TreeFileArtifact, FileArtifactValue> childData) {
     this.digest = digest;
     this.childData = ImmutableMap.copyOf(childData);
   }
@@ -58,7 +61,7 @@ class TreeArtifactValue implements SkyValue {
    * and their corresponding FileArtifactValues.
    */
   static TreeArtifactValue create(Map<TreeFileArtifact, FileArtifactValue> childFileValues) {
-    Map<String, Metadata> digestBuilder =
+    Map<String, FileArtifactValue> digestBuilder =
         Maps.newHashMapWithExpectedSize(childFileValues.size());
     for (Map.Entry<TreeFileArtifact, FileArtifactValue> e : childFileValues.entrySet()) {
       digestBuilder.put(e.getKey().getParentRelativePath().getPathString(), e.getValue());
@@ -73,7 +76,7 @@ class TreeArtifactValue implements SkyValue {
     return FileArtifactValue.createProxy(digest);
   }
 
-  Metadata getMetadata() {
+  FileArtifactValue getMetadata() {
     return getSelfData();
   }
 
@@ -126,64 +129,63 @@ class TreeArtifactValue implements SkyValue {
   }
 
   /**
-   * A TreeArtifactValue that represents a missing TreeArtifact.
-   * This is occasionally useful because Java's concurrent collections disallow null members.
+   * A TreeArtifactValue that represents a missing TreeArtifact. This is occasionally useful because
+   * Java's concurrent collections disallow null members.
    */
-  static final TreeArtifactValue MISSING_TREE_ARTIFACT = new TreeArtifactValue(null,
-      ImmutableMap.<TreeFileArtifact, FileArtifactValue>of()) {
-    @Override
-    FileArtifactValue getSelfData() {
-      throw new UnsupportedOperationException();
-    }
+  static final TreeArtifactValue MISSING_TREE_ARTIFACT =
+      new TreeArtifactValue(null, ImmutableMap.<TreeFileArtifact, FileArtifactValue>of()) {
+        @Override
+        FileArtifactValue getSelfData() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Override
-    Iterable<TreeFileArtifact> getChildren() {
-      throw new UnsupportedOperationException();
-    }
+        @Override
+        Iterable<TreeFileArtifact> getChildren() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Override
-    Map<TreeFileArtifact, FileArtifactValue> getChildValues() {
-      throw new UnsupportedOperationException();
-    }
+        @Override
+        Map<TreeFileArtifact, FileArtifactValue> getChildValues() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Override
-    Metadata getMetadata() {
-      throw new UnsupportedOperationException();
-    }
+        @Override
+        FileArtifactValue getMetadata() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Override
-    Set<PathFragment> getChildPaths() {
-      throw new UnsupportedOperationException();
-    }
+        @Override
+        Set<PathFragment> getChildPaths() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Nullable
-    @Override
-    byte[] getDigest() {
-      throw new UnsupportedOperationException();
-    }
+        @Nullable
+        @Override
+        byte[] getDigest() {
+          throw new UnsupportedOperationException();
+        }
 
-    @Override
-    public int hashCode() {
-      return 24; // my favorite number
-    }
+        @Override
+        public int hashCode() {
+          return 24; // my favorite number
+        }
 
-    @Override
-    public boolean equals(Object other) {
-      return this == other;
-    }
+        @Override
+        public boolean equals(Object other) {
+          return this == other;
+        }
 
-    @Override
-    public String toString() {
-      return "MISSING_TREE_ARTIFACT";
-    }
-  };
+        @Override
+        public String toString() {
+          return "MISSING_TREE_ARTIFACT";
+        }
+      };
 
   private static void explodeDirectory(Artifact treeArtifact,
       PathFragment pathToExplode, ImmutableSet.Builder<PathFragment> valuesBuilder)
       throws IOException {
     for (Path subpath : treeArtifact.getPath().getRelative(pathToExplode).getDirectoryEntries()) {
-      PathFragment canonicalSubpathFragment =
-          pathToExplode.getChild(subpath.getBaseName()).normalize();
+      PathFragment canonicalSubpathFragment = pathToExplode.getChild(subpath.getBaseName());
       if (subpath.isDirectory()) {
         explodeDirectory(treeArtifact,
             pathToExplode.getChild(subpath.getBaseName()), valuesBuilder);
@@ -202,7 +204,7 @@ class TreeArtifactValue implements SkyValue {
         // TreeArtifact into a/b/outside_dir.
         PathFragment intermediatePath = canonicalSubpathFragment.getParentDirectory();
         for (String pathSegment : linkTarget.getSegments()) {
-          intermediatePath = intermediatePath.getRelative(pathSegment).normalize();
+          intermediatePath = intermediatePath.getRelative(pathSegment);
           if (intermediatePath.containsUplevelReferences()) {
             String errorMessage = String.format(
                 "A TreeArtifact may not contain relative symlinks whose target paths traverse "

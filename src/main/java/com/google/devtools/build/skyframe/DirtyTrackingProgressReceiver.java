@@ -13,10 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.skyframe;
 
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
 /**
@@ -92,24 +92,27 @@ public class DirtyTrackingProgressReceiver implements EvaluationProgressReceiver
   }
 
   @Override
-  public void computing(SkyKey skyKey) {
+  public void stateStarting(SkyKey skyKey, NodeState nodeState) {
     if (progressReceiver != null) {
-      progressReceiver.computing(skyKey);
+      progressReceiver.stateStarting(skyKey, nodeState);
     }
   }
 
   @Override
-  public void computed(SkyKey skyKey, long elapsedTimeNanos) {
+  public void stateEnding(SkyKey skyKey, NodeState nodeState, long elapsedTimeNanos) {
     if (progressReceiver != null) {
-      progressReceiver.computed(skyKey, elapsedTimeNanos);
+      progressReceiver.stateEnding(skyKey, nodeState, elapsedTimeNanos);
     }
   }
 
   @Override
-  public void evaluated(SkyKey skyKey, Supplier<SkyValue> valueSupplier,
+  public void evaluated(
+      SkyKey skyKey,
+      @Nullable SkyValue value,
+      Supplier<EvaluationSuccessState> evaluationSuccessState,
       EvaluationState state) {
     if (progressReceiver != null) {
-      progressReceiver.evaluated(skyKey, valueSupplier, state);
+      progressReceiver.evaluated(skyKey, value, evaluationSuccessState, state);
     }
 
     // This key was either built or marked clean, so we can remove it from both the dirty and

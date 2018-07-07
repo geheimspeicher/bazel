@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.rules.objc;
 import static com.google.common.truth.Truth.assertThat;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Action;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.CommandAction;
@@ -26,12 +27,12 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.util.MockObjcSupport;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions;
 import com.google.devtools.build.lib.rules.apple.cpp.AppleCcToolchain;
-import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainVariables;
 import com.google.devtools.build.lib.rules.cpp.CppLinkAction;
 import com.google.devtools.build.lib.rules.cpp.Link;
 import com.google.devtools.build.lib.rules.cpp.LinkBuildVariablesTestCase;
 import com.google.devtools.build.lib.testutil.TestConstants;
-import org.junit.Before;
+import java.io.IOException;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -39,12 +40,13 @@ import org.junit.runners.JUnit4;
 /**
  * Tests that {@code CppLinkAction} is populated with the correct build variables for objective C
  * builds.
- **/
+ */
 @RunWith(JUnit4.class)
 public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
 
-  @Before
-  public void initializeToolsConfigMock() throws Exception {
+  @Override
+  public void initializeMockClient() throws IOException {
+    super.initializeMockClient();
     MockObjcSupport.setup(mockToolsConfig);
   }
 
@@ -77,7 +79,7 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
     scratch.file("x/a.cc");
 
     ConfiguredTarget target = getConfiguredTarget("//x:bin");
-    Variables variables = getLinkBuildVariables(target, Link.LinkTargetType.EXECUTABLE);
+    CcToolchainVariables variables = getLinkBuildVariables(target, Link.LinkTargetType.EXECUTABLE);
     assertThat(
             getVariableValue(variables, AppleCcToolchain.XCODE_VERISON_OVERRIDE_VALUE_KEY))
         .contains("5.8");
@@ -117,7 +119,8 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
     // actions, follow the chain of actions starting at the lipobin
     // creation.
     Artifact lipoBin =
-        getBinArtifact(Label.parseAbsolute("//x:bin").getName() + "_lipobin", target);
+        getBinArtifact(
+            Label.parseAbsolute("//x:bin", ImmutableMap.of()).getName() + "_lipobin", target);
     Action lipoAction = getGeneratingAction(lipoBin);
     Artifact bin = ActionsTestUtil.getFirstArtifactEndingWith(lipoAction.getInputs(), "_bin");
     CommandAction appleBinLinkAction = (CommandAction) getGeneratingAction(bin);
@@ -125,7 +128,7 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
         ActionsTestUtil.getFirstArtifactEndingWith(appleBinLinkAction.getInputs(), "liba.a");
     CppLinkAction ccArchiveAction = (CppLinkAction) getGeneratingAction(archive);
 
-    Variables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
+    CcToolchainVariables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
     assertThat(
             getVariableValue(variables, AppleCcToolchain.XCODE_VERISON_OVERRIDE_VALUE_KEY))
         .contains("5.8");
@@ -165,7 +168,8 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
     // In order to get the set of variables that apply to the c++ actions, follow the chain of
     // actions starting at the lipobin creation.
     Artifact lipoBin =
-        getBinArtifact(Label.parseAbsolute("//x:bin").getName() + "_lipobin", target);
+        getBinArtifact(
+            Label.parseAbsolute("//x:bin", ImmutableMap.of()).getName() + "_lipobin", target);
     Action lipoAction = getGeneratingAction(lipoBin);
     Artifact bin = ActionsTestUtil.getFirstArtifactEndingWith(lipoAction.getInputs(), "_bin");
     CommandAction appleBinLinkAction = (CommandAction) getGeneratingAction(bin);
@@ -173,7 +177,7 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
         ActionsTestUtil.getFirstArtifactEndingWith(appleBinLinkAction.getInputs(), "liba.a");
     CppLinkAction ccArchiveAction = (CppLinkAction) getGeneratingAction(archive);
 
-    Variables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
+    CcToolchainVariables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
     assertThat(getVariableValue(variables, AppleCcToolchain.VERSION_MIN_KEY))
         .contains(dummyMinimumOsValue);
   }
@@ -192,7 +196,7 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
     scratch.file("x/a.cc");
 
     ConfiguredTarget target = getConfiguredTarget("//x:bin");
-    Variables variables = getLinkBuildVariables(target, Link.LinkTargetType.EXECUTABLE);
+    CcToolchainVariables variables = getLinkBuildVariables(target, Link.LinkTargetType.EXECUTABLE);
     assertThat(
             getVariableValue(variables, AppleCcToolchain.XCODE_VERISON_OVERRIDE_VALUE_KEY))
         .contains(MockObjcSupport.DEFAULT_XCODE_VERSION);
@@ -230,7 +234,8 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
     // In order to get the set of variables that apply to the c++ actions, follow the chain of
     // actions starting at the lipobin creation.
     Artifact lipoBin =
-        getBinArtifact(Label.parseAbsolute("//x:bin").getName() + "_lipobin", target);
+        getBinArtifact(
+            Label.parseAbsolute("//x:bin", ImmutableMap.of()).getName() + "_lipobin", target);
     Action lipoAction = getGeneratingAction(lipoBin);
     Artifact bin = ActionsTestUtil.getFirstArtifactEndingWith(lipoAction.getInputs(), "_bin");
     CommandAction appleBinLinkAction = (CommandAction) getGeneratingAction(bin);
@@ -238,7 +243,7 @@ public class ObjcBuildVariablesTest extends LinkBuildVariablesTestCase {
         ActionsTestUtil.getFirstArtifactEndingWith(appleBinLinkAction.getInputs(), "liba.a");
     CppLinkAction ccArchiveAction = (CppLinkAction) getGeneratingAction(archive);
 
-    Variables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
+    CcToolchainVariables variables = ccArchiveAction.getLinkCommandLine().getBuildVariables();
     assertThat(getVariableValue(variables, AppleCcToolchain.VERSION_MIN_KEY))
         .contains(dummyMinimumOsValue);
   }

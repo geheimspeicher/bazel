@@ -63,27 +63,94 @@ public final class DotExpression extends Expression {
     if (result != null) {
       return result;
     }
+    throw getMissingFieldException(objValue, name, loc, "field");
+  }
+
+  static EvalException getMissingFieldException(
+      Object objValue, String name, Location loc, String accessName) {
     String suffix = "";
+    EvalException toSuppress = null;
     if (objValue instanceof ClassObject) {
       String customErrorMessage = ((ClassObject) objValue).getErrorMessageForUnknownField(name);
       if (customErrorMessage != null) {
-        throw new EvalException(loc, customErrorMessage);
+        return new EvalException(loc, customErrorMessage);
       }
-      suffix = SpellChecker.didYouMean(name, ((ClassObject) objValue).getFieldNames());
+      try {
+        suffix = SpellChecker.didYouMean(name, ((ClassObject) objValue).getFieldNames());
+      } catch (EvalException ee) {
+        toSuppress = ee;
+      }
+    } else {
+      suffix =
+          SpellChecker.didYouMean(
+              name,
+              FuncallExpression.getStructFieldNames(
+                  objValue instanceof Class ? (Class<?>) objValue : objValue.getClass()));
     }
-    throw new EvalException(
-        loc,
-        String.format(
-            "object of type '%s' has no field '%s'%s",
-            EvalUtils.getDataTypeName(objValue), name, suffix));
+    if (suffix.isEmpty() && hasMethod(objValue, name)) {
+      // If looking up the field failed, then we know that this method must have struct_field=false
+      suffix = ", however, a method of that name exists";
+    }
+    EvalException ee =
+        new EvalException(
+            loc,
+            String.format(
+                "object of type '%s' has no %s '%s'%s",
+                EvalUtils.getDataTypeName(objValue), accessName, name, suffix));
+    if (toSuppress != null) {
+      ee.addSuppressed(toSuppress);
+    }
+    return ee;
+  }
+
+  /** Returns whether the given object has a method with the given name. */
+  static boolean hasMethod(Object obj, String name) {
+    Class<?> cls = obj instanceof Class ? (Class<?>) obj : obj.getClass();
+    if (Runtime.getBuiltinRegistry().getFunctionNames(cls).contains(name)) {
+      return true;
+    }
+
+    return FuncallExpression.getMethodNames(cls).contains(name);
   }
 
   /**
    * Returns the field of the given name of the struct objValue, or null if no such field exists.
    */
   public static Object eval(Object objValue, String name,
-      Location loc, Environment env) throws EvalException {
-    if (objValue instanceof ClassObject) {
+      Location loc, Environment env) throws EvalException, InterruptedException {
+
+    Iterable<MethodDescriptor> methods =
+        objValue instanceof Class<?>
+            ? FuncallExpression.getMethods((Class<?>) objValue, name)
+            : FuncallExpression.getMethods(objValue.getClass(), name);
+
+    if (methods != null) {
+      Optional<MethodDescriptor> method =
+          Streams.stream(methods)
+              .filter(methodDescriptor -> methodDescriptor.getAnnotation().structField())
+              .findFirst();
+      if (method.isPresent() && method.get().getAnnotation().structField()) {
+        return FuncallExpression.callMethod(
+            method.get(),
+            name,
+            objValue,
+            FuncallExpression.extraInterpreterArgs(
+                method.get().getAnnotation(),
+                /* ast = */ null,
+                loc,
+                env).toArray(),
+            loc,
+            env);
+      }
+    }
+
+    if (objValue instanceof SkylarkClassObject) {
+      try {
+        return ((SkylarkClassObject) objValue).getValue(name);
+      } catch (IllegalArgumentException ex) {
+        throw new EvalException(loc, ex);
+      }
+    } else if (objValue instanceof ClassObject) {
       Object result = null;
       try {
         result = ((ClassObject) objValue).getValue(name);
@@ -98,22 +165,6 @@ public final class DotExpression extends Expression {
         // so we have to disable it. This should not happen.
         SkylarkType.checkTypeAllowedInSkylark(result, loc);
         return result;
-      }
-    }
-
-    Iterable<MethodDescriptor> methods =
-        objValue instanceof Class<?>
-            ? FuncallExpression.getMethods((Class<?>) objValue, name)
-            : FuncallExpression.getMethods(objValue.getClass(), name);
-
-    if (methods != null) {
-      Optional<MethodDescriptor> method =
-          Streams.stream(methods)
-              .filter(methodDescriptor -> methodDescriptor.getAnnotation().structField())
-              .findFirst();
-      if (method.isPresent() && method.get().getAnnotation().structField()) {
-        return FuncallExpression.callMethod(
-            method.get(), name, objValue, new Object[] {}, loc, env);
       }
     }
 

@@ -19,6 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.FailAction;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.MakeVariableSupplier.MapBackedMakeVariableSupplier;
 import com.google.devtools.build.lib.analysis.OutputGroupInfo;
@@ -37,7 +38,8 @@ import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction;
 import com.google.devtools.build.lib.packages.RawAttributeMapper;
 import com.google.devtools.build.lib.rules.cpp.CcCommon.CcFlagsSupplier;
-import com.google.devtools.build.lib.rules.cpp.CcLibraryHelper.Info;
+import com.google.devtools.build.lib.rules.cpp.CcCompilationHelper.CompilationInfo;
+import com.google.devtools.build.lib.rules.cpp.CcLinkingHelper.LinkingInfo;
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.Link.LinkTargetType;
 import com.google.devtools.build.lib.rules.cpp.LinkerInputs.LibraryToLink;
@@ -64,38 +66,20 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
       CppFileTypes.ALWAYS_LINK_LIBRARY, CppFileTypes.ALWAYS_LINK_PIC_LIBRARY,
       CppFileTypes.SHARED_LIBRARY, CppFileTypes.VERSIONED_SHARED_LIBRARY);
 
-  private static Runfiles collectRunfiles(RuleContext context,
-      CcLinkingOutputs ccLinkingOutputs,
-      CcToolchainProvider ccToolchain,
-      boolean neverLink, boolean addDynamicRuntimeInputArtifactsToRunfiles,
-      boolean linkingStatically) {
-    Runfiles.Builder builder = new Runfiles.Builder(
-        context.getWorkspaceName(), context.getConfiguration().legacyExternalRunfiles());
-
-    // neverlink= true creates a library that will never be linked into any binary that depends on
-    // it, but instead be loaded as an extension. So we need the dynamic library for this in the
-    // runfiles.
-    builder.addArtifacts(ccLinkingOutputs.getLibrariesForRunfiles(linkingStatically && !neverLink));
-    builder.add(context, CppRunfilesProvider.runfilesFunction(linkingStatically));
-
-    builder.addDataDeps(context);
-
-    if (addDynamicRuntimeInputArtifactsToRunfiles) {
-      builder.addTransitiveArtifacts(ccToolchain.getDynamicRuntimeLinkInputs());
-    }
-    return builder.build();
-  }
-
   @Override
   public ConfiguredTarget create(RuleContext context)
-      throws RuleErrorException, InterruptedException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     RuleConfiguredTargetBuilder builder = new RuleConfiguredTargetBuilder(context);
-    LinkTargetType staticLinkType = getStaticLinkType(context);
     boolean linkStatic = context.attributes().get("linkstatic", Type.BOOLEAN);
-    init(semantics, context, builder, staticLinkType,
-        /*neverLink =*/ false,
+    init(
+        semantics,
+        context,
+        builder,
+        /* additionalCopts= */ ImmutableList.of(),
+        context.attributes().get("alwayslink", Type.BOOLEAN),
+        /* neverLink= */ false,
         linkStatic,
-        /*addDynamicRuntimeInputArtifactsToRunfiles =*/ false);
+        /* addDynamicRuntimeInputArtifactsToRunfiles= */ false);
     return builder.build();
   }
 
@@ -103,7 +87,8 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
       CppSemantics semantics,
       RuleContext ruleContext,
       RuleConfiguredTargetBuilder targetBuilder,
-      LinkTargetType staticLinkType,
+      ImmutableList<String> additionalCopts,
+      boolean alwaysLink,
       boolean neverLink,
       boolean linkStatic,
       boolean addDynamicRuntimeInputArtifactsToRunfiles)
@@ -124,7 +109,7 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
 
     FdoSupportProvider fdoSupport = common.getFdoSupport();
     FeatureConfiguration featureConfiguration =
-        CcCommon.configureFeatures(ruleContext, ccToolchain);
+        CcCommon.configureFeaturesOrReportRuleError(ruleContext, ccToolchain);
     PrecompiledFiles precompiledFiles = new PrecompiledFiles(ruleContext);
 
     semantics.validateAttributes(ruleContext);
@@ -132,16 +117,24 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
       return;
     }
 
-    CcLibraryHelper compilationHelper =
-        new CcLibraryHelper(ruleContext, semantics, featureConfiguration, ccToolchain, fdoSupport)
-            .fromCommon(common)
+    CcCompilationHelper compilationHelper =
+        new CcCompilationHelper(
+                ruleContext, semantics, featureConfiguration, ccToolchain, fdoSupport)
+            .fromCommon(common, additionalCopts)
             .addSources(common.getSources())
+            .addPrivateHeaders(common.getPrivateHeaders())
             .addPublicHeaders(common.getHeaders())
             .enableCompileProviders()
             .addPrecompiledFiles(precompiledFiles);
 
-    CcLibraryHelper linkingHelper =
-        new CcLibraryHelper(ruleContext, semantics, featureConfiguration, ccToolchain, fdoSupport)
+    CcLinkingHelper linkingHelper =
+        new CcLinkingHelper(
+                ruleContext,
+                semantics,
+                featureConfiguration,
+                ccToolchain,
+                fdoSupport,
+                ruleContext.getConfiguration())
             .fromCommon(common)
             .addLinkopts(common.getLinkopts())
             .enableCcNativeLibrariesProvider()
@@ -151,7 +144,7 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
             // between Bazel and Blaze.
             .setGenerateLinkActionsIfEmpty(
                 ruleContext.getRule().getImplicitOutputsFunction() != ImplicitOutputsFunction.NONE)
-            .setStaticLinkType(staticLinkType)
+            .setAlwayslink(alwaysLink)
             .setNeverLink(neverLink)
             .addLinkstamps(ruleContext.getPrerequisites("linkstamp", Mode.TARGET));
 
@@ -194,7 +187,7 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
                                    + "Did you mean to use 'linkstatic=1' instead?");
     }
 
-    linkingHelper.setCreateDynamicLibrary(createDynamicLibrary);
+    linkingHelper.setShouldCreateDynamicLibrary(createDynamicLibrary);
     linkingHelper.setDynamicLibrary(soImplArtifact);
 
     // If the reason we're not creating a dynamic library is that the toolchain
@@ -203,12 +196,18 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
     if (!createDynamicLibrary && !supportsDynamicLinker) {
       ImmutableList.Builder<Artifact> dynamicLibraries = ImmutableList.builder();
       dynamicLibraries.add(
-        CppHelper.getLinuxLinkedArtifact(
-          ruleContext, ruleContext.getConfiguration(), LinkTargetType.DYNAMIC_LIBRARY));
+          CppHelper.getLinkedArtifact(
+              ruleContext,
+              ccToolchain,
+              ruleContext.getConfiguration(),
+              LinkTargetType.NODEPS_DYNAMIC_LIBRARY));
       if (CppHelper.useInterfaceSharedObjects(ccToolchain.getCppConfiguration(), ccToolchain)) {
         dynamicLibraries.add(
-          CppHelper.getLinuxLinkedArtifact(
-            ruleContext, ruleContext.getConfiguration(), LinkTargetType.INTERFACE_DYNAMIC_LIBRARY));
+            CppHelper.getLinkedArtifact(
+                ruleContext,
+                ccToolchain,
+                ruleContext.getConfiguration(),
+                LinkTargetType.INTERFACE_DYNAMIC_LIBRARY));
       }
       ruleContext.registerAction(new FailAction(ruleContext.getActionOwner(),
           dynamicLibraries.build(), "Toolchain does not support dynamic linking"));
@@ -221,12 +220,18 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
       // a "no generating action for this artifact" error.
       ImmutableList.Builder<Artifact> dynamicLibraries = ImmutableList.builder();
       dynamicLibraries.add(
-        CppHelper.getLinuxLinkedArtifact(
-          ruleContext, ruleContext.getConfiguration(), LinkTargetType.DYNAMIC_LIBRARY));
+          CppHelper.getLinkedArtifact(
+              ruleContext,
+              ccToolchain,
+              ruleContext.getConfiguration(),
+              LinkTargetType.NODEPS_DYNAMIC_LIBRARY));
       if (CppHelper.useInterfaceSharedObjects(ccToolchain.getCppConfiguration(), ccToolchain)) {
         dynamicLibraries.add(
-          CppHelper.getLinuxLinkedArtifact(
-            ruleContext, ruleContext.getConfiguration(), LinkTargetType.INTERFACE_DYNAMIC_LIBRARY));
+            CppHelper.getLinkedArtifact(
+                ruleContext,
+                ccToolchain,
+                ruleContext.getConfiguration(),
+                LinkTargetType.INTERFACE_DYNAMIC_LIBRARY));
       }
       ruleContext.registerAction(new FailAction(ruleContext.getActionOwner(),
           dynamicLibraries.build(), "configurable \"srcs\" triggers an implicit .so output "
@@ -269,13 +274,13 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
                     common.getDynamicLibrarySymlink(library, true),
                     library,
                     CcLinkingOutputs.libraryIdentifierOf(library)));
-    linkingHelper.addDynamicLibraries(dynamicLibraries);
-    linkingHelper.addExecutionDynamicLibraries(dynamicLibraries);
+    linkingHelper.addDynamicLibrariesForLinking(dynamicLibraries);
+    linkingHelper.addDynamicLibrariesForRuntime(dynamicLibraries);
 
-    Info.CompilationInfo compilationInfo = compilationHelper.compile();
-    Info.LinkingInfo linkingInfo =
+    CompilationInfo compilationInfo = compilationHelper.compile();
+    LinkingInfo linkingInfo =
         linkingHelper.link(
-            compilationInfo.getCcCompilationOutputs(), compilationInfo.getCppCompilationContext());
+            compilationInfo.getCcCompilationOutputs(), compilationInfo.getCcCompilationContext());
 
     /*
      * We always generate a static library, even if there aren't any source files.
@@ -293,28 +298,41 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
     filesBuilder.addAll(LinkerInputs.toLibraryArtifacts(linkedLibraries.getPicStaticLibraries()));
 
     if (!featureConfiguration.isEnabled(CppRuleClasses.TARGETS_WINDOWS)) {
-      filesBuilder.addAll(LinkerInputs.toNonSolibArtifacts(linkedLibraries.getDynamicLibraries()));
       filesBuilder.addAll(
-          LinkerInputs.toNonSolibArtifacts(linkedLibraries.getExecutionDynamicLibraries()));
+          LinkerInputs.toNonSolibArtifacts(linkedLibraries.getDynamicLibrariesForLinking()));
+      filesBuilder.addAll(
+          LinkerInputs.toNonSolibArtifacts(linkedLibraries.getDynamicLibrariesForRuntime()));
     }
 
-    CcLinkingOutputs linkingOutputs = linkingInfo.getCcLinkingOutputs();
     if (!featureConfiguration.isEnabled(CppRuleClasses.HEADER_MODULE_CODEGEN)) {
       warnAboutEmptyLibraries(ruleContext, compilationInfo.getCcCompilationOutputs(), linkStatic);
     }
     NestedSet<Artifact> filesToBuild = filesBuilder.build();
 
-    Runfiles staticRunfiles = collectRunfiles(ruleContext, linkingOutputs, ccToolchain,
-        neverLink, addDynamicRuntimeInputArtifactsToRunfiles, true);
-    Runfiles sharedRunfiles = collectRunfiles(ruleContext, linkingOutputs, ccToolchain,
-        neverLink, addDynamicRuntimeInputArtifactsToRunfiles, false);
-
     List<Artifact> instrumentedObjectFiles = new ArrayList<>();
     instrumentedObjectFiles.addAll(compilationInfo.getCcCompilationOutputs().getObjectFiles(false));
     instrumentedObjectFiles.addAll(compilationInfo.getCcCompilationOutputs().getObjectFiles(true));
     InstrumentedFilesProvider instrumentedFilesProvider =
-        common.getInstrumentedFilesProvider(instrumentedObjectFiles, /*withBaselineCoverage=*/true);
+        common.getInstrumentedFilesProvider(
+            instrumentedObjectFiles, /* withBaselineCoverage= */ true);
     CppHelper.maybeAddStaticLinkMarkerProvider(targetBuilder, ruleContext);
+
+    Runfiles.Builder builder = new Runfiles.Builder(ruleContext.getWorkspaceName());
+    builder.addDataDeps(ruleContext);
+    builder.add(ruleContext, RunfilesProvider.DEFAULT_RUNFILES);
+    if (addDynamicRuntimeInputArtifactsToRunfiles) {
+      builder.addTransitiveArtifacts(ccToolchain.getDynamicRuntimeLinkInputs(featureConfiguration));
+    }
+    Runfiles runfiles = builder.build();
+    Runfiles.Builder defaultRunfiles =
+        new Runfiles.Builder(ruleContext.getWorkspaceName())
+            .merge(runfiles)
+            .addArtifacts(linkingInfo.getCcLinkingOutputs().getLibrariesForRunfiles(!neverLink));
+
+    Runfiles.Builder dataRunfiles =
+        new Runfiles.Builder(ruleContext.getWorkspaceName())
+            .merge(runfiles)
+            .addArtifacts(linkingInfo.getCcLinkingOutputs().getLibrariesForRunfiles(false));
 
     targetBuilder
         .setFilesToBuild(filesToBuild)
@@ -322,21 +340,17 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
         .addProviders(linkingInfo.getProviders())
         .addSkylarkTransitiveInfo(CcSkylarkApiProvider.NAME, new CcSkylarkApiProvider())
         .addOutputGroups(
-            Info.mergeOutputGroups(
-                compilationInfo.getOutputGroups(), linkingInfo.getOutputGroups()))
+            CcCommon.mergeOutputGroups(
+                ImmutableList.of(compilationInfo.getOutputGroups(), linkingInfo.getOutputGroups())))
         .addProvider(InstrumentedFilesProvider.class, instrumentedFilesProvider)
-        .addProvider(
-            RunfilesProvider.class, RunfilesProvider.withData(staticRunfiles, sharedRunfiles))
-        // Remove this?
-        .addProvider(
-            CppRunfilesProvider.class, new CppRunfilesProvider(staticRunfiles, sharedRunfiles))
+        .addProvider(RunfilesProvider.withData(defaultRunfiles.build(), dataRunfiles.build()))
         .addOutputGroup(
             OutputGroupInfo.HIDDEN_TOP_LEVEL,
             collectHiddenTopLevelArtifacts(
                 ruleContext, ccToolchain, compilationInfo.getCcCompilationOutputs()))
         .addOutputGroup(
-            CcLibraryHelper.HIDDEN_HEADER_TOKENS,
-            CcLibraryHelper.collectHeaderTokens(
+            CcCompilationHelper.HIDDEN_HEADER_TOKENS,
+            CcCompilationHelper.collectHeaderTokens(
                 ruleContext, compilationInfo.getCcCompilationOutputs()));
   }
 
@@ -347,12 +361,10 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
     // Ensure that we build all the dependencies, otherwise users may get confused.
     NestedSetBuilder<Artifact> artifactsToForceBuilder = NestedSetBuilder.stableOrder();
     CppConfiguration cppConfiguration = ruleContext.getFragment(CppConfiguration.class);
-    boolean isLipoCollector = cppConfiguration.isLipoContextCollector();
     boolean processHeadersInDependencies = cppConfiguration.processHeadersInDependencies();
-    boolean usePic = CppHelper.usePic(ruleContext, toolchain, false);
+    boolean usePic = toolchain.usePicForDynamicLibraries();
     artifactsToForceBuilder.addTransitive(
-        ccCompilationOutputs.getFilesToCompile(
-            isLipoCollector, processHeadersInDependencies, usePic));
+        ccCompilationOutputs.getFilesToCompile(processHeadersInDependencies, usePic));
     for (OutputGroupInfo dep :
         ruleContext.getPrerequisites(
             "deps", Mode.TARGET, OutputGroupInfo.SKYLARK_CONSTRUCTOR)) {
@@ -362,24 +374,9 @@ public abstract class CcLibrary implements RuleConfiguredTargetFactory {
     return artifactsToForceBuilder.build();
   }
 
-  /**
-   * Returns the type of the generated static library.
-   */
-  private static LinkTargetType getStaticLinkType(RuleContext context) {
-    return context.attributes().get("alwayslink", Type.BOOLEAN)
-        ? LinkTargetType.ALWAYS_LINK_STATIC_LIBRARY
-        : LinkTargetType.STATIC_LIBRARY;
-  }
-
   private static void warnAboutEmptyLibraries(RuleContext ruleContext,
       CcCompilationOutputs ccCompilationOutputs,
       boolean linkstaticAttribute) {
-    if (ruleContext.getFragment(CppConfiguration.class).isLipoContextCollector()) {
-      // Do not signal warnings in the lipo context collector configuration. These will be duly
-      // signaled in the target configuration, and there can be spurious warnings since targets in
-      // the LIPO context collector configuration do not compile anything.
-      return;
-    }
     if (ccCompilationOutputs.getObjectFiles(false).isEmpty()
         && ccCompilationOutputs.getObjectFiles(true).isEmpty()) {
       if (!linkstaticAttribute && appearsToHaveObjectFiles(ruleContext.attributes())) {

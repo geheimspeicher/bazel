@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.vfs.inmemoryfs;
 
 import static com.google.common.truth.Truth.assertThat;
+import static org.junit.Assert.fail;
 
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.clock.BlazeClock;
@@ -28,6 +29,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.util.Collection;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -57,9 +59,9 @@ public class InMemoryFileSystemTest extends SymlinkAwareFileSystemTest {
    * Writes the given data to the given file.
    */
   private static void writeToFile(Path path, String data) throws IOException {
-    OutputStream out = path.getOutputStream();
-    out.write(data.getBytes(Charset.defaultCharset()));
-    out.close();
+    try (OutputStream out = path.getOutputStream()) {
+      out.write(data.getBytes(Charset.defaultCharset()));
+    }
   }
 
   /**
@@ -153,10 +155,11 @@ public class InMemoryFileSystemTest extends SymlinkAwareFileSystemTest {
           assertThat(file.isWritable()).isFalse();
           assertThat(file.isExecutable()).isFalse();
           assertThat(file.getLastModifiedTime()).isEqualTo(300);
-          BufferedReader reader = new BufferedReader(
-              new InputStreamReader(file.getInputStream(), Charset.defaultCharset()));
-          assertThat(reader.readLine()).isEqualTo(TEST_FILE_DATA);
-          assertThat(reader.readLine()).isNull();
+          try (BufferedReader reader = new BufferedReader(
+              new InputStreamReader(file.getInputStream(), Charset.defaultCharset()))) {
+            assertThat(reader.readLine()).isEqualTo(TEST_FILE_DATA);
+            assertThat(reader.readLine()).isNull();
+          }
 
           Path symlink = base.getRelative("symlink" + i);
           assertThat(symlink.exists()).isTrue();
@@ -237,10 +240,11 @@ public class InMemoryFileSystemTest extends SymlinkAwareFileSystemTest {
           assertThat(file.isExecutable()).isEqualTo(i % 4 == 0);
           assertThat(file.getLastModifiedTime()).isEqualTo(i);
           if (file.isReadable()) {
-            BufferedReader reader = new BufferedReader(
-                new InputStreamReader(file.getInputStream(), Charset.defaultCharset()));
-            assertThat(reader.readLine()).isEqualTo(TEST_FILE_DATA);
-            assertThat(reader.readLine()).isNull();
+            try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(file.getInputStream(), Charset.defaultCharset()))) {
+              assertThat(reader.readLine()).isEqualTo(TEST_FILE_DATA);
+              assertThat(reader.readLine()).isNull();
+            }
           }
 
           Path symlink = base.getRelative("symlink_" + threadId + "_" + i);
@@ -384,25 +388,34 @@ public class InMemoryFileSystemTest extends SymlinkAwareFileSystemTest {
 
   @Test
   public void testEloop() throws Exception {
-    Path a = testFS.getPath("/a");
-    Path b = testFS.getPath("/b");
-    a.createSymbolicLink(PathFragment.create("b"));
-    b.createSymbolicLink(PathFragment.create("a"));
+    // The test assumes that aName and bName is not a prefix of the workingDir.
+    String aName = "/" + UUID.randomUUID();
+    String bName = "/" + UUID.randomUUID();
+
+    Path a = testFS.getPath(aName);
+    Path b = testFS.getPath(bName);
+    a.createSymbolicLink(PathFragment.create(bName));
+    b.createSymbolicLink(PathFragment.create(aName));
     try {
       a.stat();
+      fail("Expected IOException");
     } catch (IOException e) {
-      assertThat(e).hasMessage("/a (Too many levels of symbolic links)");
+      assertThat(e).hasMessage(aName + " (Too many levels of symbolic links)");
     }
   }
 
   @Test
   public void testEloopSelf() throws Exception {
-    Path a = testFS.getPath("/a");
-    a.createSymbolicLink(PathFragment.create("a"));
+    // The test assumes that aName is not a prefix of the workingDir.
+    String aName = "/" + UUID.randomUUID();
+
+    Path a = testFS.getPath(aName);
+    a.createSymbolicLink(PathFragment.create(aName));
     try {
       a.stat();
+      fail("Expected IOException");
     } catch (IOException e) {
-      assertThat(e).hasMessage("/a (Too many levels of symbolic links)");
+      assertThat(e).hasMessage(aName + " (Too many levels of symbolic links)");
     }
   }
 }

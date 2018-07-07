@@ -22,14 +22,17 @@ import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
-import com.google.devtools.build.lib.buildeventstream.BuildEventConverters;
+import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploaderMap;
+import com.google.devtools.build.lib.buildeventstream.BuildEventContext;
+import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildStarted;
 import com.google.devtools.build.lib.buildeventstream.BuildEventTransport;
 import com.google.devtools.build.lib.buildeventstream.PathConverter;
+import com.google.devtools.common.options.Options;
 import java.io.File;
 import java.io.IOException;
-import java.util.concurrent.Future;
+import java.util.concurrent.ExecutionException;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -42,7 +45,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 
-/** Tests {@link BuildEventTransportFactory}. **/
+/** Tests {@link BuildEventTransportFactory}. */
 @RunWith(JUnit4.class)
 public class BuildEventTransportFactoryTest {
 
@@ -59,6 +62,9 @@ public class BuildEventTransportFactoryTest {
           .setStarted(BuildStarted.newBuilder().setCommand("build"))
           .build();
 
+  private final BuildEventProtocolOptions protocolOpts =
+      Options.getDefaults(BuildEventProtocolOptions.class);
+
   @Rule public TemporaryFolder tmp = new TemporaryFolder();
 
   @Mock public BuildEventStreamOptions options;
@@ -71,7 +77,7 @@ public class BuildEventTransportFactoryTest {
   @Before
   public void before() {
     MockitoAnnotations.initMocks(this);
-    when(buildEvent.asStreamProto(Matchers.<BuildEventConverters>any()))
+    when(buildEvent.asStreamProto(Matchers.<BuildEventContext>any()))
         .thenReturn(BUILD_EVENT_AS_PROTO);
   }
 
@@ -80,14 +86,18 @@ public class BuildEventTransportFactoryTest {
     Mockito.validateMockitoUsage();
   }
 
+  private BuildEventArtifactUploaderMap localFilesOnly() {
+    return new BuildEventArtifactUploaderMap.Builder().build();
+  }
+
   @Test
-  public void testCreatesTextFormatFileTransport() throws IOException {
+  public void testCreatesTextFormatFileTransport() throws Exception {
     File textFile = tmp.newFile();
     when(options.getBuildEventTextFile()).thenReturn(textFile.getAbsolutePath());
-    when(options.getBuildEventTextFilePathConversion()).thenReturn(true);
     when(options.getBuildEventBinaryFile()).thenReturn("");
     ImmutableSet<BuildEventTransport> transports =
-        BuildEventTransportFactory.createFromOptions(options, pathConverter);
+        BuildEventTransportFactory.createFromOptions(
+            options, protocolOpts, localFilesOnly(), (e) -> {});
     assertThat(FluentIterable.from(transports).transform(GET_CLASS))
         .containsExactly(TextFormatFileTransport.class);
     sendEventsAndClose(buildEvent, transports);
@@ -95,13 +105,13 @@ public class BuildEventTransportFactoryTest {
   }
 
   @Test
-  public void testCreatesBinaryFormatFileTransport() throws IOException {
+  public void testCreatesBinaryFormatFileTransport() throws Exception {
     File binaryFile = tmp.newFile();
     when(options.getBuildEventTextFile()).thenReturn("");
     when(options.getBuildEventBinaryFile()).thenReturn(binaryFile.getAbsolutePath());
-    when(options.getBuildEventBinaryFilePathConversion()).thenReturn(true);
     ImmutableSet<BuildEventTransport> transports =
-        BuildEventTransportFactory.createFromOptions(options, pathConverter);
+        BuildEventTransportFactory.createFromOptions(
+            options, protocolOpts, localFilesOnly(), (e) -> {});
     assertThat(FluentIterable.from(transports).transform(GET_CLASS))
         .containsExactly(BinaryFormatFileTransport.class);
     sendEventsAndClose(buildEvent, transports);
@@ -109,15 +119,14 @@ public class BuildEventTransportFactoryTest {
   }
 
   @Test
-  public void testCreatesAllTransports() throws IOException {
+  public void testCreatesAllTransports() throws Exception {
     File textFile = tmp.newFile();
     File binaryFile = tmp.newFile();
     when(options.getBuildEventTextFile()).thenReturn(textFile.getAbsolutePath());
     when(options.getBuildEventBinaryFile()).thenReturn(binaryFile.getAbsolutePath());
-    when(options.getBuildEventBinaryFilePathConversion()).thenReturn(true);
-    when(options.getBuildEventTextFilePathConversion()).thenReturn(true);
     ImmutableSet<BuildEventTransport> transports =
-        BuildEventTransportFactory.createFromOptions(options, pathConverter);
+        BuildEventTransportFactory.createFromOptions(
+            options, protocolOpts, localFilesOnly(), (e) -> {});
     assertThat(FluentIterable.from(transports).transform(GET_CLASS))
         .containsExactly(TextFormatFileTransport.class, BinaryFormatFileTransport.class);
     sendEventsAndClose(buildEvent, transports);
@@ -129,16 +138,16 @@ public class BuildEventTransportFactoryTest {
   public void testCreatesNoTransports() throws IOException {
     when(options.getBuildEventTextFile()).thenReturn("");
     ImmutableSet<BuildEventTransport> transports =
-        BuildEventTransportFactory.createFromOptions(options, pathConverter);
+        BuildEventTransportFactory.createFromOptions(
+            options, protocolOpts, localFilesOnly(), (e) -> {});
     assertThat(transports).isEmpty();
   }
 
   private void sendEventsAndClose(BuildEvent event, Iterable<BuildEventTransport> transports)
-      throws IOException{
+      throws InterruptedException, ExecutionException {
     for (BuildEventTransport transport : transports) {
       transport.sendBuildEvent(event, artifactGroupNamer);
-      @SuppressWarnings({"unused", "nullness"})
-      Future<?> possiblyIgnoredError = transport.close();
+      transport.close().get();
     }
   }
 }

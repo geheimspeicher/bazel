@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.rules.platform;
 
 import static com.google.common.truth.Truth.assertThat;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.platform.PlatformProviderUtils;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
@@ -49,51 +50,19 @@ public class ConstraintTest extends BuildViewTestCase {
     assertThat(PlatformProviderUtils.constraintSetting(setting)).isNotNull();
     assertThat(PlatformProviderUtils.constraintSetting(setting)).isNotNull();
     assertThat(PlatformProviderUtils.constraintSetting(setting).label())
-        .isEqualTo(Label.parseAbsolute("//constraint:basic"));
+        .isEqualTo(Label.parseAbsolute("//constraint:basic", ImmutableMap.of()));
     ConfiguredTarget fooValue = getConfiguredTarget("//constraint:foo");
     assertThat(fooValue).isNotNull();
     assertThat(PlatformProviderUtils.constraintValue(fooValue)).isNotNull();
     assertThat(PlatformProviderUtils.constraintValue(fooValue).constraint().label())
-        .isEqualTo(Label.parseAbsolute("//constraint:basic"));
+        .isEqualTo(Label.parseAbsolute("//constraint:basic", ImmutableMap.of()));
     assertThat(PlatformProviderUtils.constraintValue(fooValue).label())
-        .isEqualTo(Label.parseAbsolute("//constraint:foo"));
+        .isEqualTo(Label.parseAbsolute("//constraint:foo", ImmutableMap.of()));
     ConfiguredTarget barValue = getConfiguredTarget("//constraint:bar");
     assertThat(barValue).isNotNull();
     assertThat(PlatformProviderUtils.constraintValue(barValue).constraint().label())
-        .isEqualTo(Label.parseAbsolute("//constraint:basic"));
+        .isEqualTo(Label.parseAbsolute("//constraint:basic", ImmutableMap.of()));
     assertThat(PlatformProviderUtils.constraintValue(barValue).label())
-        .isEqualTo(Label.parseAbsolute("//constraint:bar"));
-  }
-
-  @Test
-  public void testConstraint_skylark() throws Exception {
-
-    scratch.file(
-        "test/platform/constraints.bzl",
-        "def _impl(ctx):",
-        "  constraint_value = ctx.attr.constraint[platform_common.ConstraintValueInfo]",
-        "  return struct(",
-        "    setting = constraint_value.constraint.label,",
-        "    value = constraint_value.label)",
-        "my_rule = rule(",
-        "  implementation = _impl,",
-        "  attrs = { 'constraint': attr.label(providers = [platform_common.ConstraintValueInfo])},",
-        ")");
-
-    scratch.file(
-        "test/platform/BUILD",
-        "load('//test/platform:constraints.bzl', 'my_rule')",
-        "my_rule(name = 'r',",
-        "  constraint = '//constraint:foo')");
-
-    ConfiguredTarget configuredTarget = getConfiguredTarget("//test/platform:r");
-    assertThat(configuredTarget).isNotNull();
-
-    Label settingLabel = (Label) configuredTarget.get("setting");
-    assertThat(settingLabel).isNotNull();
-    assertThat(settingLabel).isEqualTo(makeLabel("//constraint:basic"));
-    Label valueLabel = (Label) configuredTarget.get("value");
-    assertThat(valueLabel).isNotNull();
-    assertThat(valueLabel).isEqualTo(makeLabel("//constraint:foo"));
+        .isEqualTo(Label.parseAbsolute("//constraint:bar", ImmutableMap.of()));
   }
 }

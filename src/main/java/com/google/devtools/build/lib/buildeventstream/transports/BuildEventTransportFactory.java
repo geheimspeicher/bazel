@@ -17,11 +17,13 @@ package com.google.devtools.build.lib.buildeventstream.transports;
 import static com.google.common.base.Strings.isNullOrEmpty;
 
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.ImmutableSet.Builder;
+import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploader;
+import com.google.devtools.build.lib.buildeventstream.BuildEventArtifactUploaderMap;
+import com.google.devtools.build.lib.buildeventstream.BuildEventProtocolOptions;
 import com.google.devtools.build.lib.buildeventstream.BuildEventTransport;
-import com.google.devtools.build.lib.buildeventstream.PathConverter;
-import com.google.devtools.build.lib.vfs.Path;
+import com.google.devtools.build.lib.util.AbruptExitException;
 import java.io.IOException;
+import java.util.function.Consumer;
 
 /** Factory used to create a Set of BuildEventTransports from BuildEventStreamOptions. */
 public enum BuildEventTransportFactory {
@@ -32,11 +34,19 @@ public enum BuildEventTransportFactory {
     }
 
     @Override
-    protected BuildEventTransport create(BuildEventStreamOptions options,
-        PathConverter pathConverter) throws IOException {
+    protected BuildEventTransport create(
+        BuildEventStreamOptions options,
+        BuildEventProtocolOptions protocolOptions,
+        BuildEventArtifactUploader uploader,
+        Consumer<AbruptExitException> exitFunc)
+        throws IOException {
       return new TextFormatFileTransport(
-          options.getBuildEventTextFile(),
-          options.getBuildEventTextFilePathConversion() ? pathConverter : new NullPathConverter());
+          options.getBuildEventTextFile(), protocolOptions, uploader, exitFunc);
+    }
+
+    @Override
+    protected boolean usePathConverter(BuildEventStreamOptions options) {
+      return options.getBuildEventTextFilePathConversion();
     }
   },
 
@@ -47,13 +57,19 @@ public enum BuildEventTransportFactory {
     }
 
     @Override
-    protected BuildEventTransport create(BuildEventStreamOptions options,
-        PathConverter pathConverter) throws IOException {
+    protected BuildEventTransport create(
+        BuildEventStreamOptions options,
+        BuildEventProtocolOptions protocolOptions,
+        BuildEventArtifactUploader uploader,
+        Consumer<AbruptExitException> exitFunc)
+        throws IOException {
       return new BinaryFormatFileTransport(
-          options.getBuildEventBinaryFile(),
-          options.getBuildEventBinaryFilePathConversion()
-              ? pathConverter
-              : new NullPathConverter());
+          options.getBuildEventBinaryFile(), protocolOptions, uploader, exitFunc);
+    }
+
+    @Override
+    protected boolean usePathConverter(BuildEventStreamOptions options) {
+      return options.getBuildEventBinaryFilePathConversion();
     }
   },
 
@@ -65,10 +81,18 @@ public enum BuildEventTransportFactory {
 
     @Override
     protected BuildEventTransport create(
-        BuildEventStreamOptions options, PathConverter pathConverter) throws IOException {
+        BuildEventStreamOptions options,
+        BuildEventProtocolOptions protocolOptions,
+        BuildEventArtifactUploader uploader,
+        Consumer<AbruptExitException> exitFunc)
+        throws IOException {
       return new JsonFormatFileTransport(
-          options.getBuildEventJsonFile(),
-          options.getBuildEventJsonFilePathConversion() ? pathConverter : new NullPathConverter());
+          options.getBuildEventJsonFile(), protocolOptions, uploader, exitFunc);
+    }
+
+    @Override
+    protected boolean usePathConverter(BuildEventStreamOptions options) {
+      return options.getBuildEventJsonFilePathConversion();
     }
   };
 
@@ -80,12 +104,20 @@ public enum BuildEventTransportFactory {
    * @return A {@link ImmutableSet} of BuildEventTransports. This set may be empty.
    * @throws IOException Exception propagated from a {@link BuildEventTransport} creation failure.
    */
-  public static ImmutableSet<BuildEventTransport> createFromOptions(BuildEventStreamOptions options,
-      PathConverter pathConverter) throws IOException {
-    Builder<BuildEventTransport> buildEventTransportsBuilder = ImmutableSet.builder();
+  public static ImmutableSet<BuildEventTransport> createFromOptions(
+      BuildEventStreamOptions options,
+      BuildEventProtocolOptions protocolOptions,
+      BuildEventArtifactUploaderMap artifactUploaders,
+      Consumer<AbruptExitException> exitFunc)
+      throws IOException {
+    ImmutableSet.Builder<BuildEventTransport> buildEventTransportsBuilder = ImmutableSet.builder();
     for (BuildEventTransportFactory transportFactory : BuildEventTransportFactory.values()) {
       if (transportFactory.enabled(options)) {
-        buildEventTransportsBuilder.add(transportFactory.create(options, pathConverter));
+        BuildEventArtifactUploader uploader = transportFactory.usePathConverter(options)
+            ? artifactUploaders.select(protocolOptions.buildEventUploadStrategy)
+            : BuildEventArtifactUploader.LOCAL_FILES_UPLOADER;
+        buildEventTransportsBuilder.add(
+            transportFactory.create(options, protocolOptions, uploader, exitFunc));
       }
     }
     return buildEventTransportsBuilder.build();
@@ -95,13 +127,12 @@ public enum BuildEventTransportFactory {
   protected abstract boolean enabled(BuildEventStreamOptions options);
 
   /** Creates a BuildEventTransport from the specified options. */
-  protected abstract BuildEventTransport create(BuildEventStreamOptions options,
-      PathConverter pathConverter) throws IOException;
+  protected abstract BuildEventTransport create(
+      BuildEventStreamOptions options,
+      BuildEventProtocolOptions protocolOptions,
+      BuildEventArtifactUploader uploader,
+      Consumer<AbruptExitException> exitFunc)
+      throws IOException;
 
-  private static class NullPathConverter implements PathConverter {
-    @Override
-    public String apply(Path path) {
-      return path.toURI().toString();
-    }
-  }
+  protected abstract boolean usePathConverter(BuildEventStreamOptions options);
 }

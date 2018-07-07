@@ -18,7 +18,6 @@ import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.base.Optional;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableMap.Builder;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.Fragment;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -28,11 +27,8 @@ import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.java.JavaConfigurationApi;
 import com.google.devtools.common.options.TriState;
 import java.util.List;
 import java.util.Map;
@@ -41,14 +37,7 @@ import javax.annotation.Nullable;
 /** A java compiler configuration containing the flags required for compilation. */
 @AutoCodec
 @Immutable
-@SkylarkModule(
-  name = "java",
-  doc = "A java compiler configuration.",
-  category = SkylarkModuleCategory.CONFIGURATION_FRAGMENT
-)
-public final class JavaConfiguration extends Fragment {
-  public static final ObjectCodec<JavaConfiguration> CODEC = new JavaConfiguration_AutoCodec();
-
+public final class JavaConfiguration extends Fragment implements JavaConfigurationApi {
   /** Values for the --java_classpath option */
   public enum JavaClasspathMode {
     /** Use full transitive classpaths, the default behavior. */
@@ -70,6 +59,16 @@ public final class JavaConfiguration extends Fragment {
      * Check for one version violations, emit warnings to stderr if any are found, and break the
      * rule if it's found.
      */
+    ERROR
+  }
+
+  /** Values for the --experimental_import_deps_checking option */
+  public enum ImportDepsCheckingLevel {
+    /** Turn off the import_deps checking. */
+    OFF,
+    /** Emit warnings when the dependencies of java_import/aar_import are not complete. */
+    WARNING,
+    /** Emit errors when the dependencies of java_import/aar_import are not complete. */
     ERROR
   }
 
@@ -154,11 +153,13 @@ public final class JavaConfiguration extends Fragment {
   private final boolean strictDepsJavaProtos;
   private final OneVersionEnforcementLevel enforceOneVersion;
   private final boolean enforceOneVersionOnJavaTests;
+  private final ImportDepsCheckingLevel importDepsCheckingLevel;
   private final boolean allowRuntimeDepsOnNeverLink;
   private final JavaClasspathMode javaClasspath;
   private final ImmutableList<String> defaultJvmFlags;
   private final ImmutableList<String> checkedConstraints;
   private final StrictDepsMode strictJavaDeps;
+  private final String fixDepsTool;
   private final Label proguardBinary;
   private final ImmutableList<Label> extraProguardSpecs;
   private final TriState bundleTranslations;
@@ -190,6 +191,7 @@ public final class JavaConfiguration extends Fragment {
     this.defaultJvmFlags = ImmutableList.copyOf(javaOptions.jvmOpts);
     this.checkedConstraints = ImmutableList.copyOf(javaOptions.checkedConstraints);
     this.strictJavaDeps = javaOptions.strictJavaDeps;
+    this.fixDepsTool = javaOptions.fixDepsTool;
     this.proguardBinary = javaOptions.proguard;
     this.extraProguardSpecs = ImmutableList.copyOf(javaOptions.extraProguardSpecs);
     this.bundleTranslations = javaOptions.bundleTranslations;
@@ -200,6 +202,7 @@ public final class JavaConfiguration extends Fragment {
     this.strictDepsJavaProtos = javaOptions.strictDepsJavaProtos;
     this.enforceOneVersion = javaOptions.enforceOneVersion;
     this.enforceOneVersionOnJavaTests = javaOptions.enforceOneVersionOnJavaTests;
+    this.importDepsCheckingLevel = javaOptions.importDepsCheckingLevel;
     this.allowRuntimeDepsOnNeverLink = javaOptions.allowRuntimeDepsOnNeverLink;
     this.explicitJavaTestDeps = javaOptions.explicitJavaTestDeps;
     this.experimentalTestRunner = javaOptions.experimentalTestRunner;
@@ -208,7 +211,7 @@ public final class JavaConfiguration extends Fragment {
     ImmutableList.Builder<Label> translationsBuilder = ImmutableList.builder();
     for (String s : javaOptions.translationTargets) {
       try {
-        Label label = Label.parseAbsolute(s);
+        Label label = Label.parseAbsolute(s, ImmutableMap.of());
         translationsBuilder.add(label);
       } catch (LabelSyntaxException e) {
         throw new InvalidConfigurationException("Invalid translations target '" + s + "', make " +
@@ -240,11 +243,13 @@ public final class JavaConfiguration extends Fragment {
       boolean strictDepsJavaProtos,
       OneVersionEnforcementLevel enforceOneVersion,
       boolean enforceOneVersionOnJavaTests,
+      ImportDepsCheckingLevel importDepsCheckingLevel,
       boolean allowRuntimeDepsOnNeverLink,
       JavaClasspathMode javaClasspath,
       ImmutableList<String> defaultJvmFlags,
       ImmutableList<String> checkedConstraints,
       StrictDepsMode strictJavaDeps,
+      String fixDepsTool,
       Label proguardBinary,
       ImmutableList<Label> extraProguardSpecs,
       TriState bundleTranslations,
@@ -267,11 +272,13 @@ public final class JavaConfiguration extends Fragment {
     this.strictDepsJavaProtos = strictDepsJavaProtos;
     this.enforceOneVersion = enforceOneVersion;
     this.enforceOneVersionOnJavaTests = enforceOneVersionOnJavaTests;
+    this.importDepsCheckingLevel = importDepsCheckingLevel;
     this.allowRuntimeDepsOnNeverLink = allowRuntimeDepsOnNeverLink;
     this.javaClasspath = javaClasspath;
     this.defaultJvmFlags = defaultJvmFlags;
     this.checkedConstraints = checkedConstraints;
     this.strictJavaDeps = strictJavaDeps;
+    this.fixDepsTool = fixDepsTool;
     this.proguardBinary = proguardBinary;
     this.extraProguardSpecs = extraProguardSpecs;
     this.bundleTranslations = bundleTranslations;
@@ -287,19 +294,14 @@ public final class JavaConfiguration extends Fragment {
     this.useLegacyBazelJavaTest = useLegacyBazelJavaTest;
   }
 
-  @SkylarkCallable(name = "default_javac_flags", structField = true,
-      doc = "The default flags for the Java compiler.")
+  @Override
   // TODO(bazel-team): this is the command-line passed options, we should remove from skylark
   // probably.
   public ImmutableList<String> getDefaultJavacFlags() {
     return commandLineJavacFlags;
   }
 
-  @SkylarkCallable(
-      name = "strict_java_deps",
-      structField = true,
-      doc = "The value of the strict_java_deps flag."
-  )
+  @Override
   public String getStrictJavaDepsName() {
     return strictJavaDeps.name().toLowerCase();
   }
@@ -310,19 +312,6 @@ public final class JavaConfiguration extends Fragment {
       reporter.handle(Event.error("Translations enabled, but no message translations specified. " +
           "Use '--message_translations' to select the message translations to use"));
     }
-  }
-
-  @Override
-  public void addGlobalMakeVariables(Builder<String, String> globalMakeEnvBuilder) {
-    globalMakeEnvBuilder.put("JAVA_TRANSLATIONS", buildTranslations() ? "1" : "0");
-  }
-
-  @Override
-  public boolean compatibleWithStrategy(String strategyName) {
-    if (strategyName.equals("experimental_worker")) {
-      return explicitJavaTestDeps() && useExperimentalTestRunner();
-    }
-    return true;
   }
 
   /**
@@ -377,6 +366,11 @@ public final class JavaConfiguration extends Fragment {
       default:   // OFF, WARN, ERROR
         return strict;
     }
+  }
+
+  /** Which tool to use for fixing dependency errors. */
+  public String getFixDepsTool() {
+    return fixDepsTool;
   }
 
   /**
@@ -489,6 +483,10 @@ public final class JavaConfiguration extends Fragment {
 
   public boolean enforceOneVersionOnJavaTests() {
     return enforceOneVersionOnJavaTests;
+  }
+
+  public ImportDepsCheckingLevel getImportDepsCheckingLevel() {
+    return importDepsCheckingLevel;
   }
 
   public boolean getAllowRuntimeDepsOnNeverLink() {

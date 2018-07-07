@@ -15,7 +15,7 @@
 package com.google.devtools.build.lib.syntax;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.devtools.build.lib.testutil.MoreAsserts.expectThrows;
+import static com.google.devtools.build.lib.testutil.MoreAsserts.assertThrows;
 import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableMap;
@@ -100,9 +100,7 @@ public class EnvironmentTest extends EvaluationTestCase {
   public void testBuilderRequiresSemantics() throws Exception {
     try (Mutability mut = Mutability.create("test")) {
       IllegalArgumentException expected =
-          expectThrows(
-              IllegalArgumentException.class,
-              () -> Environment.builder(mut).build());
+          assertThrows(IllegalArgumentException.class, () -> Environment.builder(mut).build());
       assertThat(expected).hasMessageThat()
           .contains("must call either setSemantics or useDefaultSemantics");
     }
@@ -141,6 +139,7 @@ public class EnvironmentTest extends EvaluationTestCase {
                 "all",
                 "any",
                 "bool",
+                "depset",
                 "dict",
                 "dir",
                 "enumerate",
@@ -157,9 +156,11 @@ public class EnvironmentTest extends EvaluationTestCase {
                 "range",
                 "repr",
                 "reversed",
+                "select",
                 "sorted",
                 "str",
                 "tuple",
+                "type",
                 "zip"));
     assertThat(innerEnv.getVariableNames())
         .isEqualTo(
@@ -173,6 +174,7 @@ public class EnvironmentTest extends EvaluationTestCase {
                 "all",
                 "any",
                 "bool",
+                "depset",
                 "dict",
                 "dir",
                 "enumerate",
@@ -189,9 +191,11 @@ public class EnvironmentTest extends EvaluationTestCase {
                 "range",
                 "repr",
                 "reversed",
+                "select",
                 "sorted",
                 "str",
                 "tuple",
+                "type",
                 "zip"));
   }
 
@@ -274,6 +278,54 @@ public class EnvironmentTest extends EvaluationTestCase {
   }
 
   @Test
+  public void testVarOrderDeterminism() throws Exception {
+    Mutability parentMutability = Mutability.create("parent env");
+    Environment parentEnv = Environment.builder(parentMutability)
+        .useDefaultSemantics()
+        .build();
+    parentEnv.update("a", 1);
+    parentEnv.update("c", 2);
+    parentEnv.update("b", 3);
+    Environment.GlobalFrame parentFrame = parentEnv.getGlobals();
+    parentMutability.freeze();
+    Mutability mutability = Mutability.create("testing");
+    Environment env = Environment.builder(mutability)
+        .useDefaultSemantics()
+        .setGlobals(parentFrame)
+        .build();
+    env.update("x", 4);
+    env.update("z", 5);
+    env.update("y", 6);
+    // The order just has to be deterministic, but for definiteness this test spells out the exact
+    // order returned by the implementation: parent frame before current environment, and bindings
+    // within a frame ordered by when they were added.
+    assertThat(env.getVariableNames())
+        .containsExactly("a", "c", "b", "x", "z", "y").inOrder();
+    assertThat(env.getGlobals().getTransitiveBindings())
+        .containsExactly("a", 1, "c", 2, "b", 3, "x", 4, "z", 5, "y", 6).inOrder();
+  }
+
+  @Test
+  public void testTransitiveHashCodeDeterminism() throws Exception {
+    // As a proxy for determinism, test that changing the order of imports doesn't change the hash
+    // code (within any one execution).
+    Extension a = new Extension(ImmutableMap.of(), "a123");
+    Extension b = new Extension(ImmutableMap.of(), "b456");
+    Extension c = new Extension(ImmutableMap.of(), "c789");
+    Environment env1 = Environment.builder(Mutability.create("testing1"))
+        .useDefaultSemantics()
+        .setImportedExtensions(ImmutableMap.of("a", a, "b", b, "c", c))
+        .setFileContentHashCode("z")
+        .build();
+    Environment env2 = Environment.builder(Mutability.create("testing2"))
+        .useDefaultSemantics()
+        .setImportedExtensions(ImmutableMap.of("c", c, "b", b, "a", a))
+        .setFileContentHashCode("z")
+        .build();
+    assertThat(env1.getTransitiveContentHashCode()).isEqualTo(env2.getTransitiveContentHashCode());
+  }
+
+  @Test
   public void testExtensionEqualityDebugging_RhsIsNull() {
     assertCheckStateFailsWithMessage(
         new Extension(ImmutableMap.of(), "abc"),
@@ -302,9 +354,9 @@ public class EnvironmentTest extends EvaluationTestCase {
     assertCheckStateFailsWithMessage(
         new Extension(ImmutableMap.of("x", 1, "y", "foo", "z", true), "abc"),
         new Extension(ImmutableMap.of("x", 2.0, "y", "foo", "z", false), "abc"),
-        "bindings are unequal: x: this one has 1 (class java.lang.Integer), but given one has 2.0 "
-            + "(class java.lang.Double); z: this one has True (class java.lang.Boolean), but given "
-            + "one has False (class java.lang.Boolean)");
+        "bindings are unequal: x: this one has 1 (class java.lang.Integer, 1), but given one has "
+            + "2.0 (class java.lang.Double, 2.0); z: this one has True (class java.lang.Boolean, "
+            + "true), but given one has False (class java.lang.Boolean, false)");
   }
 
   @Test
@@ -318,9 +370,7 @@ public class EnvironmentTest extends EvaluationTestCase {
   private static void assertCheckStateFailsWithMessage(
       Extension left, Object right, String substring) {
     IllegalStateException expected =
-        expectThrows(
-            IllegalStateException.class,
-            () -> left.checkStateEquals(right));
+        assertThrows(IllegalStateException.class, () -> left.checkStateEquals(right));
     assertThat(expected).hasMessageThat().contains(substring);
   }
 }

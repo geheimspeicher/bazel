@@ -16,26 +16,20 @@ package com.google.devtools.build.lib.rules.config;
 
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
-import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.packages.NativeInfo;
 import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
-import com.google.devtools.build.lib.skylarkinterface.Param;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
+import com.google.devtools.build.lib.skylarkbuildapi.config.ConfigFeatureFlagProviderApi;
+import com.google.devtools.build.lib.syntax.Environment;
 import com.google.devtools.build.lib.syntax.EvalException;
 import java.util.Map;
 
 /** Provider for exporting value and valid value predicate of feature flags to consuming targets. */
-@SkylarkModule(
-  name = "FeatureFlagInfo",
-  doc = "A provider used to access information about config_feature_flag rules."
-)
 @Immutable
-public class ConfigFeatureFlagProvider extends NativeInfo {
+public class ConfigFeatureFlagProvider extends NativeInfo implements ConfigFeatureFlagProviderApi {
 
   /** Name used in Skylark for accessing ConfigFeatureFlagProvider. */
   static final String SKYLARK_NAME = "FeatureFlagInfo";
@@ -47,7 +41,7 @@ public class ConfigFeatureFlagProvider extends NativeInfo {
   private final Predicate<String> validityPredicate;
 
   private ConfigFeatureFlagProvider(String value, Predicate<String> validityPredicate) {
-    super(SKYLARK_CONSTRUCTOR, ImmutableMap.<String, Object>of("value", value));
+    super(SKYLARK_CONSTRUCTOR);
 
     this.value = value;
     this.validityPredicate = validityPredicate;
@@ -66,8 +60,8 @@ public class ConfigFeatureFlagProvider extends NativeInfo {
     }
 
     @Override
-    protected ConfigFeatureFlagProvider createInstanceFromSkylark(Object[] args, Location loc)
-        throws EvalException {
+    protected ConfigFeatureFlagProvider createInstanceFromSkylark(
+        Object[] args, Environment env, Location loc) throws EvalException {
 
       @SuppressWarnings("unchecked")
       Map<String, Object> kwargs = (Map<String, Object>) args[0];
@@ -89,22 +83,13 @@ public class ConfigFeatureFlagProvider extends NativeInfo {
   }
 
   /** Gets the current value of the flag in the flag's current configuration. */
-  public String getValue() {
+  @Override
+  public String getFlagValue() {
     return value;
   }
 
   /** Returns whether this value is valid for this flag. */
-  @SkylarkCallable(
-    name = "is_valid_value",
-    doc = "The value of the flag in the configuration used by the flag rule.",
-    parameters = {
-      @Param(
-        name = "value",
-        type = String.class,
-        doc = "String, the value to check for validity for this flag."
-      ),
-    }
-  )
+  @Override
   public boolean isValidValue(String value) {
     return validityPredicate.apply(value);
   }

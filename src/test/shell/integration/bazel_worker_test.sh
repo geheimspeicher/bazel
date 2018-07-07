@@ -35,6 +35,7 @@ example_worker=$(find $BAZEL_RUNFILES -name ExampleWorker_deploy.jar)
 add_to_bazelrc "build -s"
 add_to_bazelrc "build --strategy=Javac=worker --strategy=Work=worker"
 add_to_bazelrc "build --worker_verbose --worker_max_instances=1"
+add_to_bazelrc "build --debug_print_action_contexts"
 add_to_bazelrc "build ${ADDITIONAL_BUILD_FLAGS}"
 
 function set_up() {
@@ -360,7 +361,8 @@ EOF
     && fail "expected build to fail" || true
 
   # Check that a helpful error message was printed.
-  expect_log "Worker process returned an unparseable WorkResponse:"
+  expect_log "Worker process returned an unparseable WorkResponse!"
+  expect_log "Did you try to print something to stdout"
   expect_log "I'm a poisoned worker and this is not a protobuf."
 }
 

@@ -15,6 +15,8 @@
 package com.google.devtools.build.lib.skyframe.serialization.autocodec;
 
 import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
@@ -25,13 +27,20 @@ import java.lang.annotation.Target;
  * <pre>{@code
  * @AutoCodec
  * class Target {
- *   public static final ObjectCodec<Target> CODEC = new Target_AutoCodec();
- * }
  * }</pre>
  *
  * The {@code _AutoCodec} suffix is added to the {@code Target} to obtain the generated class name.
+ * In the example, that results in a class named {@code Target_AutoCodec} but applications should
+ * not need to directly access the generated class.
+ *
+ * <p>If applied to a field (which must be static and final), the field is stored as a "constant"
+ * allowing for trivial serialization of it as an integer tag (see {@code CodecScanner} and
+ * {@code ObjectCodecRegistry}). In order to do that, a trivial associated "RegisteredSingleton"
+ * class is generated.
  */
-@Target(ElementType.TYPE)
+@Target({ElementType.TYPE, ElementType.FIELD})
+// TODO(janakr): remove once serialization is complete.
+@Retention(RetentionPolicy.RUNTIME)
 public @interface AutoCodec {
   /**
    * AutoCodec recursively derives a codec using the public interfaces of the class.
@@ -46,7 +55,8 @@ public @interface AutoCodec {
      *
      * <ul>
      *   <li>a designated constructor or factory method to inspect to generate the codec
-     *   <li>the parameters must match member fields on name and type.
+     *   <li>each parameter must match a member field on name and the field will be interpreted as
+     *       an instance of the parameter type.
      * </ul>
      *
      * <p>If there is a unique constructor, @AutoCodec may select that as the default instantiator,
@@ -54,19 +64,11 @@ public @interface AutoCodec {
      */
     INSTANTIATOR,
     /**
-     * Uses the public fields to infer serialization code.
-     *
-     * <p>Serializes each public field. Calls the no-arg constructor of the class to instantiate an
-     * instance for deserialization.
+     * For use with {@link com.google.auto.value.AutoValue} classes with an {@link
+     * com.google.auto.value.AutoValue.Builder} static nested Builder class: uses the builder when
+     * deserializing.
      */
-    PUBLIC_FIELDS,
-    /**
-     * For use with abstract classes (enforced at compile time).
-     *
-     * <p>Uses reflection to determine the concrete subclass, stores the name of the subclass and
-     * uses its codec to serialize the data.
-     */
-    POLYMORPHIC,
+    AUTO_VALUE_BUILDER,
   }
 
   /**
@@ -78,37 +80,19 @@ public @interface AutoCodec {
   @Target({ElementType.CONSTRUCTOR, ElementType.METHOD})
   @interface Instantiator {}
 
-  /**
-   * Marks a specific constructor parameter as a dependency.
-   *
-   * <p>When a constructor selected for the {@code INSTANTIATOR} strategy has one of its parameters
-   * tagged {@code @Dependency}, {@code @AutoCodec} generates an {@link
-   * com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodec} instead of the usual
-   * {@link com.google.devtools.build.lib.skyframe.serialization.ObjectCodec} with the dependency
-   * type parameter matching the tagged parameter type.
-   *
-   * <p>At deserialization, the {@code @Dependency} tagged parameter will be forwarded from the
-   * {@code dependency} parameter of {@link
-   * com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodec#deserialize}.
-   *
-   * <p>A compiler error will result if more than one constructor parameter has the
-   * {@code @Dependency} annotation or if the annotation itself has a dependency element.
-   */
-  @Target(ElementType.PARAMETER)
-  @interface Dependency {}
-
   Strategy strategy() default Strategy.INSTANTIATOR;
+
   /**
-   * Specifies a deserialization dependency.
-   *
-   * <p>When non-{@link Void}, generates an {@link
-   * com.google.devtools.build.lib.skyframe.serialization.InjectingObjectCodec} instead of the usual
-   * {@link com.google.devtools.build.lib.skyframe.serialization.ObjectCodec} with the dependency
-   * type parameter matching the returned type.
-   *
-   * <p>It is an error to use this in conjunction with {@code @AutoCodec.Dependency}.
+   * Checks whether or not this class is allowed to be serialized. See {@link
+   * com.google.devtools.build.lib.skyframe.serialization.SerializationContext#checkClassExplicitlyAllowed}.
    */
-  Class<?> dependency() default Void.class;
+  boolean checkClassExplicitlyAllowed() default false;
+
+  /**
+   * Adds an explicitly allowed class for this serialization session. See {@link
+   * com.google.devtools.build.lib.skyframe.serialization.SerializationContext#addExplicitlyAllowedClass}.
+   */
+  Class<?>[] explicitlyAllowClass() default {};
 
   /**
    * Signals that the annotated element is only visible for use by serialization. It should not be
@@ -116,6 +100,6 @@ public @interface AutoCodec {
    *
    * <p>TODO(janakr): Add an ErrorProne checker to enforce this.
    */
-  @Target({ElementType.TYPE, ElementType.METHOD, ElementType.CONSTRUCTOR})
+  @Target({ElementType.TYPE, ElementType.METHOD, ElementType.CONSTRUCTOR, ElementType.FIELD})
   @interface VisibleForSerialization {}
 }

@@ -53,7 +53,7 @@ PLATFORM="$(uname -s | tr 'A-Z' 'a-z')"
 
 MACHINE_TYPE="$(uname -m)"
 MACHINE_IS_64BIT='no'
-if [ "${MACHINE_TYPE}" = 'amd64' -o "${MACHINE_TYPE}" = 'x86_64' -o "${MACHINE_TYPE}" = 's390x' ]; then
+if [ "${MACHINE_TYPE}" = 'amd64' -o "${MACHINE_TYPE}" = 'x86_64' -o "${MACHINE_TYPE}" = 's390x' -o "${MACHINE_TYPE}" = 'aarch64' ]; then
   MACHINE_IS_64BIT='yes'
 fi
 
@@ -300,4 +300,16 @@ function get_java_version() {
 function get_bind_target() {
   $BAZEL --bazelrc=${BAZELRC} --nomaster_bazelrc ${BAZEL_DIR_STARTUP_OPTIONS} \
     query "deps($1, 1) - $1"
+}
+
+# Create a link for a directory on the filesystem
+function link_dir() {
+  local source=$1
+  local dest=$2
+
+  if [[ "${PLATFORM}" == "windows" ]]; then
+    cmd.exe /C "mklink /J \"$(cygpath -w "$dest")\" \"$(cygpath -w "$source")\""
+  else
+    ln -s "${source}" "${dest}"
+  fi
 }

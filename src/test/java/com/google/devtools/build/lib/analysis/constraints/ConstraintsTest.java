@@ -24,7 +24,6 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.BuildType;
 import com.google.devtools.build.lib.packages.RuleClass;
-import com.google.devtools.build.lib.packages.RuleClass.Builder;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
 import com.google.devtools.build.lib.testutil.UnknownRuleConfiguredTarget;
 import com.google.devtools.build.lib.util.FileTypeSet;
@@ -56,11 +55,11 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    */
   private static final class RuleClassDefaultRule implements RuleDefinition {
     @Override
-    public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
+    public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
       return builder
           .setUndocumented()
-          .compatibleWith(env.getLabel("//buildenv/rule_class_compat:b"))
-          .restrictedTo(env.getLabel("//buildenv/rule_class_restrict:d"))
+          .compatibleWith(Label.parseAbsoluteUnchecked("//buildenv/rule_class_compat:b"))
+          .restrictedTo(Label.parseAbsoluteUnchecked("//buildenv/rule_class_restrict:d"))
           .build();
     }
 
@@ -78,15 +77,19 @@ public class ConstraintsTest extends AbstractConstraintsTest {
    * Dummy rule class for testing rule class defaults. This class applies invalid defaults. Note
    * that the specified environments must be independently created.
    */
-  private static final MockRule BAD_RULE_CLASS_DEFAULT_RULE = () -> MockRule.define(
-      "bad_rule_class_default",
-      (builder, env) ->
-          builder
-              .setUndocumented()
-              // These defaults are invalid since compatibleWith and restrictedTo can't mix
-              // environments from the same group.
-              .compatibleWith(env.getLabel("//buildenv/rule_class_compat:a"))
-              .restrictedTo(env.getLabel("//buildenv/rule_class_compat:b")));
+  private static final MockRule BAD_RULE_CLASS_DEFAULT_RULE =
+      () ->
+          MockRule.define(
+              "bad_rule_class_default",
+              (builder, env) ->
+                  builder
+                      .setUndocumented()
+                      // These defaults are invalid since compatibleWith and restrictedTo can't mix
+                      // environments from the same group.
+                      .compatibleWith(
+                          Label.parseAbsoluteUnchecked("//buildenv/rule_class_compat:a"))
+                      .restrictedTo(
+                          Label.parseAbsoluteUnchecked("//buildenv/rule_class_compat:b")));
 
   private static final MockRule RULE_WITH_IMPLICIT_AND_LATEBOUND_DEFAULTS =
       () ->
@@ -160,6 +163,27 @@ public class ConstraintsTest extends AbstractConstraintsTest {
         .setDefaults("a").make();
     new EnvironmentGroupMaker("buildenv/rule_class_restrict").setEnvironments("c", "d")
         .setDefaults("c").make();
+  }
+
+  @Test
+  public void packageErrorOnEnvironmentGroupWithMissingEnvironments() throws Exception {
+    scratch.file("buildenv/envs/BUILD",
+        "environment(name = 'env1')",
+        "environment(name = 'env2')",
+        "environment_group(",
+        "    name = 'envs',",
+        "    environments = [':env1', ':en2'],",
+        "    defaults = [':env1'])");
+    reporter.removeHandler(failFastHandler);
+    assertThat(scratchConfiguredTarget("foo", "g",
+        "genrule("
+            + "    name = 'g',"
+            + "    srcs = [],"
+            + "    outs = ['g.out'],"
+            + "    cmd = '',"
+            + "    restricted_to = ['//buildenv/envs:env1'])"))
+        .isNull();
+    assertContainsEvent("environment //buildenv/envs:en2 does not exist");
   }
 
   /**

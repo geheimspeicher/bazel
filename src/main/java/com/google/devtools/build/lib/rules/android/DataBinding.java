@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
@@ -131,10 +132,14 @@ public final class DataBinding {
    * for each layout file with data binding expressions. Since this may produce multiple files,
    * outputs are zipped up into a single container.
    */
-  static Artifact getLayoutInfoFile(RuleContext ruleContext) {
-    // The data binding library expects this to be called "layout-info.zip".
-    return ruleContext.getUniqueDirectoryArtifact(
-        "databinding", "layout-info.zip", ruleContext.getBinOrGenfilesDirectory());
+  static Artifact getLayoutInfoFile(ActionConstructionContext context) {
+    return getSuffixedInfoFile(context, "");
+  }
+
+  /** Gets a layout info file with the specified suffix (for use in having different outputs) */
+  static Artifact getSuffixedInfoFile(ActionConstructionContext context, String suffix) {
+    return context.getUniqueDirectoryArtifact(
+        "databinding", "layout-info" + suffix + ".zip");
   }
 
   /**
@@ -165,7 +170,7 @@ public final class DataBinding {
   }
 
   /** The javac flags that are needed to configure data binding's annotation processor. */
-  static ImmutableList<String> getJavacopts(RuleContext ruleContext, boolean isBinary) {
+  static ImmutableList<String> getJavacOpts(RuleContext ruleContext, boolean isBinary) {
     ImmutableList.Builder<String> flags = ImmutableList.builder();
     String metadataOutputDir = getDataBindingExecPath(ruleContext).getPathString();
 
@@ -242,7 +247,7 @@ public final class DataBinding {
       dataBindingMetadataOutputs.addAll(getMetadataOutputs(ruleContext));
     }
     dataBindingMetadataOutputs.addAll(getTransitiveMetadata(ruleContext, "exports"));
-    if (!LocalResourceContainer.definesAndroidResources(ruleContext.attributes())) {
+    if (!AndroidResources.definesAndroidResources(ruleContext.attributes())) {
       // If this rule doesn't declare direct resources, no resource processing is run so no data
       // binding outputs are produced. In that case, we need to explicitly propagate data binding
       // outputs from the deps to make sure they continue up the build graph.
@@ -279,7 +284,7 @@ public final class DataBinding {
    * binary's compilation, enough information is available to only use the first version.
    */
   private static List<Artifact> getMetadataOutputs(RuleContext ruleContext) {
-    if (!LocalResourceContainer.definesAndroidResources(ruleContext.attributes())) {
+    if (!AndroidResources.definesAndroidResources(ruleContext.attributes())) {
       // If this rule doesn't define local resources, no resource processing was done, so it
       // doesn't produce data binding output.
       return ImmutableList.<Artifact>of();
@@ -306,7 +311,7 @@ public final class DataBinding {
    */
   static ImmutableList<Artifact> processDeps(RuleContext ruleContext) {
     ImmutableList.Builder<Artifact> dataBindingJavaInputs = ImmutableList.<Artifact>builder();
-    if (LocalResourceContainer.definesAndroidResources(ruleContext.attributes())) {
+    if (AndroidResources.definesAndroidResources(ruleContext.attributes())) {
       dataBindingJavaInputs.add(DataBinding.getLayoutInfoFile(ruleContext));
     }
     for (Artifact dataBindingDepMetadata : getTransitiveMetadata(ruleContext, "deps")) {

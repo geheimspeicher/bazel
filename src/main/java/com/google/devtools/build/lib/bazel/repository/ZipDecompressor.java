@@ -32,6 +32,9 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
 import javax.annotation.Nullable;
 
 /**
@@ -76,13 +79,18 @@ public class ZipDecompressor implements Decompressor {
     boolean foundPrefix = false;
     try (ZipReader reader = new ZipReader(descriptor.archivePath().getPathFile())) {
       Collection<ZipFileEntry> entries = reader.entries();
+      // Store link, target info of symlinks, we create them after regular files are extracted.
+      Map<Path, PathFragment> symlinks = new HashMap<>();
       for (ZipFileEntry entry : entries) {
         StripPrefixedPath entryPath = StripPrefixedPath.maybeDeprefix(entry.getName(), prefix);
         foundPrefix = foundPrefix || entryPath.foundPrefix();
         if (entryPath.skip()) {
           continue;
         }
-        extractZipEntry(reader, entry, destinationDirectory, entryPath.getPathFragment());
+        extractZipEntry(reader, entry, destinationDirectory, entryPath.getPathFragment(), symlinks);
+      }
+      for (Map.Entry<Path, PathFragment> symlink : symlinks.entrySet()) {
+        symlink.getKey().createSymbolicLink(symlink.getValue());
       }
     } catch (IOException e) {
       throw new RepositoryFunctionException(new IOException(
@@ -104,7 +112,8 @@ public class ZipDecompressor implements Decompressor {
       ZipReader reader,
       ZipFileEntry entry,
       Path destinationDirectory,
-      PathFragment strippedRelativePath)
+      PathFragment strippedRelativePath,
+      Map<Path, PathFragment> symlinks)
       throws IOException {
     if (strippedRelativePath.isAbsolute()) {
       throw new IOException(
@@ -124,22 +133,20 @@ public class ZipDecompressor implements Decompressor {
       // For symlinks, the "compressed data" is actually the target name.
       int read = reader.getInputStream(entry).read(buffer);
       Preconditions.checkState(read == buffer.length);
-      PathFragment target = PathFragment.create(new String(buffer, Charset.defaultCharset()))
-          .normalize();
-      if (!target.isNormalized()) {
-        PathFragment pointsTo =
-            PathFragment.create(strippedRelativePath.getParentDirectory(), target).normalize();
-        if (!pointsTo.isNormalized()) {
+      PathFragment target = PathFragment.create(new String(buffer, Charset.defaultCharset()));
+      if (target.containsUplevelReferences()) {
+        PathFragment pointsTo = strippedRelativePath.getParentDirectory().getRelative(target);
+        if (pointsTo.containsUplevelReferences()) {
           throw new IOException("Zip entries cannot refer to files outside of their directory: "
               + reader.getFilename() + " has a symlink " + strippedRelativePath + " pointing to "
               + target);
         }
       }
       if (target.isAbsolute()) {
-        target = target.relativeTo(PathFragment.ROOT_DIR);
+        target = target.relativeTo("/");
         target = destinationDirectory.getRelative(target).asFragment();
       }
-      outputPath.createSymbolicLink(target);
+      symlinks.put(outputPath, target);
     } else {
       // TODO(kchodorow): should be able to be removed when issue #236 is resolved, but for now
       // this delete+rewrite is required or the build will error out if outputPath exists here.

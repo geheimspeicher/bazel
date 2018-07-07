@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.packages.util;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableList.Builder;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.ByteStreams;
 import com.google.devtools.build.lib.testutil.TestConstants;
@@ -81,7 +80,6 @@ public final class MockObjcSupport {
             "actoolwrapper",
             "bundlemerge",
             "objc_dummy.mm",
-            "environment_plist.sh",
             "device_debug_entitlements.plist",
             "gcov",
             "ibtoolwrapper",
@@ -107,7 +105,6 @@ public final class MockObjcSupport {
         "  name = 'protobuf_compiler_support',",
         "  srcs = ['proto_support', 'protobuf_compiler_helper.py'],",
         ")",
-        "sh_binary(name = 'environment_plist', srcs = ['environment_plist.sh'])",
         "sh_binary(name = 'xcrunwrapper', srcs = ['xcrunwrapper.sh'])",
         "apple_binary(name = 'xctest_appbin', platform_type = 'ios', deps = [':dummy_lib'])",
         "filegroup(name = 'xctest_infoplist', srcs = ['xctest.plist'])",
@@ -156,25 +153,10 @@ public final class MockObjcSupport {
     config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/compile_protos.py");
     config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/xctest.plist");
     config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/proto_support");
-    config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/ios_runner.sh.mac_template");
     config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/j2objc_dead_code_pruner.py");
     config.create(TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/header_scanner");
     createCrosstoolPackage(config, partialToolchainLines);
-    setupIosSimDevice(config);
     setupObjcProto(config);
-  }
-
-  /**
-   * Sets up mock IOS simulated device support.
-   */
-  public static void setupIosSimDevice(MockToolsConfig config) throws IOException {
-    config.create(
-        TestConstants.TOOLS_REPOSITORY_SCRATCH + "tools/objc/sim_devices/BUILD",
-        "ios_device(",
-        "  name = 'default',",
-        "  ios_version = '9.8',",
-        "  type = 'iChimpanzee',",
-        ")");
   }
 
   /** Sets up the support for building protocol buffers for ObjC. */
@@ -244,9 +226,10 @@ public final class MockObjcSupport {
       }
 
       // Create the test BUILD file.
-      Builder<String> crosstoolBuild =
+      ImmutableList.Builder<String> crosstoolBuild =
           ImmutableList.<String>builder()
               .add(
+                  "package(default_visibility=['//visibility:public'])",
                   "exports_files(glob(['**']))",
                   "cc_toolchain_suite(",
                   "    name = 'crosstool',",
@@ -295,6 +278,8 @@ public final class MockObjcSupport {
             "apple_cc_toolchain(",
             "    name = 'cc-compiler-" + arch + "',",
             "    all_files = ':empty',",
+            "    ar_files = ':empty',",
+            "    as_files = ':empty',",
             "    compiler_files = ':empty',",
             "    cpu = 'ios',",
             "    dwp_files = ':empty',",
@@ -304,7 +289,20 @@ public final class MockObjcSupport {
             "    static_runtime_libs = [':empty'],",
             "    strip_files = ':empty',",
             "    supports_param_files = 0,",
+            ")",
+            "toolchain(name = 'cc-toolchain-" + arch + "',",
+            "    exec_compatible_with = [],",
+            "    target_compatible_with = [],",
+            "    toolchain = ':cc-compiler-" + arch + "',",
+            "    toolchain_type = '"
+                + TestConstants.TOOLS_REPOSITORY
+                + "//tools/cpp:toolchain_type'",
             ")");
+
+        // Add the newly-created toolchain to the WORKSPACE.
+        config.append(
+            "WORKSPACE",
+            "register_toolchains('//" + DEFAULT_OSX_CROSSTOOL_DIR + ":cc-toolchain-" + arch + "')");
       }
 
       config.create(DEFAULT_OSX_CROSSTOOL_DIR + "/BUILD",

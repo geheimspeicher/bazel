@@ -24,6 +24,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Streams;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
@@ -37,9 +38,9 @@ import com.google.devtools.build.lib.analysis.RunfilesSupport;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.actions.Substitution;
+import com.google.devtools.build.lib.analysis.actions.Template;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
-import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
-import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Template;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.test.ExecutionInfo;
 import com.google.devtools.build.lib.analysis.whitelisting.Whitelist;
@@ -76,14 +77,14 @@ public class AndroidDevice implements RuleConfiguredTargetFactory {
   private static final int MIN_LCD_DENSITY = 30;
 
   private static final Predicate<Artifact> SOURCE_PROPERTIES_SELECTOR =
-      (Artifact artifact) -> "source.properties".equals(artifact.getPath().getBaseName());
+      (Artifact artifact) -> "source.properties".equals(artifact.getExecPath().getBaseName());
 
   private static final Predicate<Artifact> SOURCE_PROPERTIES_FILTER =
       Predicates.not(SOURCE_PROPERTIES_SELECTOR);
 
   @Override
   public ConfiguredTarget create(RuleContext ruleContext)
-      throws InterruptedException, RuleErrorException {
+      throws InterruptedException, RuleErrorException, ActionConflictException {
     checkWhitelist(ruleContext);
     Artifact executable = ruleContext.createOutputArtifact();
     Artifact metadata =
@@ -128,17 +129,16 @@ public class AndroidDevice implements RuleConfiguredTargetFactory {
         RunfilesSupport.withExecutable(ruleContext, runfiles, executable);
     NestedSet<Artifact> extraFilesToRun =
         NestedSetBuilder.create(Order.STABLE_ORDER, runfilesSupport.getRunfilesMiddleman());
-    boolean cloudDex2oatEnabled = ruleContext.attributes().get(
-        "pregenerate_oat_files_for_tests", Type.BOOLEAN);
+    boolean dex2OatEnabled =
+        ruleContext.attributes().get("pregenerate_oat_files_for_tests", Type.BOOLEAN);
     return new RuleConfiguredTargetBuilder(ruleContext)
         .setFilesToBuild(filesToBuild)
         .addProvider(RunfilesProvider.class, RunfilesProvider.simple(runfiles))
         .setRunfilesSupport(runfilesSupport, executable)
         .addFilesToRun(extraFilesToRun)
         .addNativeDeclaredProvider(new ExecutionInfo(executionInfo))
-        .addNativeDeclaredProvider(new DeviceBrokerInfo(DEVICE_BROKER_TYPE))
-        .addProvider(
-            Dex2OatProvider.class, new Dex2OatProvider(cloudDex2oatEnabled))
+        .addNativeDeclaredProvider(new AndroidDeviceBrokerInfo(DEVICE_BROKER_TYPE))
+        .addNativeDeclaredProvider(new AndroidDex2OatInfo(dex2OatEnabled))
         .build();
   }
 
@@ -332,7 +332,7 @@ public class AndroidDevice implements RuleConfiguredTargetFactory {
               .addOutput(images)
               .addInputs(commonDependencies)
               .setMnemonic("AndroidDeviceBoot")
-              .setProgressMessage("creating android images...")
+              .setProgressMessage("Creating Android image for %s", ruleContext.getLabel())
               .setExecutionInfo(constraints)
               .setExecutable(unifiedLauncher)
               // Boot resource estimation:

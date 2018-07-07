@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
+import com.google.devtools.build.lib.analysis.ShToolchain;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
@@ -38,7 +39,6 @@ import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.TestTimeout;
-import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.EnumConverter;
@@ -202,17 +202,23 @@ public final class TestActionBuilder {
     final boolean collectCodeCoverage = config.isCodeCoverageEnabled()
         && instrumentedFiles != null;
 
+    Artifact testSetupScript = ruleContext.getHostPrerequisiteArtifact("$test_setup_script");
+    inputsBuilder.add(testSetupScript);
+
+    Artifact collectCoverageScript = null;
     TreeMap<String, String> extraTestEnv = new TreeMap<>();
 
     TestTargetExecutionSettings executionSettings;
     if (collectCodeCoverage) {
+      collectCoverageScript = ruleContext.getHostPrerequisiteArtifact("$collect_coverage_script");
+      inputsBuilder.add(collectCoverageScript);
       inputsBuilder.addTransitive(instrumentedFiles.getCoverageSupportFiles());
       // Add instrumented file manifest artifact to the list of inputs. This file will contain
       // exec paths of all source files that should be included into the code coverage output.
       NestedSet<Artifact> metadataFiles = instrumentedFiles.getInstrumentationMetadataFiles();
       inputsBuilder.addTransitive(metadataFiles);
-      inputsBuilder.addTransitive(PrerequisiteArtifacts.nestedSet(
-          ruleContext, "$coverage_support", Mode.DONT_CHECK));
+      inputsBuilder.addTransitive(
+          PrerequisiteArtifacts.nestedSet(ruleContext, ":coverage_support", Mode.DONT_CHECK));
       // We don't add this attribute to non-supported test target
       if (ruleContext.isAttrDefined("$lcov_merger", LABEL)) {
         TransitiveInfoCollection lcovMerger =
@@ -268,11 +274,6 @@ public final class TestActionBuilder {
     List<Artifact> results = Lists.newArrayListWithCapacity(runsPerTest * shardRuns);
     ImmutableList.Builder<Artifact> coverageArtifacts = ImmutableList.builder();
 
-    boolean useTestRunner = false;
-    if (ruleContext.attributes().has("use_testrunner", Type.BOOLEAN)) {
-      useTestRunner = ruleContext.attributes().get("use_testrunner", Type.BOOLEAN);
-    }
-
     for (int run = 0; run < runsPerTest; run++) {
       // Use a 1-based index for user friendliness.
       String testRunDir =
@@ -300,13 +301,24 @@ public final class TestActionBuilder {
           coverageArtifacts.add(coverageArtifact);
         }
 
-        env.registerAction(new TestRunnerAction(
-            ruleContext.getActionOwner(), inputs, testRuntime,
-            testLog, cacheStatus,
-            coverageArtifact,
-            testProperties, extraTestEnv, executionSettings,
-            shard, run, config, ruleContext.getWorkspaceName(),
-            useTestRunner));
+        PathFragment shExecutable = ShToolchain.getPathOrError(ruleContext);
+        env.registerAction(
+            new TestRunnerAction(
+                ruleContext.getActionOwner(),
+                inputs,
+                testSetupScript,
+                collectCoverageScript,
+                testLog,
+                cacheStatus,
+                coverageArtifact,
+                testProperties,
+                extraTestEnv,
+                executionSettings,
+                shard,
+                run,
+                config,
+                ruleContext.getWorkspaceName(),
+                shExecutable));
         results.add(cacheStatus);
       }
     }
@@ -317,7 +329,7 @@ public final class TestActionBuilder {
       // contain rules with baseline coverage but no test rules that have coverage enabled, and in
       // that case, we still need the report generator.
       reportGenerator = ruleContext.getPrerequisiteArtifact(
-          "$coverage_report_generator", Mode.HOST);
+          ":coverage_report_generator", Mode.HOST);
     }
 
     return new TestParams(runsPerTest, shards, TestTimeout.getTestTimeout(ruleContext.getRule()),

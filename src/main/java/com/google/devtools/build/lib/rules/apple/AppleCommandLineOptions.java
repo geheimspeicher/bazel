@@ -24,14 +24,11 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration.ConfigurationDistinguisher;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
-import com.google.devtools.build.lib.skyframe.serialization.EnumCodec;
-import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
+import com.google.devtools.build.lib.skyframe.serialization.DeserializationContext;
+import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
+import com.google.devtools.build.lib.skylarkbuildapi.apple.AppleBitcodeModeApi;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkPrinter;
-import com.google.devtools.build.lib.skylarkinterface.SkylarkValue;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
@@ -44,15 +41,10 @@ import java.io.IOException;
 import java.util.List;
 
 /** Command-line options for building for Apple platforms. */
-@AutoCodec(strategy = AutoCodec.Strategy.PUBLIC_FIELDS)
 public class AppleCommandLineOptions extends FragmentOptions {
-  public static final ObjectCodec<AppleCommandLineOptions> CODEC =
-      new AppleCommandLineOptions_AutoCodec();
-
   @Option(
     name = "experimental_apple_mandatory_minimum_version",
     defaultValue = "false",
-    category = "experimental",
     documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
     help = "Whether Apple rules must have a mandatory minimum_os_version attribute."
@@ -63,7 +55,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "experimental_objc_provider_from_linked",
     defaultValue = "true",
-    category = "experimental",
     documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
     help =
@@ -76,7 +67,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "xcode_version",
     defaultValue = "null",
-    category = "build",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help =
@@ -89,7 +79,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "ios_sdk_version",
     defaultValue = "null",
     converter = DottedVersionConverter.class,
-    category = "build",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help = "Specifies the version of the iOS SDK to use to build iOS applications."
@@ -100,7 +89,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "watchos_sdk_version",
     defaultValue = "null",
     converter = DottedVersionConverter.class,
-    category = "build",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help = "Specifies the version of the watchOS SDK to use to build watchOS applications."
@@ -111,7 +99,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "tvos_sdk_version",
     defaultValue = "null",
     converter = DottedVersionConverter.class,
-    category = "build",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help = "Specifies the version of the tvOS SDK to use to build tvOS applications."
@@ -122,7 +109,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "macos_sdk_version",
     defaultValue = "null",
     converter = DottedVersionConverter.class,
-    category = "build",
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help = "Specifies the version of the macOS SDK to use to build macOS applications."
@@ -132,7 +118,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "ios_minimum_os",
     defaultValue = "null",
-    category = "flags",
     converter = DottedVersionConverter.class,
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
@@ -143,7 +128,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "watchos_minimum_os",
     defaultValue = "null",
-    category = "flags",
     converter = DottedVersionConverter.class,
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
@@ -154,7 +138,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "tvos_minimum_os",
     defaultValue = "null",
-    category = "flags",
     converter = DottedVersionConverter.class,
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
@@ -165,7 +148,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "macos_minimum_os",
     defaultValue = "null",
-    category = "flags",
     converter = DottedVersionConverter.class,
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
@@ -191,7 +173,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "ios_cpu",
     defaultValue = DEFAULT_IOS_CPU,
-    category = "build",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.NO_OP},
     metadataTags = {OptionMetadataTag.DEPRECATED},
@@ -202,7 +183,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
   @Option(
     name = "apple_crosstool_top",
     defaultValue = "@bazel_tools//tools/cpp:toolchain",
-    category = "version",
     converter = LabelConverter.class,
     documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.CHANGES_INPUTS},
@@ -255,7 +235,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "ios_multi_cpus",
     converter = CommaSeparatedOptionListConverter.class,
     defaultValue = "",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
     help =
@@ -268,7 +247,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "watchos_cpus",
     converter = CommaSeparatedOptionListConverter.class,
     defaultValue = DEFAULT_WATCHOS_CPU,
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
     help = "Comma-separated list of architectures for which to build Apple watchOS binaries."
@@ -279,7 +257,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "tvos_cpus",
     converter = CommaSeparatedOptionListConverter.class,
     defaultValue = DEFAULT_TVOS_CPU,
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
     help = "Comma-separated list of architectures for which to build Apple tvOS binaries."
@@ -290,7 +267,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     name = "macos_cpus",
     converter = CommaSeparatedOptionListConverter.class,
     defaultValue = DEFAULT_MACOS_CPU,
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
     help = "Comma-separated list of architectures for which to build Apple macOS binaries."
@@ -338,7 +314,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
     converter = AppleBitcodeMode.Converter.class,
     // TODO(blaze-team): Default to embedded_markers when fully implemented.
     defaultValue = "none",
-    category = "flags",
     documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
     effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
     help =
@@ -419,19 +394,8 @@ public class AppleCommandLineOptions extends FragmentOptions {
    * <p>This is a build-wide value, as bitcode mode needs to be consistent among a target and its
    * compiled dependencies.
    */
-  @SkylarkModule(
-    name = "apple_bitcode_mode",
-    category = SkylarkModuleCategory.NONE,
-    doc =
-        "The Bitcode mode to use when compiling Objective-C and Swift code on Apple platforms. "
-            + "Possible values are:<br><ul>"
-            + "<li><code>'none'</code></li>"
-            + "<li><code>'embedded'</code></li>"
-            + "<li><code>'embedded_markers'</code></li>"
-            + "</ul>"
-  )
   @Immutable
-  public enum AppleBitcodeMode implements SkylarkValue {
+  public enum AppleBitcodeMode implements AppleBitcodeModeApi {
 
     /** Do not compile bitcode. */
     NONE("none", ImmutableList.<String>of()),
@@ -484,8 +448,6 @@ public class AppleCommandLineOptions extends FragmentOptions {
         super(AppleBitcodeMode.class, "apple bitcode mode");
       }
     }
-
-    static final EnumCodec<AppleBitcodeMode> CODEC = new EnumCodec<>(AppleBitcodeMode.class);
   }
 
   @Override
@@ -508,13 +470,14 @@ public class AppleCommandLineOptions extends FragmentOptions {
     return host;
   }
 
-  void serialize(CodedOutputStream out) throws IOException, SerializationException {
-    CODEC.serialize(this, out);
+  void serialize(SerializationContext context, CodedOutputStream out)
+      throws IOException, SerializationException {
+    context.serialize(this, out);
   }
 
-  static AppleCommandLineOptions deserialize(CodedInputStream in)
+  static AppleCommandLineOptions deserialize(DeserializationContext context, CodedInputStream in)
       throws IOException, SerializationException {
-    return CODEC.deserialize(in);
+    return context.deserialize(in);
   }
 
   /** Converter for the Apple configuration distinguisher. */

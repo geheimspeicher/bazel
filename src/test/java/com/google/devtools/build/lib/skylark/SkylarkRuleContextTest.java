@@ -20,12 +20,15 @@ import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static org.junit.Assert.fail;
 
+import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ActionsProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
+import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
@@ -34,6 +37,7 @@ import com.google.devtools.build.lib.analysis.skylark.SkylarkRuleContext;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.Info;
+import com.google.devtools.build.lib.packages.SkylarkProvider.SkylarkKey;
 import com.google.devtools.build.lib.packages.SkylarkProviderIdentifier;
 import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
@@ -610,6 +614,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     assertThat(result).containsExactly(
         "name",
         "visibility",
+        "transitive_configs",
         "tags",
         "generator_name",
         "generator_function",
@@ -628,7 +633,8 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
         "executable",
         "stamp",
         "heuristic_label_expansion",
-        "kind");
+        "kind",
+        "exec_compatible_with");
   }
 
   @Test
@@ -756,6 +762,61 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     assertThat(result).isEqualTo("$ABC");
   }
 
+  private void setUpMakeVarToolchain() throws Exception {
+    scratch.file(
+        "vars/vars.bzl",
+        "def _make_var_supplier_impl(ctx):",
+        "  val = ctx.attr.value",
+        "  return [platform_common.TemplateVariableInfo({'MAKE_VAR_VALUE': val})]",
+        "make_var_supplier = rule(",
+        "    implementation = _make_var_supplier_impl,",
+        "    attrs = {",
+        "        'value': attr.string(mandatory = True),",
+        "    })",
+        "def _make_var_user_impl(ctx):",
+        "  return []",
+        "make_var_user = rule(",
+        "    implementation = _make_var_user_impl,",
+        ")");
+    scratch.file(
+        "vars/BUILD",
+        "load(':vars.bzl', 'make_var_supplier', 'make_var_user')",
+        "make_var_supplier(name = 'supplier', value = 'foo')",
+        "make_var_user(",
+        "    name = 'vars',",
+        "    toolchains = [':supplier'],",
+        ")");
+  }
+
+  @Test
+  public void testExpandMakeVariables_cc() throws Exception {
+    setUpMakeVarToolchain();
+    SkylarkRuleContext ruleContext = createRuleContext("//vars:vars");
+    String result =
+        (String)
+            evalRuleContextCode(
+                ruleContext, "ruleContext.expand_make_variables('cmd', '$(CC)', {})");
+    assertThat(result).isNotEmpty();
+  }
+
+  @Test
+  public void testExpandMakeVariables_toolchain() throws Exception {
+    setUpMakeVarToolchain();
+    SkylarkRuleContext ruleContext = createRuleContext("//vars:vars");
+    Object result =
+        evalRuleContextCode(
+            ruleContext, "ruleContext.expand_make_variables('cmd', '$(MAKE_VAR_VALUE)', {})");
+    assertThat(result).isEqualTo("foo");
+  }
+
+  @Test
+  public void testVar_toolchain() throws Exception {
+    setUpMakeVarToolchain();
+    SkylarkRuleContext ruleContext = createRuleContext("//vars:vars");
+    Object result = evalRuleContextCode(ruleContext, "ruleContext.var['MAKE_VAR_VALUE']");
+    assertThat(result).isEqualTo("foo");
+  }
+
   @Test
   public void testConfiguration() throws Exception {
     SkylarkRuleContext ruleContext = createRuleContext("//foo:foo");
@@ -770,6 +831,12 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     assertThat((SkylarkList<?>) result).containsExactly("cc_include_scanning", "f1", "f2");
   }
 
+  @Test
+  public void testDisabledFeatures() throws Exception {
+    SkylarkRuleContext ruleContext = createRuleContext("//foo:cc_with_features");
+    Object result = evalRuleContextCode(ruleContext, "ruleContext.disabled_features");
+    assertThat((SkylarkList<?>) result).containsExactly("f3");
+  }
 
   @Test
   public void testHostConfiguration() throws Exception {
@@ -904,7 +971,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     SkylarkRuleContext context = createRuleContext("//:r");
     Label keyLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr.label_dict.keys()[0].label");
-    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
     String valueString =
         (String) evalRuleContextCode(context, "ruleContext.attr.label_dict.values()[0]");
     assertThat(valueString).isEqualTo("value");
@@ -935,7 +1002,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     SkylarkRuleContext context = createRuleContext("//:r");
     Label keyLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr.label_dict.keys()[0].label");
-    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
     String valueString =
         (String) evalRuleContextCode(context, "ruleContext.attr.label_dict.values()[0]");
     assertThat(valueString).isEqualTo("value");
@@ -964,7 +1031,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     SkylarkRuleContext context = createRuleContext("//:r");
     Label keyLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr.label_dict.keys()[0].label");
-    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:default"));
+    assertThat(keyLabel).isEqualTo(Label.parseAbsolute("//:default", ImmutableMap.of()));
     String valueString =
         (String) evalRuleContextCode(context, "ruleContext.attr.label_dict.values()[0]");
     assertThat(valueString).isEqualTo("defs");
@@ -1074,7 +1141,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     invalidatePackages();
     getConfiguredTarget("//:r");
     assertContainsEvent("in label_dict attribute of my_rule rule //:r: "
-        + "file '//:myfile.cpp' is misplaced here (expected no files)");
+        + "source file '//:myfile.cpp' is misplaced here (expected no files)");
   }
 
   @Test
@@ -1263,16 +1330,16 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     SkylarkRuleContext context = createRuleContext("//:r");
     Label explicitDepLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr.explicit_dep.label");
-    assertThat(explicitDepLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(explicitDepLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
     Label implicitDepLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr._implicit_dep.label");
-    assertThat(implicitDepLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(implicitDepLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
     Label explicitDepListLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr.explicit_dep_list[0].label");
-    assertThat(explicitDepListLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(explicitDepListLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
     Label implicitDepListLabel =
         (Label) evalRuleContextCode(context, "ruleContext.attr._implicit_dep_list[0].label");
-    assertThat(implicitDepListLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(implicitDepListLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
   }
 
   @Test
@@ -1304,7 +1371,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     invalidatePackages(/*alsoConfigs=*/false); // Repository shuffling messes with toolchain labels.
     SkylarkRuleContext context = createRuleContext("@r//a:r");
     Label depLabel = (Label) evalRuleContextCode(context, "ruleContext.attr.internal_dep.label");
-    assertThat(depLabel).isEqualTo(Label.parseAbsolute("//:dep"));
+    assertThat(depLabel).isEqualTo(Label.parseAbsolute("//:dep", ImmutableMap.of()));
   }
 
   @Test
@@ -1339,7 +1406,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     invalidatePackages(/*alsoConfigs=*/false); // Repository shuffling messes with toolchain labels.
     SkylarkRuleContext context = createRuleContext("@r//a:r");
     Label depLabel = (Label) evalRuleContextCode(context, "ruleContext.attr.internal_dep.label");
-    assertThat(depLabel).isEqualTo(Label.parseAbsolute("@r//:dep"));
+    assertThat(depLabel).isEqualTo(Label.parseAbsolute("@r//:dep", ImmutableMap.of()));
   }
 
   @Test
@@ -1401,12 +1468,12 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     invalidatePackages(/*alsoConfigs=*/false); // Repository shuffling messes with toolchain labels.
     assertThat(
             (List<Label>)
-                getConfiguredTarget("@foo//:baz")
+                getConfiguredTargetAndData("@foo//:baz")
                     .getTarget()
                     .getAssociatedRule()
                     .getAttributeContainer()
                     .getAttr("srcs"))
-        .contains(Label.parseAbsolute("@foo//:baz.txt"));
+        .contains(Label.parseAbsolute("@foo//:baz.txt", ImmutableMap.of()));
 
     scratch.overwriteFile("BUILD");
     scratch.overwriteFile("bar.bzl", "dummy = 1");
@@ -1448,9 +1515,9 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     scratch.file(
         "test/BUILD",
         "load('//test:rule.bzl', 'skylark_rule')",
-        "py_library(name = 'lib', srcs = ['a.py', 'b.py'])",
+        "py_binary(name = 'lib', srcs = ['lib.py', 'lib2.py'])",
         "skylark_rule(name = 'foo', dep = ':lib')",
-        "py_library(name = 'lib_with_init', srcs = ['a.py', 'b.py', '__init__.py'])",
+        "py_binary(name = 'lib_with_init', srcs = ['lib_with_init.py', 'lib2.py', '__init__.py'])",
         "skylark_rule(name = 'foo_with_init', dep = ':lib_with_init')");
 
     SkylarkRuleContext ruleContext = createRuleContext("//test:foo");
@@ -1459,13 +1526,13 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
             ruleContext, "[f.short_path for f in ruleContext.attr.dep.default_runfiles.files]");
     assertThat(filenames).isInstanceOf(SkylarkList.class);
     SkylarkList filenamesList = (SkylarkList) filenames;
-    assertThat(filenamesList).containsExactly("test/a.py", "test/b.py").inOrder();
+    assertThat(filenamesList).containsAllOf("test/lib.py", "test/lib2.py");
     Object emptyFilenames =
         evalRuleContextCode(
             ruleContext, "list(ruleContext.attr.dep.default_runfiles.empty_filenames)");
     assertThat(emptyFilenames).isInstanceOf(SkylarkList.class);
     SkylarkList emptyFilenamesList = (SkylarkList) emptyFilenames;
-    assertThat(emptyFilenamesList).containsExactly("test/__init__.py").inOrder();
+    assertThat(emptyFilenamesList).containsExactly("test/__init__.py");
 
     SkylarkRuleContext ruleWithInitContext = createRuleContext("//test:foo_with_init");
     Object noEmptyFilenames =
@@ -1565,7 +1632,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
 
     Object provider = evalRuleContextCode(ruleContext, "ruleContext.attr.dep[Actions]");
     assertThat(provider).isInstanceOf(Info.class);
-    assertThat(((Info) provider).getProvider()).isEqualTo(ActionsProvider.SKYLARK_CONSTRUCTOR);
+    assertThat(((Info) provider).getProvider()).isEqualTo(ActionsProvider.INSTANCE);
     update("actions", provider);
 
     Object mapping = eval("actions.by_file");
@@ -1959,7 +2026,7 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
     assertThat(keyString).isEqualTo("x86");
     Label valueLabel =
         (Label) evalRuleContextCode(ruleContext, "ruleContext.attr.runtimes.values()[0]");
-    assertThat(valueLabel).isEqualTo(Label.parseAbsolute("//jvm:runtime"));
+    assertThat(valueLabel).isEqualTo(Label.parseAbsolute("//jvm:runtime", ImmutableMap.of()));
   }
 
   // A list of attributes and methods ctx objects have
@@ -2035,10 +2102,11 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
       } catch (AssertionError e) {
         assertThat(e)
             .hasMessageThat()
-            .contains("cannot access field or method '"
-                + attribute.split("\\(")[0]
-                + "' of rule context for '//test:dep' outside of its own rule implementation "
-                + "function");
+            .contains(
+                "cannot access field or method '"
+                    + Iterables.get(Splitter.on('(').split(attribute), 0)
+                    + "' of rule context for '//test:dep' outside of its own rule implementation "
+                    + "function");
       }
     }
   }
@@ -2083,10 +2151,11 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
       } catch (AssertionError e) {
         assertThat(e)
             .hasMessageThat()
-            .contains("cannot access field or method '"
-                + attribute.split("\\(")[0]
-                + "' of rule context for '//test:dep' outside of its own rule implementation "
-                + "function");
+            .contains(
+                "cannot access field or method '"
+                    + Iterables.get(Splitter.on('(').split(attribute), 0)
+                    + "' of rule context for '//test:dep' outside of its own rule implementation "
+                    + "function");
       }
     }
   }
@@ -2134,5 +2203,24 @@ public class SkylarkRuleContextTest extends SkylarkTestCase {
             .contains("Use --incompatible_new_actions_api=false");
       }
     }
+  }
+
+  @Test
+  public void testMapAttributeOrdering() throws Exception {
+    scratch.file("a/a.bzl",
+        "key_provider = provider(fields=['keys'])",
+        "def _impl(ctx):",
+        "  return [key_provider(keys=ctx.attr.value.keys())]",
+        "a = rule(implementation=_impl, attrs={'value': attr.string_dict()})");
+    scratch.file("a/BUILD",
+        "load(':a.bzl', 'a')",
+        "a(name='a', value={'c': 'c', 'b': 'b', 'a': 'a', 'f': 'f', 'e': 'e', 'd': 'd'})");
+
+    ConfiguredTarget a = getConfiguredTarget("//a");
+    SkylarkKey key =
+        new SkylarkKey(Label.parseAbsolute("//a:a.bzl", ImmutableMap.of()), "key_provider");
+    @SuppressWarnings("unchecked")
+    SkylarkList<String> keys = (SkylarkList<String>) a.get(key).getValue("keys");
+    assertThat(keys).containsExactly("c", "b", "a", "f", "e", "d").inOrder();
   }
 }

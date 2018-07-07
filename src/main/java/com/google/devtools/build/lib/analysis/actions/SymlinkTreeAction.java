@@ -17,6 +17,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.AbstractAction;
+import com.google.devtools.build.lib.actions.ActionEnvironment;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionException;
 import com.google.devtools.build.lib.actions.ActionKeyContext;
@@ -24,13 +25,17 @@ import com.google.devtools.build.lib.actions.ActionOwner;
 import com.google.devtools.build.lib.actions.ActionResult;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.util.Fingerprint;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Action responsible for the symlink tree creation.
  * Used to generate runfiles and fileset symlink farms.
  */
 @Immutable
+@AutoCodec
 public final class SymlinkTreeAction extends AbstractAction {
 
   private static final String GUID = "63412bda-4026-4c8e-a3ad-7deb397728d4";
@@ -38,7 +43,6 @@ public final class SymlinkTreeAction extends AbstractAction {
   private final Artifact inputManifest;
   private final Artifact outputManifest;
   private final boolean filesetTree;
-  private final ImmutableMap<String, String> shellEnvironment;
   private final boolean enableRunfiles;
 
   /**
@@ -51,19 +55,19 @@ public final class SymlinkTreeAction extends AbstractAction {
    * @param filesetTree true if this is fileset symlink tree,
    * @param enableRunfiles true is the actual symlink tree needs to be created.
    */
+  @AutoCodec.Instantiator
   public SymlinkTreeAction(
       ActionOwner owner,
       Artifact inputManifest,
       Artifact outputManifest,
       boolean filesetTree,
-      ImmutableMap<String, String> shellEnvironment,
+      ActionEnvironment env,
       boolean enableRunfiles) {
-    super(owner, ImmutableList.of(inputManifest), ImmutableList.of(outputManifest));
+    super(owner, ImmutableList.of(inputManifest), ImmutableList.of(outputManifest), env);
     Preconditions.checkArgument(outputManifest.getPath().getBaseName().equals("MANIFEST"));
     this.inputManifest = inputManifest;
     this.outputManifest = outputManifest;
     this.filesetTree = filesetTree;
-    this.shellEnvironment = shellEnvironment;
     this.enableRunfiles = enableRunfiles;
   }
 
@@ -91,19 +95,23 @@ public final class SymlinkTreeAction extends AbstractAction {
   }
 
   @Override
-  protected String computeKey(ActionKeyContext actionKeyContext) {
-    Fingerprint f = new Fingerprint();
-    f.addString(GUID);
-    f.addInt(filesetTree ? 1 : 0);
-    return f.hexDigestAndReset();
+  protected void computeKey(ActionKeyContext actionKeyContext, Fingerprint fp) {
+    fp.addString(GUID);
+    fp.addBoolean(filesetTree);
+    fp.addBoolean(enableRunfiles);
+    fp.addStringMap(env.getFixedEnv());
+    fp.addStrings(env.getInheritedEnv());
   }
 
   @Override
   public ActionResult execute(ActionExecutionContext actionExecutionContext)
       throws ActionExecutionException, InterruptedException {
-    return ActionResult.create(
-        actionExecutionContext
-            .getContext(SymlinkTreeActionContext.class)
-            .createSymlinks(this, actionExecutionContext, shellEnvironment, enableRunfiles));
+    Map<String, String> resolvedEnv = new LinkedHashMap<>();
+    env.resolve(resolvedEnv, actionExecutionContext.getClientEnv());
+    actionExecutionContext
+        .getContext(SymlinkTreeActionContext.class)
+        .createSymlinks(
+            this, actionExecutionContext, ImmutableMap.copyOf(resolvedEnv), enableRunfiles);
+    return ActionResult.EMPTY;
   }
 }

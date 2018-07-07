@@ -119,12 +119,17 @@ public interface NodeEntry extends ThinNodeEntry {
 
   /**
    * Returns raw {@link SkyValue} stored in this entry, which may include metadata associated with
-   * it (like events and errors). This method may only be called after the evaluation of this node
-   * is complete, i.e., after {@link #setValue} has been called.
+   * it (like events and errors).
+   *
+   * <p>This method returns {@code null} if the evaluation of this node is not complete, i.e.,
+   * after node creation or dirtying and before {@link #setValue} has been called. Callers should
+   * assert that the returned value is not {@code null} whenever they expect the node should be
+   * done.
    *
    * <p>Use the static methods of {@link ValueWithMetadata} to extract metadata if necessary.
    */
   @ThreadSafe
+  @Nullable
   SkyValue getValueMaybeWithMetadata() throws InterruptedException;
 
   /** Returns the value, even if dirty or changed. Returns null otherwise. */
@@ -355,8 +360,18 @@ public interface NodeEntry extends ThinNodeEntry {
   void removeUnfinishedDeps(Set<SkyKey> unfinishedDeps);
 
   /**
+   * Erases all stored work during this evaluation from this entry, namely all temporary direct
+   * deps. The entry will be as if it had never evaluated at this version. Called after the {@link
+   * SkyFunction} for this entry returns {@link SkyFunction.Restart}, indicating that something went
+   * wrong in external state and the evaluation has to be restarted.
+   */
+  @ThreadSafe
+  void resetForRestartFromScratch();
+
+  /**
    * Adds the temporary direct deps given in {@code helper} and returns the set of unique deps
-   * added.
+   * added. It is the users responsibility to ensure that there are no elements in common between
+   * helper and the already existing temporary direct deps.
    */
   @ThreadSafe
   Set<SkyKey> addTemporaryDirectDeps(GroupedListHelper<SkyKey> helper);

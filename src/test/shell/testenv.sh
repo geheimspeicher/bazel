@@ -55,7 +55,7 @@ if is_windows; then
   # moving the Windows-specific TEST_TMPDIR into TestStrategy.
   TEST_TMPDIR_BASENAME="$(basename "$TEST_TMPDIR")"
 
-  export JAVA_HOME="$(ls -d C:/Program\ Files/Java/jdk* | sort | tail -n 1)"
+  export JAVA_HOME="${JAVA_HOME:-$(ls -d C:/Program\ Files/Java/jdk* | sort | tail -n 1)}"
   export BAZEL_SH="$(cygpath -m /usr/bin/bash)"
 fi
 
@@ -80,10 +80,7 @@ BAZEL_RUNFILES="$TEST_SRCDIR/io_bazel"
 
 # WORKSPACE file
 workspace_file="${BAZEL_RUNFILES}/WORKSPACE"
-
-# Bazel
-bazel_tree="$(rlocation io_bazel/src/test/shell/bazel/doc-srcs.zip)"
-bazel_data="${BAZEL_RUNFILES}"
+distdir_bzl_file="${BAZEL_RUNFILES}/distdir.bzl"
 
 # Java
 if is_windows; then
@@ -108,7 +105,7 @@ python_server="${BAZEL_RUNFILES}/src/test/shell/bazel/testing_server.py"
 # Third-party
 MACHINE_TYPE="$(uname -m)"
 MACHINE_IS_64BIT='no'
-if [ "${MACHINE_TYPE}" = 'amd64' ] || [ "${MACHINE_TYPE}" = 'x86_64' ] || [ "${MACHINE_TYPE}" = 's390x' ]; then
+if [ "${MACHINE_TYPE}" = 'amd64' ] || [ "${MACHINE_TYPE}" = 'x86_64' ] || [ "${MACHINE_TYPE}" = 's390x' ] || [ "${MACHINE_TYPE}" = 'aarch64' ]; then
   MACHINE_IS_64BIT='yes'
 fi
 
@@ -136,8 +133,10 @@ def list_source_repository(name):
   pass
 EOF
   touch src/test/shell/bazel/BUILD
-  rm -f WORKSPACE
+  rm -f WORKSPACE distdir.bzl
   ln -sf ${workspace_file} WORKSPACE
+  touch BUILD
+  ln -sf ${distdir_bzl_file} distdir.bzl
 }
 
 # This function copies the tools directory from Bazel.
@@ -162,8 +161,6 @@ EOF
   cp -R ${langtools_dir}/* third_party/java/jdk/langtools
 
   chmod -R +w .
-  mkdir -p tools/defaults
-  touch tools/defaults/BUILD
 
   mkdir -p third_party/py/gflags
   cat > third_party/py/gflags/BUILD <<EOF
@@ -230,11 +227,11 @@ exit 1;
 case "${PLATFORM}" in
   darwin|freebsd)
     function sha256sum() {
-      cat "$1" | shasum -a 256 | cut -f 1 -d " "
+      shasum -a 256 "$@"
     }
     ;;
   *)
-    # Under linux sha256sum should exists
+    # Under Linux, sha256sum usually exists as a binary as part of coreutils.
     ;;
 esac
 
@@ -259,12 +256,29 @@ log_info "bazel binary is at $PATH_TO_BAZEL_WRAPPER"
 # Here we unset variable that were set by the invoking Blaze instance
 unset JAVA_RUNFILES
 
+# Runs a command, retrying if needed for a fixed timeout.
+#
+# Necessary to use it on Windows, typically when deleting directory trees,
+# because the OS cannot delete open files, which we attempt to do when deleting
+# workspaces where a Bazel server is still in the middle of shutting down.
+# (Because "bazel shutdown" returns sooner than the server actually shuts down.)
+function try_with_timeout() {
+  for i in {1..120}; do
+    if $* ; then
+      break
+    fi
+    if (( i == 10 )) || (( i == 30 )) || (( i == 60 )) ; then
+      log_info "try_with_timeout($*): no success after $i seconds" \
+               "(timeout in $((120-i)) seconds)"
+    fi
+    sleep 1
+  done
+}
+
 function setup_bazelrc() {
   cat >$TEST_TMPDIR/bazelrc <<EOF
 # Set the user root properly for this test invocation.
 startup --output_user_root=${bazel_root}
-# Set the correct javabase from the outer bazel invocation.
-startup --host_javabase=${bazel_javabase}
 
 # Print all progress messages because we regularly grep the output in tests.
 common --show_progress_rate_limit=-1
@@ -360,7 +374,7 @@ workspaces=()
 # Set-up a new, clean workspace with only the tools installed.
 function create_new_workspace() {
   new_workspace_dir=${1:-$(mktemp -d ${TEST_TMPDIR}/workspace.XXXXXXXX)}
-  rm -fr ${new_workspace_dir}
+  try_with_timeout rm -fr ${new_workspace_dir}
   mkdir -p ${new_workspace_dir}
   workspaces+=(${new_workspace_dir})
   cd ${new_workspace_dir}
@@ -379,7 +393,7 @@ function create_new_workspace() {
 function setup_clean_workspace() {
   export WORKSPACE_DIR=${TEST_TMPDIR}/workspace
   log_info "setting up client in ${WORKSPACE_DIR}" >> $TEST_log
-  rm -fr ${WORKSPACE_DIR}
+  try_with_timeout rm -fr ${WORKSPACE_DIR}
   create_new_workspace ${WORKSPACE_DIR}
   [ "${new_workspace_dir}" = "${WORKSPACE_DIR}" ] \
     || log_fatal "Failed to create workspace"
@@ -399,7 +413,11 @@ function setup_clean_workspace() {
   bazel info bazel-bin >"$bazel_stdout" 2>"$bazel_stderr" \
     && export BAZEL_BIN_DIR=$(cat "$bazel_stdout") \
     || log_fatal "'bazel info bazel-bin' failed, stderr: $(cat "$bazel_stderr")"
-  rm -f "$bazel_stdout" "$bazel_stderr"
+  # Shut down this server in case the tests will run Bazel in a different output
+  # root, otherwise we could not clean up $WORKSPACE_DIR (under $TEST_TMPDIR)
+  # once the test is finished.
+  bazel shutdown >&/dev/null
+  try_with_timeout rm -f "$bazel_stdout" "$bazel_stderr"
 
   if is_windows; then
     export BAZEL_SH="$(cygpath --windows /bin/bash)"
@@ -413,17 +431,19 @@ function cleanup_workspace() {
     log_info "Cleaning up workspace" >> $TEST_log
     cd ${WORKSPACE_DIR}
     bazel clean >> $TEST_log 2>&1 # Clean up the output base
+    # Shut down this server to allow any cleanup code to delete its output_root.
+    bazel shutdown >&/dev/null
 
     for i in *; do
       if ! is_tools_directory "$i"; then
-        rm -fr "$i"
+        try_with_timeout rm -fr "$i"
       fi
     done
     touch WORKSPACE
   fi
   for i in "${workspaces[@]}"; do
     if [ "$i" != "${WORKSPACE_DIR:-}" ]; then
-      rm -fr $i
+      try_with_timeout rm -fr $i
     fi
   done
   workspaces=()
@@ -435,16 +455,7 @@ function cleanup() {
     log_info "Cleaning up BAZEL_INSTALL_BASE under $BAZEL_INSTALL_BASE"
     # Windows takes its time to shut down Bazel and we can't delete A-server.jar
     # until then, so just give it time and keep trying for 2 minutes.
-    for i in {1..120}; do
-      if rm -fr "${BAZEL_INSTALL_BASE}" >&/dev/null ; then
-        break
-      fi
-      if (( i == 10 )) || (( i == 30 )) || (( i == 60 )) ; then
-        log_info "Test cleanup: couldn't delete ${BAZEL_INSTALL_BASE} after $i seconds" \
-                 "(Timeout in $((120-i)) seconds.)"
-      fi
-      sleep 1
-    done
+    try_with_timeout rm -fr "${BAZEL_INSTALL_BASE}" >&/dev/null
   fi
 }
 
@@ -500,7 +511,6 @@ function assert_bazel_run() {
 }
 
 setup_bazelrc
-setup_clean_workspace
 
 ################### shell/integration/testenv ############################
 # Setting up the environment for our legacy integration tests.

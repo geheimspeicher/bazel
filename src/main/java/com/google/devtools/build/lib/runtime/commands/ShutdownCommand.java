@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.runtime.commands;
 
 import com.google.devtools.build.lib.runtime.BlazeCommand;
-import com.google.devtools.build.lib.runtime.BlazeCommandDispatcher.ShutdownBlazeServerException;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
 import com.google.devtools.build.lib.runtime.Command;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
@@ -43,7 +42,6 @@ public final class ShutdownCommand implements BlazeCommand {
     @Option(
       name = "iff_heap_size_greater_than",
       defaultValue = "0",
-      category = "misc",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
       effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.EAGERNESS_TO_EXIT},
       help =
@@ -57,8 +55,7 @@ public final class ShutdownCommand implements BlazeCommand {
   public void editOptions(OptionsParser optionsParser) {}
 
   @Override
-  public BlazeCommandResult exec(CommandEnvironment env, OptionsProvider options)
-      throws ShutdownBlazeServerException {
+  public BlazeCommandResult exec(CommandEnvironment env, OptionsProvider options) {
     int limit = options.getOptions(Options.class).heapSizeLimit;
 
     // Iff limit is non-zero, shut down the server if total memory exceeds the
@@ -70,8 +67,9 @@ public final class ShutdownCommand implements BlazeCommand {
 
     if (limit == 0 ||
         Runtime.getRuntime().totalMemory() > limit * 1000L * 1000) {
-      throw new ShutdownBlazeServerException(ExitCode.SUCCESS);
+      return BlazeCommandResult.shutdown(ExitCode.SUCCESS);
     }
+
     return BlazeCommandResult.exitCode(ExitCode.SUCCESS);
   }
 

@@ -14,7 +14,7 @@ cc_test(
     deps = [
         "//src/main/cpp/util",
         "//src/main/cpp/util:md5",
-        "//third_party:gtest",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -31,11 +31,36 @@ cc_test(
     }),
     deps = [
         ":test_util",
-        "//src/main/cpp/util:file",
-        "//third_party:gtest",
+        "//src/main/cpp/util:filesystem",
+        "@com_google_googletest//:gtest_main",
     ] + select({
         "//src/conditions:windows": [
             ":windows_test_util",
+            "//src/main/native/windows:lib-file",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+cc_test(
+    name = "path_test",
+    size = "small",
+    srcs = select({
+        "//src/conditions:windows": [
+            "path_windows_test.cc",
+        ],
+        "//conditions:default": [
+            "path_posix_test.cc",
+        ],
+    }),
+    deps = [
+        ":test_util",
+        "//src/main/cpp/util:filesystem",
+        "@com_google_googletest//:gtest_main",
+    ] + select({
+        "//src/conditions:windows": [
+            ":windows_test_util",
+            "//src/main/cpp:blaze_util",
             "//src/main/native/windows:lib-file",
         ],
         "//conditions:default": [],
@@ -48,8 +73,9 @@ cc_test(
     deps = [
         "//src/main/cpp:blaze_util",
         "//src/main/cpp/util:bazel_log_handler",
+        "//src/main/cpp/util:filesystem",
         "//src/main/cpp/util:logging",
-        "//third_party:gtest",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -58,7 +84,7 @@ cc_test(
     srcs = ["numbers_test.cc"],
     deps = [
         "//src/main/cpp/util",
-        "//third_party:gtest",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -68,7 +94,7 @@ cc_test(
     shard_count = 2,
     deps = [
         "//src/main/cpp/util:strings",
-        "//third_party:gtest",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -99,10 +125,19 @@ cc_test(
     deps = select({
         "//src/conditions:windows": [
             ":windows_test_util",
-            "//third_party:gtest",
+            "@com_google_googletest//:gtest_main",
         ],
         "//conditions:default": [],
     }),
+)
+
+cc_test(
+    name = "profiler_test",
+    srcs = ["profiler_test.cc"],
+    deps = [
+        "//src/main/cpp/util:profiler",
+        "@com_google_googletest//:gtest_main",
+    ],
 )
 
 cc_library(
